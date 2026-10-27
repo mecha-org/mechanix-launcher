@@ -4,4 +4,5 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+libpulse-sys = "1.23"
 mecha-wayland = { git = "https://github.com/indegrowl/mecha-wayland", branch = "dev" }
