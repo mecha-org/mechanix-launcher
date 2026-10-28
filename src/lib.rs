@@ -19,7 +19,7 @@ impl Module for PulseAudioModule {
 }
 
 /// App-wide owner of the mainloop allocations and pending Ring polls.
-/// This currently initializes I/O hooks only; it does not connect to a server.
+/// This does not connect to a server; timer dispatch and deferred work are unfinished.
 pub struct PulseAudio {
     mainloop_api: Box<pa_mainloop_api>,
     mainloop_state: Box<UnsafeCell<mainloop::MainloopState>>,

@@ -18,10 +18,11 @@ pub(super) struct MainloopState {
     watches: HashMap<u64, Box<UnsafeCell<IoWatch>>>,
     timers: HashMap<u64, Box<UnsafeCell<TimerEntry>>>,
     next_watch_id: u64,
+    next_timer_id: u64,
 }
 
 /// Assemble the implemented hooks; the caller keeps state alive at this address.
-/// Timer, deferred-work and quit hooks must be added before using a context.
+/// Timer dispatch, deferred work and quit support are still needed for a context.
 pub(super) fn make_api(state: &UnsafeCell<MainloopState>) -> pa_mainloop_api {
     pa_mainloop_api {
         userdata: state.get().cast(),
@@ -29,10 +30,10 @@ pub(super) fn make_api(state: &UnsafeCell<MainloopState>) -> pa_mainloop_api {
         io_enable: Some(io_api::io_enable),
         io_free: Some(io_api::io_free),
         io_set_destroy: Some(io_api::io_set_destroy),
-        time_new: None,
-        time_restart: None,
-        time_free: None,
-        time_set_destroy: None,
+        time_new: Some(timer_api::time_new),
+        time_restart: Some(timer_api::time_restart),
+        time_free: Some(timer_api::time_free),
+        time_set_destroy: Some(timer_api::time_set_destroy),
         defer_new: None,
         defer_enable: None,
         defer_free: None,

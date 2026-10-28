@@ -30,6 +30,10 @@ fn module_initializes_the_pulse_audio_resource() {
     assert!(audio.mainloop_api.io_enable.is_some());
     assert!(audio.mainloop_api.io_free.is_some());
     assert!(audio.mainloop_api.io_set_destroy.is_some());
+    assert!(audio.mainloop_api.time_new.is_some());
+    assert!(audio.mainloop_api.time_restart.is_some());
+    assert!(audio.mainloop_api.time_free.is_some());
+    assert!(audio.mainloop_api.time_set_destroy.is_some());
 }
 
 #[test]
