@@ -4,6 +4,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::ptr;
 
+use super::super::make_api;
 use super::*;
 
 // Only the I/O hooks are exercised here. This incomplete API must not yet be
