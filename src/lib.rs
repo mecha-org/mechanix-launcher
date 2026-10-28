@@ -1,6 +1,7 @@
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
-use std::os::fd::OwnedFd;
+use std::io;
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 
 use libpulse_sys::mainloop::api::*;
 use mecha_wayland::prelude::*;
@@ -11,7 +12,7 @@ pub struct PulseAudioModule;
 
 impl Module for PulseAudioModule {
     fn install(self, app: &mut App) {
-        app.init_resource::<PulseAudio>();
+        app.init_resource::<PulseAudio>().system(on_before_wait);
     }
 }
 
@@ -38,12 +39,53 @@ impl PulseAudio {
             pending_polls: HashMap::new(),
         }
     }
+
+    /// Submit one poll for each enabled watch's current generation.
+    fn arm_polls(&mut self, ring: &mut Ring) -> io::Result<()> {
+        // SAFETY: no libpulse callbacks run while we inspect the registry and
+        // queue Ring operations. The iterator yields copied metadata only.
+        let state = unsafe { &*self.mainloop_state.get() };
+        for (watch_id, generation, fd, events) in state.io_watches() {
+            if events == PA_IO_EVENT_NULL {
+                continue;
+            }
+            if self
+                .pending_polls
+                .values()
+                .any(|poll| poll.watch_id == watch_id && poll.generation == generation)
+            {
+                continue;
+            }
+
+            // SAFETY: an active registration supplies a live libpulse-owned
+            // descriptor. Duplicate it without taking ownership of the original.
+            let fd = unsafe { BorrowedFd::borrow_raw(fd) }.try_clone_to_owned()?;
+            let token = ring.poll(fd.as_fd(), to_poll_flags(events));
+            self.pending_polls.insert(
+                token,
+                PendingPoll {
+                    watch_id,
+                    generation,
+                    fd,
+                },
+            );
+        }
+        Ok(())
+    }
 }
 
 impl Default for PulseAudio {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn on_before_wait(app: &mut App, _: &BeforeWait) {
+    let (mut audio, mut ring) = app.query::<(ResMut<PulseAudio>, ResMut<Ring>)>();
+    audio
+        .arm_polls(&mut ring)
+        .expect("PulseAudio: duplicate a watched descriptor");
+		  // TODO: remove this
 }
 
 /// One submitted poll. Look up its watch by ID and generation on completion.

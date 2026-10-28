@@ -50,6 +50,19 @@ pub(super) fn make_api(state: &UnsafeCell<MainloopState>) -> pa_mainloop_api {
 }
 
 impl MainloopState {
+    /// Copy each watch's (ID, generation, descriptor, requested conditions).
+    /// The caller must not invoke libpulse while iterating over the registry.
+    pub(super) fn io_watches(
+        &self,
+    ) -> impl Iterator<Item = (u64, u64, RawFd, pa_io_event_flags_t)> + '_ {
+        self.watches.iter().map(|(&id, watch)| {
+            // SAFETY: the watch is owned by the registry, and no FFI callback
+            // runs during iteration. No reference to the watch escapes.
+            let watch = unsafe { &*watch.get() };
+            (id, watch.generation, watch.fd, watch.events)
+        })
+    }
+
     fn insert_io_watch(
         &mut self,
         api: *const pa_mainloop_api,
