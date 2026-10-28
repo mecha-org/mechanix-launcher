@@ -8,6 +8,8 @@ use std::time::Duration;
 
 use super::*;
 
+mod timers;
+
 const FLAGS: [(pa_io_event_flags_t, u32); 4] = [
     (PA_IO_EVENT_INPUT, libc::POLLIN as u32),
     (PA_IO_EVENT_OUTPUT, libc::POLLOUT as u32),
@@ -26,6 +28,7 @@ fn module_initializes_the_pulse_audio_resource() {
         audio.mainloop_state.get().cast()
     );
     assert!(audio.pending_polls.is_empty());
+    assert!(audio.pending_timers.is_empty());
     assert!(audio.mainloop_api.io_new.is_some());
     assert!(audio.mainloop_api.io_enable.is_some());
     assert!(audio.mainloop_api.io_free.is_some());

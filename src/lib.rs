@@ -2,7 +2,9 @@ use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::io;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use libc::timeval;
 use libpulse_sys::mainloop::api::*;
 use mecha_wayland::prelude::*;
 
@@ -20,12 +22,13 @@ impl Module for PulseAudioModule {
     }
 }
 
-/// App-wide owner of the mainloop allocations and pending Ring polls.
-/// This does not connect to a server; timer dispatch is still unfinished.
+/// App-wide owner of the mainloop allocations and pending Ring operations.
+/// This does not yet connect to a sound server.
 pub struct PulseAudio {
     mainloop_api: Box<pa_mainloop_api>,
     mainloop_state: Box<UnsafeCell<mainloop::MainloopState>>,
     pending_polls: HashMap<Token, PendingPoll>,
+    pending_timers: HashMap<Token, PendingTimer>,
     defer_wake: Option<Token>,
 }
 
@@ -42,6 +45,7 @@ impl PulseAudio {
             mainloop_api,
             mainloop_state,
             pending_polls: HashMap::new(),
+            pending_timers: HashMap::new(),
             defer_wake: None,
         }
     }
@@ -78,6 +82,32 @@ impl PulseAudio {
         }
         Ok(())
     }
+
+    /// Submit one timeout for each enabled timer's current generation.
+    fn arm_timers(&mut self, ring: &mut Ring) -> io::Result<()> {
+        // SAFETY: no libpulse callbacks run while inspecting registrations or
+        // submitting Ring operations. The iterator yields copied metadata.
+        let state = unsafe { &*self.mainloop_state.get() };
+        for (timer_id, generation, deadline) in state.enabled_timers() {
+            if self
+                .pending_timers
+                .values()
+                .any(|timer| timer.timer_id == timer_id && timer.generation == generation)
+            {
+                continue;
+            }
+            let delay = timer_delay(deadline, SystemTime::now())?;
+            let token = ring.timeout(delay);
+            self.pending_timers.insert(
+                token,
+                PendingTimer {
+                    timer_id,
+                    generation,
+                },
+            );
+        }
+        Ok(())
+    }
 }
 
 impl Default for PulseAudio {
@@ -95,13 +125,17 @@ fn on_before_wait(app: &mut App, _: &BeforeWait) {
         .expect("PulseAudio: duplicate a watched descriptor");
     // TODO: remove this
 
+    audio
+        .arm_timers(&mut ring)
+        .expect("PulseAudio: convert a timer deadline");
+
     // SAFETY: all deferred callbacks have returned, and no FFI runs while
     // checking the registry or queueing Ring operations.
     let state = unsafe { &*audio.mainloop_state.get() };
     if state.has_deferred_work() && audio.defer_wake.is_none() {
         // Runnable work must not sleep waiting for unrelated socket activity.
         // This is a one-shot wake, not a periodic polling timer.
-        audio.defer_wake = Some(ring.timeout(std::time::Duration::ZERO));
+        audio.defer_wake = Some(ring.timeout(Duration::ZERO));
     }
 }
 
@@ -138,6 +172,15 @@ fn on_io(app: &mut App, event: &IoEvent) {
             .expect("PulseAudio: deferred wake is finishable");
         app.resource_mut::<PulseAudio>().defer_wake = None;
         return; // A zero-duration timeout normally completes with -ETIME.
+    }
+
+    let timer = app
+        .resource_mut::<PulseAudio>()
+        .pending_timers
+        .remove(&event.token);
+    if let Some(timer) = timer {
+        on_timer(app, event, timer);
+        return;
     }
 
     // get token we own
@@ -185,12 +228,76 @@ fn on_io(app: &mut App, event: &IoEvent) {
     unsafe { callback.invoke(to_pulse_flags(event.result as u32)) };
 }
 
+fn on_timer(app: &mut App, event: &IoEvent, timer: PendingTimer) {
+    // Finish even obsolete timeouts, so Ring can release their operation storage.
+    app.resource_mut::<Ring>()
+        .finish(event.token)
+        .expect("PulseAudio: completed timeout is finishable");
+
+    let callback = {
+        let audio = app.resource::<PulseAudio>();
+        // SAFETY: no FFI callback is active. Lookup and preparation only copy
+        // arguments and mutate the timer's interior state before invocation.
+        let state = unsafe { &*audio.mainloop_state.get() };
+        let Some(deadline) = state.timer_deadline(timer.timer_id, timer.generation) else {
+            return; // The timer was removed, disabled, or restarted.
+        };
+        assert_eq!(event.result, -libc::ETIME, "PulseAudio: timeout failed");
+
+        // Ring waits relatively, while libpulse's custom-loop deadlines use
+        // wall time. If the clock moved backwards, leave the timer enabled so
+        // BeforeWait can resubmit it with the newly remaining delay.
+        if !timer_delay(deadline, SystemTime::now())
+            .expect("PulseAudio: convert a timer deadline")
+            .is_zero()
+        {
+            return;
+        }
+        state.take_timer_callback(timer.timer_id, timer.generation)
+    };
+
+    if let Some(callback) = callback {
+        // SAFETY: the timer was just validated and disabled. All resource/state
+        // borrows have ended, so the callback may restart or free its timer.
+        unsafe { callback.invoke() };
+    }
+}
+
 /// One submitted poll. Look up its watch by ID and generation on completion.
 struct PendingPoll {
     watch_id: u64,
     generation: u64,
     // An owned duplicate, kept open until the poll is finished.
     fd: OwnedFd,
+}
+
+struct PendingTimer {
+    timer_id: u64,
+    generation: u64,
+}
+
+/// Libpulse uses absolute wall-clock timevals for custom mainloop APIs.
+/// Convert them to Ring's relative durations, expiring past deadlines immediately.
+fn timer_delay(deadline: timeval, now: SystemTime) -> io::Result<Duration> {
+    if !(0..1_000_000).contains(&deadline.tv_usec) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid timer microseconds",
+        ));
+    }
+    #[allow(clippy::unnecessary_cast)] // libc::time_t can also be 32-bit.
+    let seconds = Duration::from_secs(deadline.tv_sec.unsigned_abs() as u64);
+    let timestamp = if deadline.tv_sec >= 0 {
+        UNIX_EPOCH.checked_add(seconds)
+    } else {
+        UNIX_EPOCH.checked_sub(seconds)
+    };
+    let timestamp = timestamp
+        .and_then(|time| time.checked_add(Duration::from_micros(deadline.tv_usec as u64)))
+        .ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "timer deadline out of range")
+        })?;
+    Ok(timestamp.duration_since(now).unwrap_or(Duration::ZERO))
 }
 
 /// Translate libpulse's requested conditions into Ring's Linux poll mask.

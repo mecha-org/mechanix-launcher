@@ -26,7 +26,7 @@ pub(super) struct MainloopState {
 }
 
 /// Assemble the implemented hooks; the caller keeps state alive at this address.
-/// Timer dispatch and quit support are still needed before using a context.
+/// The quit hook still needs an implementation before the API is complete.
 pub(super) fn make_api(state: &UnsafeCell<MainloopState>) -> pa_mainloop_api {
     pa_mainloop_api {
         userdata: state.get().cast(),

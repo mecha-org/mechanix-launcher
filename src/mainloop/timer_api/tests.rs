@@ -197,3 +197,65 @@ fn destroy_callbacks_can_register_another_timer() {
     assert_ne!(unsafe { (*new_event.cast::<TimerEntry>()).id }, old_id);
     time_free(new_event);
 }
+
+#[test]
+fn taking_a_timer_callback_disables_it_before_invocation() {
+    let mainloop = TestMainloop::new();
+    let count = Cell::new(0_usize);
+    let deadline = timeval {
+        tv_sec: 123,
+        tv_usec: 456,
+    };
+    let event = mainloop.add(Some(&deadline), ptr::from_ref(&count).cast_mut().cast());
+    // SAFETY: the registration is live and no callback is active.
+    let id = unsafe { (*event.cast::<TimerEntry>()).id };
+    let callback = {
+        // SAFETY: no FFI callback is active and no state borrow escapes.
+        let state = unsafe { &*mainloop.state.get() };
+        assert_eq!(state.enabled_timers().count(), 1);
+        state.take_timer_callback(id, 0).unwrap()
+    };
+
+    assert_eq!(schedule(event), (None, 0));
+    assert_eq!(callback.deadline.tv_sec, 123);
+    assert_eq!(callback.deadline.tv_usec, 456);
+    // SAFETY: the API, timer and test-owned callback data are still live.
+    unsafe { callback.invoke() };
+    assert_eq!(count.get(), 1);
+    // SAFETY: the callback has returned.
+    assert!(
+        unsafe { &*mainloop.state.get() }
+            .take_timer_callback(id, 0)
+            .is_none()
+    );
+}
+
+#[test]
+fn stale_timer_lookup_does_not_disable_the_restarted_timer() {
+    let mainloop = TestMainloop::new();
+    let event = mainloop.add(None, ptr::null_mut());
+    // SAFETY: the registration is live.
+    let id = unsafe { (*event.cast::<TimerEntry>()).id };
+    let deadline = timeval {
+        tv_sec: 123,
+        tv_usec: 456,
+    };
+    time_restart(event, &deadline);
+
+    {
+        // SAFETY: the restart hook has returned and no callback is active.
+        let state = unsafe { &*mainloop.state.get() };
+        assert!(state.timer_deadline(id, 0).is_none());
+        assert!(state.take_timer_callback(id, 0).is_none());
+        assert!(state.timer_deadline(id, 1).is_some());
+    }
+    assert_eq!(schedule(event), (Some((123, 456)), 1));
+
+    time_free(event);
+    // SAFETY: lookup by ID does not dereference the freed event handle.
+    assert!(
+        unsafe { &*mainloop.state.get() }
+            .take_timer_callback(id, 1)
+            .is_none()
+    );
+}

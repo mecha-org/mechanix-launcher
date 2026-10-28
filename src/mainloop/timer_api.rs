@@ -22,7 +22,69 @@ pub struct TimerEntry {
     generation: u64,
 }
 
+/// Copied callback arguments, with no heap allocation. Owning the timestamp
+/// keeps its pointer valid during invocation even if the callback frees its timer.
+pub(crate) struct TimerCallback {
+    api: *const pa_mainloop_api,
+    event: *mut pa_time_event,
+    deadline: timeval,
+    callback: pa_time_event_cb_t,
+    userdata: *mut c_void,
+}
+
+impl TimerCallback {
+    /// # Safety
+    /// The API, timer and callback data must still be live and unchanged since
+    /// lookup. No state or resource borrows may be held during invocation.
+    pub(crate) unsafe fn invoke(self) {
+        if let Some(callback) = self.callback {
+            callback(self.api, self.event, &self.deadline, self.userdata);
+        }
+    }
+}
+
 impl MainloopState {
+    /// Copy enabled timer metadata without exposing references into the registry.
+    pub(crate) fn enabled_timers(&self) -> impl Iterator<Item = (u64, u64, timeval)> + '_ {
+        self.timers.iter().filter_map(|(&id, timer)| {
+            // SAFETY: no FFI callback runs during iteration. Only values escape.
+            let timer = unsafe { &*timer.get() };
+            timer
+                .deadline
+                .map(|deadline| (id, timer.generation, deadline))
+        })
+    }
+
+    pub(crate) fn timer_deadline(&self, id: u64, generation: u64) -> Option<timeval> {
+        let registration = self.timers.get(&id)?;
+        // SAFETY: lookup runs outside FFI callbacks, and returns a copied value.
+        let timer = unsafe { &*registration.get() };
+        if timer.generation != generation {
+            return None;
+        }
+        timer.deadline
+    }
+
+    /// Disable a matching timer before preparing its one-shot callback.
+    /// The caller checks that its deadline has expired before taking it.
+    pub(crate) fn take_timer_callback(&self, id: u64, generation: u64) -> Option<TimerCallback> {
+        let registration = self.timers.get(&id)?;
+        // SAFETY: the timer is in UnsafeCell and no other reference or FFI
+        // callback is active. Only copied callback arguments escape.
+        let timer = unsafe { &mut *registration.get() };
+        if timer.generation != generation {
+            return None;
+        }
+        let deadline = timer.deadline.take()?;
+        Some(TimerCallback {
+            api: timer.api,
+            event: registration.get().cast(),
+            deadline,
+            callback: timer.callback,
+            userdata: timer.userdata,
+        })
+    }
+
     fn insert_timer(
         &mut self,
         api: *const pa_mainloop_api,
