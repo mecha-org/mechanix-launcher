@@ -41,7 +41,18 @@ fn module_initializes_the_pulse_audio_resource() {
     assert!(audio.mainloop_api.defer_enable.is_some());
     assert!(audio.mainloop_api.defer_free.is_some());
     assert!(audio.mainloop_api.defer_set_destroy.is_some());
+    assert!(audio.mainloop_api.quit.is_some());
     assert!(audio.defer_wake.is_none());
+}
+
+#[test]
+fn libpulse_quit_does_not_stop_the_app() {
+    let mut app = polling_app();
+    let api = app.resource::<PulseAudio>().mainloop_api.as_ref();
+    api.quit.unwrap()(api, 42);
+
+    app.tick();
+    assert!(!app.resource::<Ring>().is_stopped());
 }
 
 #[test]

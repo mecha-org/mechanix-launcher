@@ -26,7 +26,6 @@ pub(super) struct MainloopState {
 }
 
 /// Assemble the implemented hooks; the caller keeps state alive at this address.
-/// The quit hook still needs an implementation before the API is complete.
 pub(super) fn make_api(state: &UnsafeCell<MainloopState>) -> pa_mainloop_api {
     pa_mainloop_api {
         userdata: state.get().cast(),
@@ -42,6 +41,11 @@ pub(super) fn make_api(state: &UnsafeCell<MainloopState>) -> pa_mainloop_api {
         defer_enable: Some(defer_api::defer_enable),
         defer_free: Some(defer_api::defer_free),
         defer_set_destroy: Some(defer_api::defer_set_destroy),
-        quit: None,
+        quit: Some(quit),
     }
+}
+
+/// This adapter does not own the App's Ring runner, so it cannot stop it.
+extern "C" fn quit(_: *const pa_mainloop_api, _: i32) {
+    eprintln!("quit() ignored");
 }
