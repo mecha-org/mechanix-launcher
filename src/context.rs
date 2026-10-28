@@ -1,4 +1,10 @@
-//! One libpulse context, with state callbacks buffered for App systems.
+//! The libpulse connection and its bridge to mecha-wayland signals.
+//!
+//! `pa_context` does the actual PulseAudio protocol work. We give it the
+//! Ring-backed `pa_mainloop_api`, which tells us when to call libpulse again.
+//! Its C state callback cannot access `App`: it copies important transitions
+//! into a stable queue. `on_tick` in `lib.rs` later drains that queue and
+//! publishes `ConnectionStateChanged` on the ordinary App thread.
 
 use std::cell::RefCell;
 use std::ffi::{CStr, CString, c_void};
@@ -10,14 +16,21 @@ use libpulse_sys::mainloop::api::pa_mainloop_api;
 
 use crate::ConnectionState;
 
+/// Owns one libpulse reference; Rust must release it with `pa_context_unref`.
 pub(crate) struct Context {
     ptr: NonNull<pa_context>,
-    // Libpulse's userdata points to this allocation, not to App or Context.
+    // Libpulse's callback userdata points here. Boxing keeps the address
+    // stable even if Context or the enclosing PulseAudio resource moves.
+    // It never receives an App pointer.
     updates: Box<RefCell<Vec<ConnectionState>>>,
 }
 
 impl Context {
+    /// Start an asynchronous connection; success here does NOT mean Ready.
+    /// The later state callback reports readiness or connection failure.
     pub(crate) fn connect(api: &pa_mainloop_api) -> Result<Self, String> {
+        // Deliberately pick the local server. `NULL` would ask libpulse to
+        // select a server from its configuration/environment instead.
         let runtime = std::env::var("XDG_RUNTIME_DIR")
             .map_err(|_| "XDG_RUNTIME_DIR is not set".to_owned())?;
         let address = CString::new(format!("unix:{runtime}/pulse/native"))
@@ -25,10 +38,12 @@ impl Context {
         let updates = Box::new(RefCell::new(Vec::new()));
 
         // SAFETY: `api` is a stable allocation owned by PulseAudio. The name
-        // is NUL-terminated, and libpulse owns the returned context.
+        // is NUL-terminated; we take ownership of the returned C reference.
         let ptr = NonNull::new(unsafe { pulse::pa_context_new(api, c"mecha-pulseaudio".as_ptr()) })
             .ok_or_else(|| "pa_context_new returned null".to_owned())?;
-        // SAFETY: the context and the boxed callback data live until Drop.
+        // Register before connecting: even an immediate error could trigger
+        // a state change. Libpulse will call on_state, not an App system.
+        // SAFETY: the context and boxed callback data live until Drop.
         unsafe {
             pulse::pa_context_set_state_callback(
                 ptr.as_ptr(),
@@ -38,8 +53,10 @@ impl Context {
         }
 
         let context = Self { ptr, updates };
-        // SAFETY: the local Unix socket address is NUL-terminated; disabling
-        // autospawn keeps the connection attempt within the existing server.
+        // This starts connecting; libpulse does not wait for authentication or
+        // readiness here. Ring's future I/O and timer completions drive it.
+        // SAFETY: the address is NUL-terminated; NOAUTOSPAWN prevents libpulse
+        // from starting a new server if none is listening.
         let result = unsafe {
             pulse::pa_context_connect(
                 context.ptr.as_ptr(),
@@ -49,6 +66,8 @@ impl Context {
             )
         };
         if result < 0 {
+            // A synchronous setup error might not generate a callback. Put
+            // it through the same queue; on_tick suppresses duplicate states.
             let error = context.last_error();
             context
                 .updates
@@ -59,6 +78,8 @@ impl Context {
     }
 
     pub(crate) fn take_updates(&self) -> Vec<ConnectionState> {
+        // Draining here, after the C callback returned, avoids borrowing
+        // the queue while libpulse is writing to it.
         std::mem::take(&mut *self.updates.borrow_mut())
     }
 
@@ -78,6 +99,8 @@ extern "C" fn on_state(context: *mut pa_context, userdata: *mut c_void) {
     let updates = unsafe { &*userdata.cast::<RefCell<Vec<ConnectionState>>>() };
     // SAFETY: libpulse passes the live context currently changing state.
     let state = unsafe { pulse::pa_context_get_state(context) };
+    // Ignore internal handshake steps; consumers only need the transition
+    // to usable, failed, or terminated.
     let update = match state {
         pulse::pa_context_state_t::Ready => Some(ConnectionState::Ready),
         pulse::pa_context_state_t::Failed => {
@@ -107,6 +130,8 @@ unsafe fn error_string(context: *mut pa_context) -> String {
 
 impl Drop for Context {
     fn drop(&mut self) {
+        // PulseAudio::drop explicitly calls this BEFORE dropping the API and
+        // its userdata state: disconnect can still call our mainloop hooks.
         // SAFETY: the context is still live, as are the API and callback data.
         // Clear the callback before disconnect so it cannot enqueue into data
         // that is about to be dropped. Disconnect before releasing the context.
