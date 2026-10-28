@@ -9,6 +9,10 @@ use libpulse_sys::mainloop::api::*;
 use mecha_wayland::prelude::*;
 
 mod mainloop;
+mod volume;
+
+// re-export
+pub use volume::VolumeControlModule;
 
 /// Drive libpulse through Ring. Queue actions in ordinary systems/handlers;
 /// BeforeWait is reserved for draining and submitting work already queued.
