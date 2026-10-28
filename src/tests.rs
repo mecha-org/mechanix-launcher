@@ -34,6 +34,11 @@ fn module_initializes_the_pulse_audio_resource() {
     assert!(audio.mainloop_api.time_restart.is_some());
     assert!(audio.mainloop_api.time_free.is_some());
     assert!(audio.mainloop_api.time_set_destroy.is_some());
+    assert!(audio.mainloop_api.defer_new.is_some());
+    assert!(audio.mainloop_api.defer_enable.is_some());
+    assert!(audio.mainloop_api.defer_free.is_some());
+    assert!(audio.mainloop_api.defer_set_destroy.is_some());
+    assert!(audio.defer_wake.is_none());
 }
 
 #[test]
@@ -538,4 +543,230 @@ fn on_io_forwards_socket_hangups_to_libpulse() {
 
     assert_eq!(data.calls.get(), 1);
     assert_ne!(data.flags.get() & PA_IO_EVENT_HANGUP, 0);
+}
+
+#[derive(Default)]
+struct DeferredData {
+    calls: Cell<usize>,
+    other: Cell<*mut pa_defer_event>,
+    replacement: Cell<*mut pa_defer_event>,
+}
+
+extern "C" fn record_deferred(
+    _: *const pa_mainloop_api,
+    _: *mut pa_defer_event,
+    userdata: *mut c_void,
+) {
+    // SAFETY: the test keeps DeferredData alive throughout dispatch.
+    let data = unsafe { &*userdata.cast::<DeferredData>() };
+    data.calls.set(data.calls.get() + 1);
+}
+
+extern "C" fn disable_deferred(
+    api: *const pa_mainloop_api,
+    event: *mut pa_defer_event,
+    userdata: *mut c_void,
+) {
+    record_deferred(api, event, userdata);
+    // SAFETY: the API is live throughout the callback.
+    unsafe { &*api }.defer_enable.unwrap()(event, 0);
+}
+
+fn add_deferred(
+    app: &App,
+    callback: pa_defer_event_cb_t,
+    data: &DeferredData,
+) -> *mut pa_defer_event {
+    let audio = app.resource::<PulseAudio>();
+    audio.mainloop_api.defer_new.unwrap()(
+        audio.mainloop_api.as_ref(),
+        callback,
+        ptr::from_ref(data).cast_mut().cast(),
+    )
+}
+
+fn before_wait(app: &mut App) {
+    app.signal(BeforeWait);
+    app.flush();
+}
+
+fn dispatch_deferred_wake(app: &mut App, token: Token) {
+    // These tests queue only the immediate wake, with no socket operations.
+    let event = app.resource_mut::<Ring>().wait()[0];
+    assert_eq!(event.token, token);
+    assert_eq!(event.result, -libc::ETIME);
+    app.signal(event);
+    app.flush();
+}
+
+#[test]
+fn before_wait_runs_deferred_callbacks_that_can_disable_themselves() {
+    let data = DeferredData::default();
+    let mut app = polling_app();
+    let event = add_deferred(&app, Some(disable_deferred), &data);
+    assert_eq!(data.calls.get(), 0, "registration does not invoke work");
+
+    before_wait(&mut app);
+    assert_eq!(data.calls.get(), 1);
+    assert!(app.resource::<PulseAudio>().defer_wake.is_none());
+    before_wait(&mut app);
+    assert_eq!(data.calls.get(), 1);
+
+    app.resource::<PulseAudio>()
+        .mainloop_api
+        .defer_enable
+        .unwrap()(event, 1);
+    before_wait(&mut app);
+    assert_eq!(data.calls.get(), 2);
+    assert!(app.resource::<PulseAudio>().defer_wake.is_none());
+}
+
+#[test]
+fn enabled_deferred_work_runs_one_pass_and_queues_only_one_immediate_wake() {
+    let data = DeferredData::default();
+    let mut app = polling_app();
+    let event = add_deferred(&app, Some(record_deferred), &data);
+
+    before_wait(&mut app);
+    assert_eq!(data.calls.get(), 1, "do not loop on an enabled callback");
+    let wake = app.resource::<PulseAudio>().defer_wake.unwrap();
+    before_wait(&mut app);
+    assert_eq!(data.calls.get(), 2);
+    assert_eq!(app.resource::<PulseAudio>().defer_wake, Some(wake));
+
+    dispatch_deferred_wake(&mut app, wake);
+    assert!(app.resource::<PulseAudio>().defer_wake.is_none());
+    assert_eq!(data.calls.get(), 2, "the wake itself does not invoke work");
+    before_wait(&mut app);
+    let next = app.resource::<PulseAudio>().defer_wake.unwrap();
+    assert_ne!(next, wake);
+    assert_eq!(data.calls.get(), 3);
+
+    app.resource::<PulseAudio>()
+        .mainloop_api
+        .defer_enable
+        .unwrap()(event, 0);
+    dispatch_deferred_wake(&mut app, next);
+    before_wait(&mut app);
+    assert_eq!(data.calls.get(), 3);
+    assert!(app.resource::<PulseAudio>().defer_wake.is_none());
+}
+
+extern "C" fn replace_deferred(
+    api: *const pa_mainloop_api,
+    event: *mut pa_defer_event,
+    userdata: *mut c_void,
+) {
+    record_deferred(api, event, userdata);
+    // SAFETY: the API is live and the test owns userdata independently of the
+    // removed registration. No state borrow is held by the dispatcher.
+    let api = unsafe { &*api };
+    api.defer_free.unwrap()(event);
+    let replacement = api.defer_new.unwrap()(api, Some(disable_deferred), userdata);
+    // SAFETY: DeferredData remains alive after the registration is freed.
+    unsafe { &*userdata.cast::<DeferredData>() }
+        .replacement
+        .set(replacement);
+}
+
+#[test]
+fn deferred_callbacks_can_replace_themselves_with_work_for_the_next_turn() {
+    let data = DeferredData::default();
+    let mut app = polling_app();
+    add_deferred(&app, Some(replace_deferred), &data);
+
+    before_wait(&mut app);
+    assert_eq!(data.calls.get(), 1, "new work waits for the next pass");
+    assert!(!data.replacement.get().is_null());
+    let wake = app.resource::<PulseAudio>().defer_wake.unwrap();
+
+    before_wait(&mut app);
+    assert_eq!(data.calls.get(), 2);
+    dispatch_deferred_wake(&mut app, wake);
+    before_wait(&mut app);
+    assert_eq!(data.calls.get(), 2);
+    assert!(app.resource::<PulseAudio>().defer_wake.is_none());
+}
+
+extern "C" fn free_other_deferred(
+    api: *const pa_mainloop_api,
+    event: *mut pa_defer_event,
+    userdata: *mut c_void,
+) {
+    record_deferred(api, event, userdata);
+    // SAFETY: these test-owned callback arguments and API remain live.
+    let data = unsafe { &*userdata.cast::<DeferredData>() };
+    let api = unsafe { &*api };
+    let other = data.other.replace(ptr::null_mut());
+    if !other.is_null() {
+        api.defer_free.unwrap()(other);
+    }
+    api.defer_enable.unwrap()(event, 0);
+}
+
+#[test]
+fn deferred_entries_removed_by_an_earlier_callback_are_not_invoked() {
+    let first = DeferredData::default();
+    let second = DeferredData::default();
+    let mut app = polling_app();
+    add_deferred(&app, Some(free_other_deferred), &first);
+    let other = add_deferred(&app, Some(disable_deferred), &second);
+    first.other.set(other);
+
+    before_wait(&mut app);
+
+    assert_eq!(first.calls.get(), 1);
+    assert_eq!(second.calls.get(), 0);
+    assert!(app.resource::<PulseAudio>().defer_wake.is_none());
+}
+
+struct DeferredIo {
+    fd: RawFd,
+    watch: Cell<*mut pa_io_event>,
+}
+
+extern "C" fn create_io_from_deferred(
+    api: *const pa_mainloop_api,
+    event: *mut pa_defer_event,
+    userdata: *mut c_void,
+) {
+    // SAFETY: the test keeps DeferredIo and its descriptor alive for dispatch.
+    let data = unsafe { &*userdata.cast::<DeferredIo>() };
+    let api = unsafe { &*api };
+    let watch = api.io_new.unwrap()(
+        api,
+        data.fd,
+        PA_IO_EVENT_INPUT,
+        Some(on_ready),
+        ptr::null_mut(),
+    );
+    data.watch.set(watch);
+    api.defer_enable.unwrap()(event, 0);
+}
+
+#[test]
+fn io_watches_created_by_deferred_work_are_armed_before_waiting() {
+    let (reader, mut writer) = UnixStream::pair().unwrap();
+    let data = DeferredIo {
+        fd: reader.as_raw_fd(),
+        watch: Cell::new(ptr::null_mut()),
+    };
+    let mut app = polling_app();
+    let audio = app.resource::<PulseAudio>();
+    audio.mainloop_api.defer_new.unwrap()(
+        audio.mainloop_api.as_ref(),
+        Some(create_io_from_deferred),
+        ptr::from_ref(&data).cast_mut().cast(),
+    );
+
+    before_wait(&mut app);
+
+    assert!(!data.watch.get().is_null());
+    let audio = app.resource::<PulseAudio>();
+    assert!(audio.defer_wake.is_none());
+    assert_eq!(audio.pending_polls.len(), 1);
+    let token = *audio.pending_polls.keys().next().unwrap();
+    writer.write_all(b"x").unwrap();
+    dispatch_poll(&mut app, token);
+    assert!(app.resource::<PulseAudio>().pending_polls.is_empty());
 }

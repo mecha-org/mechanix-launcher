@@ -8,7 +8,7 @@ use super::super::make_api;
 use super::*;
 
 // Only the I/O hooks are exercised here. This incomplete API must not yet be
-// passed to a libpulse context: timer dispatch and deferred work are not ready.
+// passed to a libpulse context: timer dispatch and quit support are not ready.
 struct TestMainloop {
     state: Box<UnsafeCell<MainloopState>>,
     api: Box<pa_mainloop_api>,

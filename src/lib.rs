@@ -8,6 +8,8 @@ use mecha_wayland::prelude::*;
 
 mod mainloop;
 
+/// Drive libpulse through Ring. Queue actions in ordinary systems/handlers;
+/// BeforeWait is reserved for draining and submitting work already queued.
 pub struct PulseAudioModule;
 
 impl Module for PulseAudioModule {
@@ -19,11 +21,12 @@ impl Module for PulseAudioModule {
 }
 
 /// App-wide owner of the mainloop allocations and pending Ring polls.
-/// This does not connect to a server; timer dispatch and deferred work are unfinished.
+/// This does not connect to a server; timer dispatch is still unfinished.
 pub struct PulseAudio {
     mainloop_api: Box<pa_mainloop_api>,
     mainloop_state: Box<UnsafeCell<mainloop::MainloopState>>,
     pending_polls: HashMap<Token, PendingPoll>,
+    defer_wake: Option<Token>,
 }
 
 impl Resource for PulseAudio {}
@@ -39,6 +42,7 @@ impl PulseAudio {
             mainloop_api,
             mainloop_state,
             pending_polls: HashMap::new(),
+            defer_wake: None,
         }
     }
 
@@ -83,14 +87,59 @@ impl Default for PulseAudio {
 }
 
 fn on_before_wait(app: &mut App, _: &BeforeWait) {
+    run_deferred(app);
+
     let (mut audio, mut ring) = app.query::<(ResMut<PulseAudio>, ResMut<Ring>)>();
     audio
         .arm_polls(&mut ring)
         .expect("PulseAudio: duplicate a watched descriptor");
     // TODO: remove this
+
+    // SAFETY: all deferred callbacks have returned, and no FFI runs while
+    // checking the registry or queueing Ring operations.
+    let state = unsafe { &*audio.mainloop_state.get() };
+    if state.has_deferred_work() && audio.defer_wake.is_none() {
+        // Runnable work must not sleep waiting for unrelated socket activity.
+        // This is a one-shot wake, not a periodic polling timer.
+        audio.defer_wake = Some(ring.timeout(std::time::Duration::ZERO));
+    }
+}
+
+fn run_deferred(app: &mut App) {
+    let entries = {
+        let audio = app.resource::<PulseAudio>();
+        // SAFETY: no FFI runs during lookup. This returns copied IDs only.
+        let state = unsafe { &*audio.mainloop_state.get() };
+        state.enabled_deferred()
+    };
+
+    // One pass per turn: work created or re-enabled by a callback can run on
+    // the next turn instead of growing an unbounded dispatch loop here.
+    for (id, generation) in entries {
+        let callback = {
+            let audio = app.resource::<PulseAudio>();
+            // SAFETY: the previous callback has returned. Revalidate each entry
+            // because another callback may have disabled or freed it.
+            let state = unsafe { &*audio.mainloop_state.get() };
+            state.defer_callback(id, generation)
+        };
+        if let Some(callback) = callback {
+            // SAFETY: the entry was just validated. No resource/state borrows
+            // remain, and no intervening FFI callback can invalidate it.
+            unsafe { callback.invoke() };
+        }
+    }
 }
 
 fn on_io(app: &mut App, event: &IoEvent) {
+    if app.resource::<PulseAudio>().defer_wake == Some(event.token) {
+        app.resource_mut::<Ring>()
+            .finish(event.token)
+            .expect("PulseAudio: deferred wake is finishable");
+        app.resource_mut::<PulseAudio>().defer_wake = None;
+        return; // A zero-duration timeout normally completes with -ETIME.
+    }
+
     // get token we own
     let Some(PendingPoll {
         watch_id,
