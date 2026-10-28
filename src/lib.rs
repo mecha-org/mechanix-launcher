@@ -7,10 +7,12 @@
 //! those become app-wide `ConnectionStateChanged` signals. Nothing here starts
 //! a second event loop or a thread.
 
+use std::any::Any;
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::io;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use libc::timeval;
@@ -22,7 +24,7 @@ mod mainloop;
 mod volume;
 
 // re-export
-pub use volume::VolumeControlModule;
+pub use volume::{VolumeControlModule, VolumeState};
 
 /// Connection lifecycle reported by libpulse, delivered on the App thread.
 /// `Connecting` is the initial state; the intermediate handshake states are
@@ -84,6 +86,9 @@ pub struct PulseAudio {
     connection_state: ConnectionState,
     // Setup errors that occurred before a context could exist.
     connection_updates: Vec<ConnectionState>,
+    // Keep callback data alive if its service resource is dropped before the
+    // C context. This shared owner knows nothing about the data's type.
+    callback_data: Vec<Rc<dyn Any>>,
     pending_polls: HashMap<Token, PendingPoll>,
     pending_timers: HashMap<Token, PendingTimer>,
     defer_wake: Option<Token>,
@@ -104,6 +109,7 @@ impl PulseAudio {
             context: None,
             connection_state: ConnectionState::Connecting,
             connection_updates: Vec::new(),
+            callback_data: Vec::new(),
             pending_polls: HashMap::new(),
             pending_timers: HashMap::new(),
             defer_wake: None,
@@ -113,6 +119,17 @@ impl PulseAudio {
     /// Most recently reported connection state.
     pub fn connection_state(&self) -> &ConnectionState {
         &self.connection_state
+    }
+
+    /// A borrow for issuing an operation; async callbacks need separate
+    /// owned userdata because this borrow ends before the reply arrives.
+    pub(crate) fn context(&self) -> Option<&context::Context> {
+        self.context.as_ref()
+    }
+
+    /// Retain a service's callback data until the context disconnects.
+    pub(crate) fn keep_callback_data<T: 'static>(&mut self, data: Rc<T>) {
+        self.callback_data.push(data);
     }
 
     fn take_connection_updates(&mut self) -> Vec<ConnectionState> {
@@ -195,8 +212,8 @@ impl PulseAudio {
 
 impl Drop for PulseAudio {
     fn drop(&mut self) {
-        // The context can call our mainloop hooks while disconnecting. Drop it
-        // before Rust drops the boxed API and its userdata state.
+        // Disconnect before the API, mainloop state or retained callback data
+        // drop. C callbacks can still access these during disconnect.
         self.context.take();
     }
 }
@@ -213,14 +230,15 @@ fn on_before_wait(app: &mut App, _: &BeforeWait) {
     run_deferred(app);
 
     let (mut audio, mut ring) = app.query::<(ResMut<PulseAudio>, ResMut<Ring>)>();
-    audio
+    if let Err(error) = audio
         .arm_polls(&mut ring)
-        .expect("PulseAudio: duplicate a watched descriptor");
-    // TODO: remove this
-
-    audio
-        .arm_timers(&mut ring)
-        .expect("PulseAudio: convert a timer deadline");
+        .and_then(|()| audio.arm_timers(&mut ring))
+    {
+        eprintln!("PulseAudio scheduling failed: {error}");
+        audio
+            .connection_updates
+            .push(ConnectionState::Failed(error.to_string()));
+    }
 
     // If libpulse queued a state transition here and has no more I/O, Ring
     // still needs a wake so the next Tick can publish it (or exit on Stop).
@@ -278,10 +296,9 @@ fn run_deferred(app: &mut App) {
 
 fn on_io(app: &mut App, event: &IoEvent) {
     if app.resource::<PulseAudio>().defer_wake == Some(event.token) {
-        app.resource_mut::<Ring>()
-            .finish(event.token)
-            .expect("PulseAudio: deferred wake is finishable");
-        app.resource_mut::<PulseAudio>().defer_wake = None;
+        if app.resource_mut::<Ring>().finish(event.token).is_some() {
+            app.resource_mut::<PulseAudio>().defer_wake = None;
+        }
         return; // A zero-duration timeout normally completes with -ETIME.
     }
 
@@ -307,10 +324,19 @@ fn on_io(app: &mut App, event: &IoEvent) {
         return; // Another module owns this token.
     };
 
-    app.resource_mut::<Ring>()
-        .finish(event.token)
-        .expect("PulseAudio: completed poll is finishable");
-    // TODO: don't panic here
+    if app.resource_mut::<Ring>().finish(event.token).is_none() {
+        // A token that is not actually completed must retain its duplicated
+        // descriptor; the kernel may still be using it.
+        app.resource_mut::<PulseAudio>().pending_polls.insert(
+            event.token,
+            PendingPoll {
+                watch_id,
+                generation,
+                fd,
+            },
+        );
+        return;
+    }
     // The kernel is done with the duplicated descriptor now.
     drop(fd);
 
@@ -326,24 +352,27 @@ fn on_io(app: &mut App, event: &IoEvent) {
         return; // The watch was removed, disabled, or changed.
     };
 
-    // Fail fast for the demo rather than treating a negative errno as flags.
-    // TODO: remove this in production
-    assert!(
-        event.result >= 0,
-        "PulseAudio: poll failed: {}",
-        io::Error::from_raw_os_error(-event.result)
-    );
+    // A failed poll belongs to the audio connection, not the whole App.
+    // Let libpulse handle it as an I/O error rather than panicking here.
+    let flags = if event.result < 0 {
+        PA_IO_EVENT_ERROR
+    } else {
+        to_pulse_flags(event.result as u32)
+    };
 
     // SAFETY: no resource/state borrows remain, and no foreign callbacks ran
     // between validating this watch and invoking it. It may free itself here.
-    unsafe { callback.invoke(to_pulse_flags(event.result as u32)) };
+    unsafe { callback.invoke(flags) };
 }
 
 fn on_timer(app: &mut App, event: &IoEvent, timer: PendingTimer) {
     // Finish even obsolete timeouts, so Ring can release their operation storage.
-    app.resource_mut::<Ring>()
-        .finish(event.token)
-        .expect("PulseAudio: completed timeout is finishable");
+    if app.resource_mut::<Ring>().finish(event.token).is_none() {
+        app.resource_mut::<PulseAudio>()
+            .pending_timers
+            .insert(event.token, timer);
+        return;
+    }
 
     let callback = {
         let audio = app.resource::<PulseAudio>();
@@ -353,15 +382,15 @@ fn on_timer(app: &mut App, event: &IoEvent, timer: PendingTimer) {
         let Some(deadline) = state.timer_deadline(timer.timer_id, timer.generation) else {
             return; // The timer was removed, disabled, or restarted.
         };
-        assert_eq!(event.result, -libc::ETIME, "PulseAudio: timeout failed");
+        if event.result != -libc::ETIME {
+            eprintln!("PulseAudio timer failed: {}", event.result);
+            return;
+        }
 
         // Ring waits relatively, while libpulse's custom-loop deadlines use
         // wall time. If the clock moved backwards, leave the timer enabled so
         // BeforeWait can resubmit it with the newly remaining delay.
-        if !timer_delay(deadline, SystemTime::now())
-            .expect("PulseAudio: convert a timer deadline")
-            .is_zero()
-        {
+        if !timer_delay(deadline, SystemTime::now()).is_ok_and(|delay| delay.is_zero()) {
             return;
         }
         state.take_timer_callback(timer.timer_id, timer.generation)
@@ -442,7 +471,7 @@ fn to_pulse_flags(events: u32) -> pa_io_event_flags_t {
     if events & libc::POLLHUP as u32 != 0 {
         flags |= PA_IO_EVENT_HANGUP;
     }
-    if events & libc::POLLERR as u32 != 0 {
+    if events & (libc::POLLERR | libc::POLLNVAL) as u32 != 0 {
         flags |= PA_IO_EVENT_ERROR;
     }
     flags

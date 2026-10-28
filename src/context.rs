@@ -26,6 +26,11 @@ pub(crate) struct Context {
 }
 
 impl Context {
+    /// Borrow the native context for another service's asynchronous request.
+    pub(crate) fn raw(&self) -> *mut pa_context {
+        self.ptr.as_ptr()
+    }
+
     /// Start an asynchronous connection; success here does NOT mean Ready.
     /// The later state callback reports readiness or connection failure.
     pub(crate) fn connect(api: &pa_mainloop_api) -> Result<Self, String> {
@@ -137,6 +142,7 @@ impl Drop for Context {
         // that is about to be dropped. Disconnect before releasing the context.
         unsafe {
             pulse::pa_context_set_state_callback(self.ptr.as_ptr(), None, ptr::null_mut());
+            pulse::pa_context_set_subscribe_callback(self.ptr.as_ptr(), None, ptr::null_mut());
             pulse::pa_context_disconnect(self.ptr.as_ptr());
             pulse::pa_context_unref(self.ptr.as_ptr());
         }
