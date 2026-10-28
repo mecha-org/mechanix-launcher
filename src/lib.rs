@@ -1,17 +1,49 @@
+use std::cell::UnsafeCell;
+use std::collections::HashMap;
 use std::os::fd::OwnedFd;
 
-use libpulse_sys::mainloop::api::{
-    PA_IO_EVENT_ERROR, PA_IO_EVENT_HANGUP, PA_IO_EVENT_INPUT, PA_IO_EVENT_NULL, PA_IO_EVENT_OUTPUT,
-    pa_io_event_flags_t,
-};
+use libpulse_sys::mainloop::api::*;
 use mecha_wayland::prelude::*;
 
 mod mainloop;
 
-struct PulseAudioModule;
+pub struct PulseAudioModule;
 
 impl Module for PulseAudioModule {
-    fn install(self, app: &mut App) {}
+    fn install(self, app: &mut App) {
+        app.init_resource::<PulseAudio>();
+    }
+}
+
+/// App-wide owner of the mainloop allocations and pending Ring polls.
+/// This currently initializes I/O hooks only; it does not connect to a server.
+pub struct PulseAudio {
+    mainloop_api: Box<pa_mainloop_api>,
+    mainloop_state: Box<UnsafeCell<mainloop::MainloopState>>,
+    pending_polls: HashMap<Token, PendingPoll>,
+}
+
+impl Resource for PulseAudio {}
+
+impl PulseAudio {
+    pub fn new() -> Self {
+        // Both allocations stay put even when the resource moves into App.
+        // UnsafeCell allows the FFI hooks to mutate the state through userdata.
+        let mainloop_state = Box::new(UnsafeCell::new(mainloop::MainloopState::default()));
+        let mainloop_api = Box::new(mainloop::make_api(mainloop_state.as_ref()));
+
+        Self {
+            mainloop_api,
+            mainloop_state,
+            pending_polls: HashMap::new(),
+        }
+    }
+}
+
+impl Default for PulseAudio {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// One submitted poll. Look up its watch by ID and generation on completion.
