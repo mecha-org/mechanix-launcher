@@ -557,8 +557,7 @@ fn readiness_callbacks_can_free_their_watch_and_register_a_replacement() {
 }
 
 #[test]
-#[should_panic(expected = "PulseAudio: poll failed")]
-fn on_io_rejects_negative_poll_results_instead_of_converting_them_to_flags() {
+fn on_io_reports_negative_poll_results_to_libpulse_without_crashing() {
     let (reader, _writer) = UnixStream::pair().unwrap();
     let data = Readiness::default();
     let mut app = polling_app();
@@ -574,6 +573,8 @@ fn on_io_rejects_negative_poll_results_instead_of_converting_them_to_flags() {
     event.result = -libc::EIO;
     app.signal(event);
     app.flush();
+    assert_eq!(data.calls.get(), 1);
+    assert_eq!(data.flags.get(), PA_IO_EVENT_ERROR);
 }
 
 #[test]
