@@ -16,22 +16,7 @@ struct TestMainloop {
 impl TestMainloop {
     fn new() -> Self {
         let state = Box::new(UnsafeCell::new(MainloopState::default()));
-        let api = Box::new(pa_mainloop_api {
-            userdata: state.get().cast(),
-            io_new: Some(io_new),
-            io_enable: Some(io_enable),
-            io_free: Some(io_free),
-            io_set_destroy: Some(io_set_destroy),
-            time_new: None,
-            time_restart: None,
-            time_free: None,
-            time_set_destroy: None,
-            defer_new: None,
-            defer_enable: None,
-            defer_free: None,
-            defer_set_destroy: None,
-            quit: None,
-        });
+        let api = Box::new(make_api(state.as_ref()));
         Self { state, api }
     }
 
