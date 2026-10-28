@@ -12,7 +12,9 @@ pub struct PulseAudioModule;
 
 impl Module for PulseAudioModule {
     fn install(self, app: &mut App) {
-        app.init_resource::<PulseAudio>().system(on_before_wait);
+        app.init_resource::<PulseAudio>()
+            .system(on_before_wait)
+            .system(on_io);
     }
 }
 
@@ -85,7 +87,53 @@ fn on_before_wait(app: &mut App, _: &BeforeWait) {
     audio
         .arm_polls(&mut ring)
         .expect("PulseAudio: duplicate a watched descriptor");
-		  // TODO: remove this
+    // TODO: remove this
+}
+
+fn on_io(app: &mut App, event: &IoEvent) {
+    // get token we own
+    let Some(PendingPoll {
+        watch_id,
+        generation,
+        fd,
+    }) = app
+        .resource_mut::<PulseAudio>()
+        .pending_polls
+        .remove(&event.token)
+    else {
+        return; // Another module owns this token.
+    };
+
+    app.resource_mut::<Ring>()
+        .finish(event.token)
+        .expect("PulseAudio: completed poll is finishable");
+    // TODO: don't panic here
+    // The kernel is done with the duplicated descriptor now.
+    drop(fd);
+
+    // Run the callback
+    let callback = {
+        let audio = app.resource::<PulseAudio>();
+        // SAFETY: no FFI callback runs during lookup. The result contains
+        // copied arguments, not references into the registry.
+        let state = unsafe { &*audio.mainloop_state.get() };
+        state.io_callback(watch_id, generation)
+    };
+    let Some(callback) = callback else {
+        return; // The watch was removed, disabled, or changed.
+    };
+
+    // Fail fast for the demo rather than treating a negative errno as flags.
+    // TODO: remove this in production
+    assert!(
+        event.result >= 0,
+        "PulseAudio: poll failed: {}",
+        io::Error::from_raw_os_error(-event.result)
+    );
+
+    // SAFETY: no resource/state borrows remain, and no foreign callbacks ran
+    // between validating this watch and invoking it. It may free itself here.
+    unsafe { callback.invoke(to_pulse_flags(event.result as u32)) };
 }
 
 /// One submitted poll. Look up its watch by ID and generation on completion.

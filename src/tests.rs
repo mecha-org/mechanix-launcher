@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::ffi::c_void;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, RawFd};
@@ -110,20 +111,26 @@ fn add_watch(audio: &PulseAudio, fd: RawFd, events: pa_io_event_flags_t) -> *mut
 }
 
 // Bound the wait so a broken readiness mask fails instead of hanging the test.
-// Production completion dispatch will later finish and remove these polls.
-fn finish_poll(ring: &mut Ring, token: Token) -> IoEvent {
+fn wait_for_poll(ring: &mut Ring, token: Token) -> IoEvent {
     let deadline = ring.timeout(Duration::from_secs(1));
     loop {
         for event in ring.wait() {
-            let completed = ring.finish(event.token).expect("operation completed");
             if event.token == token {
-                assert!(event.result >= 0, "poll failed: {event:?}");
-                assert!(completed.buf.is_empty() && completed.fds.is_empty());
                 return event;
             }
+            ring.finish(event.token).expect("operation completed");
             assert_ne!(event.token, deadline, "poll did not complete");
         }
     }
+}
+
+// Submission-only tests finish directly; dispatch tests use the on_io system.
+fn finish_poll(ring: &mut Ring, token: Token) -> IoEvent {
+    let event = wait_for_poll(ring, token);
+    let completed = ring.finish(token).expect("poll completed");
+    assert!(event.result >= 0, "poll failed: {event:?}");
+    assert!(completed.buf.is_empty() && completed.fds.is_empty());
+    event
 }
 
 #[test]
@@ -236,4 +243,295 @@ fn pending_poll_keeps_its_descriptor_after_the_watch_is_freed() {
     let event = finish_poll(&mut ring, token);
     assert_ne!(event.result & libc::POLLIN as i32, 0);
     audio.pending_polls.remove(&token);
+}
+
+#[derive(Default)]
+struct Readiness {
+    calls: Cell<usize>,
+    api: Cell<*const pa_mainloop_api>,
+    event: Cell<*mut pa_io_event>,
+    fd: Cell<RawFd>,
+    flags: Cell<pa_io_event_flags_t>,
+    replacement: Cell<*mut pa_io_event>,
+}
+
+extern "C" fn record_readiness(
+    api: *const pa_mainloop_api,
+    event: *mut pa_io_event,
+    fd: i32,
+    flags: pa_io_event_flags_t,
+    userdata: *mut c_void,
+) {
+    // SAFETY: these tests keep their Readiness value alive while dispatching.
+    let data = unsafe { &*userdata.cast::<Readiness>() };
+    data.calls.set(data.calls.get() + 1);
+    data.api.set(api);
+    data.event.set(event);
+    data.fd.set(fd);
+    data.flags.set(flags);
+}
+
+fn polling_app() -> App {
+    let mut app = App::new();
+    app.add_module(RingModule::default())
+        .add_module(PulseAudioModule);
+    app
+}
+
+fn arm_callback(
+    app: &mut App,
+    fd: RawFd,
+    flags: pa_io_event_flags_t,
+    callback: pa_io_event_cb_t,
+    data: &Readiness,
+) -> (*mut pa_io_event, Token) {
+    let event = {
+        let audio = app.resource::<PulseAudio>();
+        audio.mainloop_api.io_new.unwrap()(
+            audio.mainloop_api.as_ref(),
+            fd,
+            flags,
+            callback,
+            ptr::from_ref(data).cast_mut().cast(),
+        )
+    };
+    app.signal(BeforeWait);
+    app.flush();
+    let audio = app.resource::<PulseAudio>();
+    assert_eq!(audio.pending_polls.len(), 1);
+    (event, *audio.pending_polls.keys().next().unwrap())
+}
+
+fn dispatch_poll(app: &mut App, token: Token) {
+    let event = wait_for_poll(&mut app.resource_mut::<Ring>(), token);
+    app.signal(event);
+    app.flush();
+}
+
+#[test]
+fn on_io_delivers_readiness_and_allows_the_watch_to_be_rearmed() {
+    let (mut reader, mut writer) = UnixStream::pair().unwrap();
+    reader.set_nonblocking(true).unwrap();
+    let data = Readiness::default();
+    let mut app = polling_app();
+    let (watch, token) = arm_callback(
+        &mut app,
+        reader.as_raw_fd(),
+        PA_IO_EVENT_INPUT,
+        Some(record_readiness),
+        &data,
+    );
+    let duplicate = app.resource::<PulseAudio>().pending_polls[&token]
+        .fd
+        .as_raw_fd();
+
+    writer.write_all(b"x").unwrap();
+    dispatch_poll(&mut app, token);
+
+    assert_eq!(data.calls.get(), 1);
+    assert_eq!(data.event.get(), watch);
+    assert_eq!(data.fd.get(), reader.as_raw_fd());
+    assert_ne!(data.fd.get(), duplicate, "libpulse expects its original fd");
+    assert_eq!(data.flags.get(), PA_IO_EVENT_INPUT);
+    assert_eq!(
+        data.api.get(),
+        ptr::from_ref(app.resource::<PulseAudio>().mainloop_api.as_ref())
+    );
+    assert!(app.resource::<PulseAudio>().pending_polls.is_empty());
+    assert!(app.resource_mut::<Ring>().finish(token).is_none());
+    let mut byte = [0];
+    reader.read_exact(&mut byte).unwrap();
+    assert_eq!(byte, *b"x", "dispatch does not consume socket data");
+
+    app.signal(BeforeWait);
+    app.flush();
+    let next = *app
+        .resource::<PulseAudio>()
+        .pending_polls
+        .keys()
+        .next()
+        .unwrap();
+    assert_ne!(next, token);
+    writer.write_all(b"y").unwrap();
+    dispatch_poll(&mut app, next);
+    assert_eq!(data.calls.get(), 2);
+    assert!(app.resource::<PulseAudio>().pending_polls.is_empty());
+}
+
+#[test]
+fn on_io_ignores_an_obsolete_generation_then_dispatches_the_current_one() {
+    let (reader, mut writer) = UnixStream::pair().unwrap();
+    let data = Readiness::default();
+    let mut app = polling_app();
+    let (watch, old) = arm_callback(
+        &mut app,
+        reader.as_raw_fd(),
+        PA_IO_EVENT_INPUT,
+        Some(record_readiness),
+        &data,
+    );
+    app.resource::<PulseAudio>().mainloop_api.io_enable.unwrap()(watch, PA_IO_EVENT_OUTPUT);
+
+    writer.write_all(b"x").unwrap();
+    dispatch_poll(&mut app, old);
+    assert_eq!(data.calls.get(), 0);
+    assert!(app.resource::<PulseAudio>().pending_polls.is_empty());
+    assert!(app.resource_mut::<Ring>().finish(old).is_none());
+
+    app.signal(BeforeWait);
+    app.flush();
+    let current = *app
+        .resource::<PulseAudio>()
+        .pending_polls
+        .keys()
+        .next()
+        .unwrap();
+    dispatch_poll(&mut app, current);
+    assert_eq!(data.calls.get(), 1);
+    assert_eq!(data.flags.get(), PA_IO_EVENT_OUTPUT);
+}
+
+#[test]
+fn on_io_finishes_a_freed_watchs_poll_without_calling_it() {
+    let (reader, mut writer) = UnixStream::pair().unwrap();
+    let data = Readiness::default();
+    let mut app = polling_app();
+    let (watch, token) = arm_callback(
+        &mut app,
+        reader.as_raw_fd(),
+        PA_IO_EVENT_INPUT,
+        Some(record_readiness),
+        &data,
+    );
+    app.resource::<PulseAudio>().mainloop_api.io_free.unwrap()(watch);
+    drop(reader);
+
+    writer.write_all(b"x").unwrap();
+    dispatch_poll(&mut app, token);
+    assert_eq!(data.calls.get(), 0);
+    assert!(app.resource::<PulseAudio>().pending_polls.is_empty());
+    assert!(app.resource_mut::<Ring>().finish(token).is_none());
+}
+
+#[test]
+fn on_io_does_not_notify_a_disabled_watch() {
+    let (reader, mut writer) = UnixStream::pair().unwrap();
+    let data = Readiness::default();
+    let mut app = polling_app();
+    let (watch, token) = arm_callback(
+        &mut app,
+        reader.as_raw_fd(),
+        PA_IO_EVENT_INPUT,
+        Some(record_readiness),
+        &data,
+    );
+    app.resource::<PulseAudio>().mainloop_api.io_enable.unwrap()(watch, PA_IO_EVENT_NULL);
+
+    writer.write_all(b"x").unwrap();
+    dispatch_poll(&mut app, token);
+    app.signal(BeforeWait);
+    app.flush();
+    assert_eq!(data.calls.get(), 0);
+    assert!(app.resource::<PulseAudio>().pending_polls.is_empty());
+}
+
+#[test]
+fn on_io_leaves_other_modules_completions_unfinished() {
+    let mut app = polling_app();
+    let token = app.resource_mut::<Ring>().timeout(Duration::ZERO);
+    let event = app.resource_mut::<Ring>().wait()[0];
+    assert_eq!(event.token, token);
+
+    app.signal(event);
+    app.flush();
+
+    assert!(app.resource_mut::<Ring>().finish(token).is_some());
+}
+
+extern "C" fn replace_on_readiness(
+    api: *const pa_mainloop_api,
+    event: *mut pa_io_event,
+    fd: i32,
+    flags: pa_io_event_flags_t,
+    userdata: *mut c_void,
+) {
+    record_readiness(api, event, fd, flags, userdata);
+    // SAFETY: the API is alive throughout dispatch. The Readiness data is owned
+    // by the test, so freeing the watch does not free that data.
+    let api = unsafe { &*api };
+    api.io_free.unwrap()(event);
+    let replacement =
+        api.io_new.unwrap()(api, fd, PA_IO_EVENT_INPUT, Some(on_ready), ptr::null_mut());
+    // SAFETY: the test's Readiness value is still alive after removing the watch.
+    unsafe { &*userdata.cast::<Readiness>() }
+        .replacement
+        .set(replacement);
+}
+
+#[test]
+fn readiness_callbacks_can_free_their_watch_and_register_a_replacement() {
+    let (reader, mut writer) = UnixStream::pair().unwrap();
+    let data = Readiness::default();
+    let mut app = polling_app();
+    let (_, token) = arm_callback(
+        &mut app,
+        reader.as_raw_fd(),
+        PA_IO_EVENT_INPUT,
+        Some(replace_on_readiness),
+        &data,
+    );
+    let old_id = app.resource::<PulseAudio>().pending_polls[&token].watch_id;
+
+    writer.write_all(b"x").unwrap();
+    dispatch_poll(&mut app, token);
+
+    assert_eq!(data.calls.get(), 1);
+    assert!(!data.replacement.get().is_null());
+    let audio = app.resource::<PulseAudio>();
+    assert!(audio.pending_polls.is_empty());
+    // SAFETY: the callback has returned, so the registry is not borrowed by FFI.
+    let state = unsafe { &*audio.mainloop_state.get() };
+    let registrations: Vec<_> = state.io_watches().collect();
+    assert_eq!(registrations.len(), 1);
+    assert_ne!(registrations[0].0, old_id);
+}
+
+#[test]
+#[should_panic(expected = "PulseAudio: poll failed")]
+fn on_io_rejects_negative_poll_results_instead_of_converting_them_to_flags() {
+    let (reader, _writer) = UnixStream::pair().unwrap();
+    let data = Readiness::default();
+    let mut app = polling_app();
+    let (_, token) = arm_callback(
+        &mut app,
+        reader.as_raw_fd(),
+        PA_IO_EVENT_OUTPUT,
+        Some(record_readiness),
+        &data,
+    );
+    let mut event = wait_for_poll(&mut app.resource_mut::<Ring>(), token);
+    // Inject an operation failure after obtaining a real, finishable completion.
+    event.result = -libc::EIO;
+    app.signal(event);
+    app.flush();
+}
+
+#[test]
+fn on_io_forwards_socket_hangups_to_libpulse() {
+    let (reader, writer) = UnixStream::pair().unwrap();
+    let data = Readiness::default();
+    let mut app = polling_app();
+    let (_, token) = arm_callback(
+        &mut app,
+        reader.as_raw_fd(),
+        PA_IO_EVENT_INPUT,
+        Some(record_readiness),
+        &data,
+    );
+
+    drop(writer);
+    dispatch_poll(&mut app, token);
+
+    assert_eq!(data.calls.get(), 1);
+    assert_ne!(data.flags.get() & PA_IO_EVENT_HANGUP, 0);
 }

@@ -1,4 +1,4 @@
-//! I/O watch registration. Ring submission and dispatch will be added separately.
+//! Libpulse I/O watch registration and callback snapshots for the Ring adapter.
 
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
@@ -18,6 +18,33 @@ struct IoWatch {
     destroy_callback: pa_io_event_destroy_cb_t,
     // Changes when the interest mask changes, making older polls obsolete.
     generation: u64,
+}
+
+/// Copied callback arguments, allowing the caller to release registry borrows.
+///
+/// This struct is just a named bundle, not a libpulse requirement or a heap
+/// allocation. A tuple or local copies would also work. What matters is ending
+/// registry/resource borrows before invoking libpulse, which may free the watch.
+/// The caller must still ensure the copied pointers remain valid until invocation.
+pub(super) struct IoCallback {
+    api: *const pa_mainloop_api,
+    event: *mut pa_io_event,
+    fd: RawFd,
+    callback: pa_io_event_cb_t,
+    userdata: *mut c_void,
+}
+
+impl IoCallback {
+    /// Notify libpulse after releasing all state and resource borrows.
+    ///
+    /// # Safety
+    /// The API, watch, descriptor and callback data must still be live. No FFI
+    /// callback may have changed or removed the watch since this snapshot.
+    pub(super) unsafe fn invoke(self, events: pa_io_event_flags_t) {
+        if let Some(callback) = self.callback {
+            callback(self.api, self.event, self.fd, events, self.userdata);
+        }
+    }
 }
 
 #[derive(Default)]
@@ -50,6 +77,24 @@ pub(super) fn make_api(state: &UnsafeCell<MainloopState>) -> pa_mainloop_api {
 }
 
 impl MainloopState {
+    /// Prepare a callback only for a still-enabled, matching registration.
+    pub(super) fn io_callback(&self, id: u64, generation: u64) -> Option<IoCallback> {
+        let registration = self.watches.get(&id)?;
+        // SAFETY: lookup runs without an FFI callback in progress, and the
+        // registry owns this watch. Only copied arguments escape this method.
+        let watch = unsafe { &*registration.get() };
+        if watch.generation != generation || watch.events == PA_IO_EVENT_NULL {
+            return None;
+        }
+        Some(IoCallback {
+            api: watch.api,
+            event: registration.get().cast(),
+            fd: watch.fd,
+            callback: watch.callback,
+            userdata: watch.userdata,
+        })
+    }
+
     /// Copy each watch's (ID, generation, descriptor, requested conditions).
     /// The caller must not invoke libpulse while iterating over the registry.
     pub(super) fn io_watches(
