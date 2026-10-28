@@ -18,9 +18,8 @@ const FLAGS: [(pa_io_event_flags_t, u32); 4] = [
 ];
 
 #[test]
-fn module_initializes_the_pulse_audio_resource() {
-    let mut app = App::new();
-    app.add_module(PulseAudioModule);
+fn unconnected_fixture_initializes_the_pulse_audio_resource() {
+    let app = polling_app();
 
     let audio = app.resource::<PulseAudio>();
     assert_eq!(
@@ -29,6 +28,8 @@ fn module_initializes_the_pulse_audio_resource() {
     );
     assert!(audio.pending_polls.is_empty());
     assert!(audio.pending_timers.is_empty());
+    assert!(audio.context.is_none());
+    assert_eq!(audio.connection_state(), &ConnectionState::Connecting);
     assert!(audio.mainloop_api.io_new.is_some());
     assert!(audio.mainloop_api.io_enable.is_some());
     assert!(audio.mainloop_api.io_free.is_some());
@@ -43,6 +44,41 @@ fn module_initializes_the_pulse_audio_resource() {
     assert!(audio.mainloop_api.defer_set_destroy.is_some());
     assert!(audio.mainloop_api.quit.is_some());
     assert!(audio.defer_wake.is_none());
+}
+
+#[derive(Default)]
+struct ConnectionLog(Vec<ConnectionState>);
+impl Resource for ConnectionLog {}
+
+fn record_connection(app: &mut App, event: &ConnectionStateChanged) {
+    app.resource_mut::<ConnectionLog>().0.push(event.0.clone());
+}
+
+#[test]
+fn state_updates_are_published_as_app_signals_on_tick() {
+    let mut app = polling_app();
+    app.init_resource::<ConnectionLog>()
+        .system(record_connection);
+
+    app.resource_mut::<PulseAudio>().connection_updates.extend([
+        ConnectionState::Ready,
+        ConnectionState::Ready,
+        ConnectionState::Failed("server disappeared".to_owned()),
+    ]);
+
+    app.tick();
+
+    let expected = vec![
+        ConnectionState::Ready,
+        ConnectionState::Failed("server disappeared".to_owned()),
+    ];
+    assert_eq!(app.resource::<ConnectionLog>().0, expected);
+    assert_eq!(
+        app.resource::<PulseAudio>().connection_state(),
+        expected.last().unwrap()
+    );
+    app.tick();
+    assert_eq!(app.resource::<ConnectionLog>().0, expected);
 }
 
 #[test]
@@ -71,12 +107,12 @@ fn mainloop_allocations_remain_stable_when_the_resource_moves_into_app() {
 }
 
 #[test]
-fn installing_the_module_again_preserves_the_existing_resource() {
+fn initializing_the_resource_again_preserves_its_api() {
     let mut app = App::new();
-    app.add_module(PulseAudioModule);
+    app.init_resource::<PulseAudio>();
     let api = std::ptr::from_ref(app.resource::<PulseAudio>().mainloop_api.as_ref());
 
-    app.add_module(PulseAudioModule);
+    app.init_resource::<PulseAudio>();
 
     assert_eq!(
         std::ptr::from_ref(app.resource::<PulseAudio>().mainloop_api.as_ref()),
@@ -160,9 +196,7 @@ fn finish_poll(ring: &mut Ring, token: Token) -> IoEvent {
 fn before_wait_arms_readable_watches_without_duplicate_polls() {
     let (mut reader, mut writer) = UnixStream::pair().unwrap();
     reader.set_nonblocking(true).unwrap();
-    let mut app = App::new();
-    app.add_module(RingModule::default())
-        .add_module(PulseAudioModule);
+    let mut app = polling_app();
     add_watch(
         app.resource::<PulseAudio>(),
         reader.as_raw_fd(),
@@ -297,7 +331,10 @@ extern "C" fn record_readiness(
 fn polling_app() -> App {
     let mut app = App::new();
     app.add_module(RingModule::default())
-        .add_module(PulseAudioModule);
+        .init_resource::<PulseAudio>()
+        .system(on_tick)
+        .system(on_before_wait)
+        .system(on_io);
     app
 }
 

@@ -8,29 +8,58 @@ use libc::timeval;
 use libpulse_sys::mainloop::api::*;
 use mecha_wayland::prelude::*;
 
+mod context;
 mod mainloop;
 mod volume;
 
 // re-export
 pub use volume::VolumeControlModule;
 
-/// Drive libpulse through Ring. Queue actions in ordinary systems/handlers;
-/// BeforeWait is reserved for draining and submitting work already queued.
+/// Connection lifecycle reported by libpulse, delivered on the App thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectionState {
+    Connecting,
+    Ready,
+    Failed(String),
+    Terminated,
+}
+
+/// A change in the shared connection's state.
+pub struct ConnectionStateChanged(pub ConnectionState);
+impl Signal for ConnectionStateChanged {}
+
+/// Connect to the local PulseAudio-compatible server through Ring.
+///
+/// Uses `$XDG_RUNTIME_DIR/pulse/native` without autospawning a daemon. Install
+/// after `RingModule`; [`ConnectionStateChanged`] reports readiness or failure.
+/// Queue actions in ordinary systems/handlers; BeforeWait drains libpulse work.
 pub struct PulseAudioModule;
 
 impl Module for PulseAudioModule {
     fn install(self, app: &mut App) {
         app.init_resource::<PulseAudio>()
+            .system(on_tick)
             .system(on_before_wait)
             .system(on_io);
+        let audio = &mut app.resource_mut::<PulseAudio>();
+        if audio.context.is_none() {
+            match context::Context::connect(&audio.mainloop_api) {
+                Ok(context) => audio.context = Some(context),
+                Err(error) => audio
+                    .connection_updates
+                    .push(ConnectionState::Failed(error)),
+            }
+        }
     }
 }
 
 /// App-wide owner of the mainloop allocations and pending Ring operations.
-/// This does not yet connect to a sound server.
 pub struct PulseAudio {
     mainloop_api: Box<pa_mainloop_api>,
     mainloop_state: Box<UnsafeCell<mainloop::MainloopState>>,
+    context: Option<context::Context>,
+    connection_state: ConnectionState,
+    connection_updates: Vec<ConnectionState>,
     pending_polls: HashMap<Token, PendingPoll>,
     pending_timers: HashMap<Token, PendingTimer>,
     defer_wake: Option<Token>,
@@ -48,10 +77,34 @@ impl PulseAudio {
         Self {
             mainloop_api,
             mainloop_state,
+            context: None,
+            connection_state: ConnectionState::Connecting,
+            connection_updates: Vec::new(),
             pending_polls: HashMap::new(),
             pending_timers: HashMap::new(),
             defer_wake: None,
         }
+    }
+
+    /// Most recently reported connection state.
+    pub fn connection_state(&self) -> &ConnectionState {
+        &self.connection_state
+    }
+
+    fn take_connection_updates(&mut self) -> Vec<ConnectionState> {
+        let mut updates = std::mem::take(&mut self.connection_updates);
+        if let Some(context) = &self.context {
+            updates.extend(context.take_updates());
+        }
+        updates
+    }
+
+    fn has_connection_updates(&self) -> bool {
+        !self.connection_updates.is_empty()
+            || self
+                .context
+                .as_ref()
+                .is_some_and(context::Context::has_updates)
     }
 
     /// Submit one poll for each enabled watch's current generation.
@@ -114,6 +167,14 @@ impl PulseAudio {
     }
 }
 
+impl Drop for PulseAudio {
+    fn drop(&mut self) {
+        // The context can call our mainloop hooks while disconnecting. Drop it
+        // before Rust drops the boxed API and its userdata state.
+        self.context.take();
+    }
+}
+
 impl Default for PulseAudio {
     fn default() -> Self {
         Self::new()
@@ -136,10 +197,21 @@ fn on_before_wait(app: &mut App, _: &BeforeWait) {
     // SAFETY: all deferred callbacks have returned, and no FFI runs while
     // checking the registry or queueing Ring operations.
     let state = unsafe { &*audio.mainloop_state.get() };
-    if state.has_deferred_work() && audio.defer_wake.is_none() {
+    if (state.has_deferred_work() || audio.has_connection_updates()) && audio.defer_wake.is_none() {
         // Runnable work must not sleep waiting for unrelated socket activity.
         // This is a one-shot wake, not a periodic polling timer.
         audio.defer_wake = Some(ring.timeout(Duration::ZERO));
+    }
+}
+
+fn on_tick(app: &mut App, _: &Tick) {
+    let updates = app.resource_mut::<PulseAudio>().take_connection_updates();
+    for state in updates {
+        if app.resource::<PulseAudio>().connection_state == state {
+            continue;
+        }
+        app.resource_mut::<PulseAudio>().connection_state = state.clone();
+        app.signal(ConnectionStateChanged(state));
     }
 }
 
