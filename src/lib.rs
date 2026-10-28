@@ -1,5 +1,7 @@
 use mecha_wayland::prelude::*;
 
+mod mainloop;
+
 struct PulseAudioModule;
 
 impl Module for PulseAudioModule {
