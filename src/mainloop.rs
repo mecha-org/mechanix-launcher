@@ -6,14 +6,17 @@ use std::collections::HashMap;
 use libpulse_sys::mainloop::api::pa_mainloop_api;
 
 mod io_api;
+mod timer_api;
 
 use io_api::IoWatch;
+use timer_api::TimerEntry;
 
 #[derive(Default)]
 pub(super) struct MainloopState {
     // Box keeps addresses stable; UnsafeCell permits access through FFI handles
     // even while other entries in the registry are inserted or removed.
     watches: HashMap<u64, Box<UnsafeCell<IoWatch>>>,
+    timers: HashMap<u64, Box<UnsafeCell<TimerEntry>>>,
     next_watch_id: u64,
 }
 
