@@ -4,14 +4,14 @@
 //! App systems then publish `VolumeState`. No callback holds an App pointer.
 
 use std::cell::RefCell;
-use std::ffi::{CStr, CString, c_void};
+use std::ffi::c_void;
 use std::ptr;
 use std::rc::Rc;
 
 use libpulse_sys::context::{
     self as pulse, PA_SUBSCRIPTION_EVENT_FACILITY_MASK, PA_SUBSCRIPTION_EVENT_SERVER,
     PA_SUBSCRIPTION_EVENT_SINK, PA_SUBSCRIPTION_MASK_SERVER, PA_SUBSCRIPTION_MASK_SINK, pa_context,
-    pa_server_info, pa_sink_info,
+    pa_sink_info,
 };
 use libpulse_sys::operation::{pa_operation, pa_operation_unref};
 use libpulse_sys::volume::{PA_VOLUME_NORM, pa_cvolume_avg, pa_cvolume_valid};
@@ -75,20 +75,11 @@ impl Module for VolumeControlModule {
     }
 }
 
-#[derive(Default, PartialEq, Eq)]
-enum Request {
-    #[default]
-    Idle,
-    Server,
-    Sink,
-}
-
 #[derive(Default)]
 struct VolumeBackend {
     updates: Rc<RefCell<Vec<VolumeUpdate>>>,
     started: bool,
-    request: Request,
-    default_sink: Option<CString>,
+    loading: bool,
     dirty: bool,
     snapshot: Option<VolumeState>,
 }
@@ -97,7 +88,6 @@ impl Resource for VolumeBackend {}
 /// Only owned values cross the C callback boundary.
 pub(crate) enum VolumeUpdate {
     Dirty,
-    DefaultSink(Option<CString>),
     Sink(VolumeState),
     SinkDone,
 }
@@ -115,8 +105,7 @@ fn on_connection(app: &mut App, event: &PulseAudioContextConnectionStateChanged)
                 // until the context disconnects.
                 backend.updates.borrow_mut().clear();
                 backend.started = false;
-                backend.request = Request::Idle;
-                backend.default_sink = None;
+                backend.loading = false;
                 backend.dirty = false;
                 backend.snapshot = None;
             }
@@ -156,10 +145,10 @@ fn start(app: &mut App) {
         );
         release(operation, "subscribe to output changes");
     }
-    request_server(app);
+    request_sink(app);
 }
 
-fn request_server(app: &mut App) {
+fn request_sink(app: &mut App) {
     if !matches!(
         app.resource::<PulseAudio>().connection_state(),
         ConnectionState::Ready
@@ -167,41 +156,23 @@ fn request_server(app: &mut App) {
     {
         return;
     }
-    app.resource_mut::<VolumeBackend>().request = Request::Server;
+    app.resource_mut::<VolumeBackend>().loading = true;
     let Some((context, userdata)) = context_and_queue(app) else {
         return;
     };
-    // SAFETY: the context and callback queue stay alive through libpulse's
-    // asynchronous reply. Libpulse owns another operation reference.
-    let operation =
-        unsafe { pulse::pa_context_get_server_info(context.raw(), Some(on_server), userdata) };
-    if !release(operation, "get default output") {
-        app.resource_mut::<VolumeBackend>().request = Request::Idle;
-        app.resource_mut::<VolumeState>()
-            .set_if_neq(VolumeState::Unavailable);
-    }
-}
-
-fn request_sink(app: &mut App, name: &CStr) {
-    if app.resource::<PulseAudio>().context().is_none() {
-        return;
-    }
-    app.resource_mut::<VolumeBackend>().request = Request::Sink;
-    let Some((context, userdata)) = context_and_queue(app) else {
-        return;
-    };
-    // SAFETY: libpulse encodes the name before returning. The context and
-    // callback queue live through the asynchronous sink reply.
+    // The server resolves this special name to its current default sink. No
+    // server-info round trip or cached device name is needed.
+    // SAFETY: the context and callback queue live through the async reply.
     let operation = unsafe {
         pulse::pa_context_get_sink_info_by_name(
             context.raw(),
-            name.as_ptr(),
+            c"@DEFAULT_SINK@".as_ptr(),
             Some(on_sink),
             userdata,
         )
     };
     if !release(operation, "get default output volume") {
-        app.resource_mut::<VolumeBackend>().request = Request::Idle;
+        app.resource_mut::<VolumeBackend>().loading = false;
         app.resource_mut::<VolumeState>()
             .set_if_neq(VolumeState::Unavailable);
     }
@@ -209,10 +180,9 @@ fn request_sink(app: &mut App, name: &CStr) {
 
 fn on_set_muted(app: &mut App, request: &SetMuted) {
     // While the default is being refreshed, wait for that query to finish.
-    // The cached name still belongs to the read path; it is not sent here.
     {
         let backend = app.resource::<VolumeBackend>();
-        if backend.request != Request::Idle || backend.dirty || backend.default_sink.is_none() {
+        if backend.loading || backend.dirty {
             return;
         }
     }
@@ -229,7 +199,7 @@ fn on_set_muted(app: &mut App, request: &SetMuted) {
     };
     // SAFETY: context is borrowed for this call; both it and the callback
     // queue remain alive through the asynchronous acknowledgement. The server
-    // resolves @DEFAULT_SINK@ when handling the request, not our cached name.
+    // resolves @DEFAULT_SINK@ when handling the request.
     let operation = unsafe {
         pulse::pa_context_set_sink_mute_by_name(
             context.raw(),
@@ -278,31 +248,13 @@ fn on_tick(app: &mut App, _: &Tick) {
         }
         match update {
             VolumeUpdate::Dirty => app.resource_mut::<VolumeBackend>().dirty = true,
-            VolumeUpdate::DefaultSink(name)
-                if app.resource::<VolumeBackend>().request == Request::Server =>
-            {
-                if let Some(name) = name {
-                    app.resource_mut::<VolumeBackend>().default_sink = Some(name.clone());
-                    request_sink(app, &name);
-                } else {
-                    {
-                        let mut backend = app.resource_mut::<VolumeBackend>();
-                        backend.request = Request::Idle;
-                        backend.default_sink = None;
-                    }
-                    app.resource_mut::<VolumeState>()
-                        .set_if_neq(VolumeState::Unavailable);
-                }
-            }
-            VolumeUpdate::Sink(state)
-                if app.resource::<VolumeBackend>().request == Request::Sink =>
-            {
+            VolumeUpdate::Sink(state) if app.resource::<VolumeBackend>().loading => {
                 app.resource_mut::<VolumeBackend>().snapshot = Some(state);
             }
-            VolumeUpdate::SinkDone if app.resource::<VolumeBackend>().request == Request::Sink => {
+            VolumeUpdate::SinkDone if app.resource::<VolumeBackend>().loading => {
                 let snapshot = {
                     let mut backend = app.resource_mut::<VolumeBackend>();
-                    backend.request = Request::Idle;
+                    backend.loading = false;
                     backend.snapshot.take().unwrap_or(VolumeState::Unavailable)
                 };
                 // A change during an in-flight query makes its reply stale.
@@ -314,11 +266,11 @@ fn on_tick(app: &mut App, _: &Tick) {
         }
     }
     if app.resource::<VolumeBackend>().started
-        && app.resource::<VolumeBackend>().request == Request::Idle
+        && !app.resource::<VolumeBackend>().loading
         && app.resource::<VolumeBackend>().dirty
     {
         app.resource_mut::<VolumeBackend>().dirty = false;
-        request_server(app);
+        request_sink(app);
     }
 }
 
@@ -330,19 +282,6 @@ extern "C" fn on_subscription(_: *mut pa_context, event: u32, _: u32, userdata: 
         let queue = unsafe { &*userdata.cast::<RefCell<Vec<VolumeUpdate>>>() };
         queue.borrow_mut().push(VolumeUpdate::Dirty);
     }
-}
-
-extern "C" fn on_server(_: *mut pa_context, info: *const pa_server_info, userdata: *mut c_void) {
-    // SAFETY: libpulse's info and its name pointer are valid for this callback.
-    let name = unsafe { info.as_ref() }.and_then(|info| {
-        (!info.default_sink_name.is_null()).then(|| {
-            // SAFETY: this is a non-null, NUL-terminated libpulse string.
-            unsafe { CStr::from_ptr(info.default_sink_name) }.to_owned()
-        })
-    });
-    // SAFETY: the queue outlives this callback and holds only copied values.
-    let queue = unsafe { &*userdata.cast::<RefCell<Vec<VolumeUpdate>>>() };
-    queue.borrow_mut().push(VolumeUpdate::DefaultSink(name));
 }
 
 extern "C" fn on_sink(
@@ -404,7 +343,7 @@ mod tests {
         {
             let mut backend = app.resource_mut::<VolumeBackend>();
             backend.started = true;
-            backend.request = Request::Sink;
+            backend.loading = true;
         }
         app.resource::<VolumeBackend>()
             .updates
@@ -441,7 +380,7 @@ mod tests {
         {
             let mut backend = app.resource_mut::<VolumeBackend>();
             backend.started = true;
-            backend.request = Request::Sink;
+            backend.loading = true;
         }
         let state = VolumeState::Ready {
             volume_percent: 62,
@@ -515,7 +454,7 @@ mod tests {
         {
             let mut backend = app.resource_mut::<VolumeBackend>();
             backend.started = true;
-            backend.request = Request::Sink;
+            backend.loading = true;
         }
         app.resource::<VolumeBackend>()
             .updates
@@ -536,7 +475,7 @@ mod tests {
         {
             let mut backend = app.resource_mut::<VolumeBackend>();
             backend.started = true;
-            backend.request = Request::Sink;
+            backend.loading = true;
         }
         let backend = app.resource::<VolumeBackend>();
         let userdata: *mut c_void = Rc::as_ptr(&backend.updates).cast_mut().cast();
@@ -603,7 +542,7 @@ mod tests {
             {
                 let mut backend = app.resource_mut::<VolumeBackend>();
                 backend.started = true;
-                backend.request = Request::Server; // Wait until the current query completes.
+                backend.loading = true; // Wait until the current sink query completes.
             }
             let backend = app.resource::<VolumeBackend>();
             let userdata: *mut c_void = Rc::as_ptr(&backend.updates).cast_mut().cast();
