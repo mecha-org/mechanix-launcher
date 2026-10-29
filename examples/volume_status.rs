@@ -2,7 +2,8 @@
 //! Run with `cargo run --example volume_status` under PulseAudio/pipewire-pulse.
 
 use mecha_pulseaudio::{
-    ConnectionState, ConnectionStateChanged, PulseAudioModule, VolumeControlModule, VolumeState,
+    ConnectionState, PulseAudioContextConnectionStateChanged, PulseAudioModule,
+    VolumeControlModule, VolumeState,
 };
 use mecha_wayland::prelude::*;
 
@@ -17,7 +18,7 @@ fn on_volume(app: &mut App, _: &OnChanged<VolumeState>) {
     }
 }
 
-fn on_connection(app: &mut App, event: &ConnectionStateChanged) {
+fn on_connection(app: &mut App, event: &PulseAudioContextConnectionStateChanged) {
     if let ConnectionState::Failed(error) = &event.0 {
         eprintln!("PulseAudio connection failed: {error}");
         app.signal(Stop);

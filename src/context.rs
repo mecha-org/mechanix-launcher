@@ -30,8 +30,8 @@ pub enum ConnectionState {
 
 /// A change in the shared connection's state, queued on `Tick` after the
 /// libpulse callback has returned. This is a mecha-wayland `Signal`.
-pub struct ConnectionStateChanged(pub ConnectionState);
-impl Signal for ConnectionStateChanged {}
+pub struct PulseAudioContextConnectionStateChanged(pub ConnectionState);
+impl Signal for PulseAudioContextConnectionStateChanged {}
 
 impl PulseAudio {
     /// Start connecting once. Installation returns before the handshake ends.
@@ -83,7 +83,7 @@ pub(crate) fn on_tick(app: &mut App, _: &Tick) {
             continue;
         }
         app.resource_mut::<PulseAudio>().connection_state = state.clone();
-        app.signal(ConnectionStateChanged(state));
+        app.signal(PulseAudioContextConnectionStateChanged(state));
     }
 }
 

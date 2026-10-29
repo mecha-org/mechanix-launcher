@@ -50,7 +50,7 @@ fn unconnected_fixture_initializes_the_pulse_audio_resource() {
 struct ConnectionLog(Vec<ConnectionState>);
 impl Resource for ConnectionLog {}
 
-fn record_connection(app: &mut App, event: &ConnectionStateChanged) {
+fn record_connection(app: &mut App, event: &PulseAudioContextConnectionStateChanged) {
     app.resource_mut::<ConnectionLog>().0.push(event.0.clone());
 }
 

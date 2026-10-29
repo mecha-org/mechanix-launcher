@@ -24,7 +24,7 @@ mod mainloop;
 mod volume;
 
 // re-export
-pub use context::{ConnectionState, ConnectionStateChanged};
+pub use context::{ConnectionState, PulseAudioContextConnectionStateChanged};
 pub use volume::{VolumeControlModule, VolumeState};
 
 /// Connect to the local PulseAudio-compatible server through Ring.

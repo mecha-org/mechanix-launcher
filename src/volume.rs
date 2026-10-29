@@ -17,7 +17,9 @@ use libpulse_sys::operation::{pa_operation, pa_operation_unref};
 use libpulse_sys::volume::{PA_VOLUME_NORM, pa_cvolume_avg, pa_cvolume_valid};
 use mecha_wayland::prelude::*;
 
-use crate::{ConnectionState, ConnectionStateChanged, PulseAudio, context::Context};
+use crate::{
+    ConnectionState, PulseAudio, PulseAudioContextConnectionStateChanged, context::Context,
+};
 
 /// Observed state of the default output. `Unavailable` means the server or
 /// default output cannot currently be queried; it is not a volume of zero.
@@ -92,7 +94,7 @@ pub(crate) enum VolumeUpdate {
     SinkDone,
 }
 
-fn on_connection(app: &mut App, event: &ConnectionStateChanged) {
+fn on_connection(app: &mut App, event: &PulseAudioContextConnectionStateChanged) {
     if !app.has_resource::<VolumeBackend>() {
         return;
     }
@@ -418,7 +420,9 @@ mod tests {
 
         on_connection(
             &mut app,
-            &ConnectionStateChanged(ConnectionState::Failed("audio went away".into())),
+            &PulseAudioContextConnectionStateChanged(ConnectionState::Failed(
+                "audio went away".into(),
+            )),
         );
 
         assert_eq!(*app.resource::<VolumeState>(), VolumeState::Unavailable);

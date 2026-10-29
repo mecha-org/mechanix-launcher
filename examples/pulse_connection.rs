@@ -2,10 +2,12 @@
 //! Requires a running PulseAudio or pipewire-pulse server in this user session.
 //! This stops after the first outcome; the library itself never stops the App.
 
-use mecha_pulseaudio::{ConnectionState, ConnectionStateChanged, PulseAudioModule};
+use mecha_pulseaudio::{
+    ConnectionState, PulseAudioContextConnectionStateChanged, PulseAudioModule,
+};
 use mecha_wayland::prelude::*;
 
-fn on_connection(app: &mut App, event: &ConnectionStateChanged) {
+fn on_connection(app: &mut App, event: &PulseAudioContextConnectionStateChanged) {
     match &event.0 {
         ConnectionState::Ready => {
             println!("PulseAudio connection ready");
