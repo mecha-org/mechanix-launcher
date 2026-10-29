@@ -14,7 +14,9 @@ use libpulse_sys::context::{
     pa_sink_info,
 };
 use libpulse_sys::operation::{pa_operation, pa_operation_unref};
-use libpulse_sys::volume::{PA_VOLUME_NORM, pa_cvolume_avg, pa_cvolume_valid};
+use libpulse_sys::volume::{
+    PA_VOLUME_NORM, pa_cvolume, pa_cvolume_avg, pa_cvolume_set, pa_cvolume_valid,
+};
 use mecha_wayland::prelude::*;
 
 use crate::{
@@ -48,6 +50,13 @@ pub struct VolumeControlModule;
 pub struct SetMuted(pub bool);
 impl Signal for SetMuted {}
 
+/// Set the default output to a 0–100% level using a mono volume request.
+/// The server scales its existing channels, preserving their balance. Values
+/// above 100 are clamped. Since [`VolumeState`] displays the channel average,
+/// an unbalanced sink may report a different percentage after the refresh.
+pub struct SetVolume(pub u32);
+impl Signal for SetVolume {}
+
 impl Module for VolumeControlModule {
     fn install(self, app: &mut App) {
         app.init_resource::<VolumeState>();
@@ -57,7 +66,8 @@ impl Module for VolumeControlModule {
         app.init_resource::<VolumeBackend>()
             .system(on_connection)
             .system(on_tick)
-            .system(on_set_muted);
+            .system(on_set_muted)
+            .system(on_set_volume);
         // The service owns the typed queue; PulseAudio retains a generic
         // reference until its context has disconnected all callbacks.
         let updates = Rc::clone(&app.resource::<VolumeBackend>().updates);
@@ -86,7 +96,7 @@ struct VolumeBackend {
 impl Resource for VolumeBackend {}
 
 /// Only owned values cross the C callback boundary.
-pub(crate) enum VolumeUpdate {
+enum VolumeUpdate {
     Dirty,
     Sink(VolumeState),
     SinkDone,
@@ -178,20 +188,19 @@ fn request_sink(app: &mut App) {
     }
 }
 
-fn on_set_muted(app: &mut App, request: &SetMuted) {
-    // While the default is being refreshed, wait for that query to finish.
-    {
-        let backend = app.resource::<VolumeBackend>();
-        if backend.loading || backend.dirty {
-            return;
-        }
-    }
-    if !matches!(app.resource::<VolumeState>(), VolumeState::Ready { .. })
-        || !matches!(
+fn ready_to_set(app: &App) -> bool {
+    let backend = app.resource::<VolumeBackend>();
+    !backend.loading
+        && !backend.dirty
+        && matches!(app.resource::<VolumeState>(), VolumeState::Ready { .. })
+        && matches!(
             app.resource::<PulseAudio>().connection_state(),
             ConnectionState::Ready
         )
-    {
+}
+
+fn on_set_muted(app: &mut App, request: &SetMuted) {
+    if !ready_to_set(app) {
         return;
     }
     let Some((context, userdata)) = context_and_queue(app) else {
@@ -212,6 +221,40 @@ fn on_set_muted(app: &mut App, request: &SetMuted) {
     release(operation, "set default output mute");
 }
 
+fn on_set_volume(app: &mut App, request: &SetVolume) {
+    if !ready_to_set(app) {
+        return;
+    }
+    let volume = cvolume_for_percent(request.0);
+    let Some((context, userdata)) = context_and_queue(app) else {
+        return;
+    };
+
+    // SAFETY: libpulse copies the stack-local channel volumes before returning.
+    // The context and callback queue remain live for the async acknowledgement.
+    let operation = unsafe {
+        pulse::pa_context_set_sink_volume_by_name(
+            context.raw(),
+            c"@DEFAULT_SINK@".as_ptr(),
+            &volume,
+            Some(on_volume_done),
+            userdata,
+        )
+    };
+    release(operation, "set default output volume");
+}
+
+fn cvolume_for_percent(percent: u32) -> pa_cvolume {
+    // Use u64 before multiplying to avoid overflow from arbitrary UI input.
+    let raw = (u64::from(percent.min(100)) * u64::from(PA_VOLUME_NORM) / 100) as u32;
+    let mut volume = pa_cvolume::default();
+    // PulseAudio accepts a one-channel volume for any sink: it scales the
+    // sink's existing channels relative to their current maximum volume.
+    // SAFETY: one channel is always valid; volume is a live C struct.
+    unsafe { pa_cvolume_set(&mut volume, 1, raw) };
+    volume
+}
+
 extern "C" fn on_mute_done(_: *mut pa_context, success: i32, userdata: *mut c_void) {
     if success == 0 {
         eprintln!("PulseAudio: could not set default output mute");
@@ -221,6 +264,17 @@ extern "C" fn on_mute_done(_: *mut pa_context, success: i32, userdata: *mut c_vo
     let queue = unsafe { &*userdata.cast::<RefCell<Vec<VolumeUpdate>>>() };
     // The UI may issue another request without waiting for this one; don't
     // guess the result. Refresh the server-observed state after each reply.
+    queue.borrow_mut().push(VolumeUpdate::Dirty);
+}
+
+extern "C" fn on_volume_done(_: *mut pa_context, success: i32, userdata: *mut c_void) {
+    if success == 0 {
+        eprintln!("PulseAudio: could not set default output volume");
+    }
+    // SAFETY: the retained Rc keeps the callback queue alive; no App borrow
+    // crosses this libpulse callback.
+    let queue = unsafe { &*userdata.cast::<RefCell<Vec<VolumeUpdate>>>() };
+    // Read back the actual server value even if the write failed.
     queue.borrow_mut().push(VolumeUpdate::Dirty);
 }
 
@@ -252,13 +306,16 @@ fn on_tick(app: &mut App, _: &Tick) {
                 app.resource_mut::<VolumeBackend>().snapshot = Some(state);
             }
             VolumeUpdate::SinkDone if app.resource::<VolumeBackend>().loading => {
-                let snapshot = {
+                let (snapshot, dirty) = {
                     let mut backend = app.resource_mut::<VolumeBackend>();
                     backend.loading = false;
-                    backend.snapshot.take().unwrap_or(VolumeState::Unavailable)
+                    (
+                        backend.snapshot.take().unwrap_or(VolumeState::Unavailable),
+                        backend.dirty,
+                    )
                 };
                 // A change during an in-flight query makes its reply stale.
-                if !app.resource::<VolumeBackend>().dirty {
+                if !dirty {
                     app.resource_mut::<VolumeState>().set_if_neq(snapshot);
                 }
             }
@@ -333,6 +390,22 @@ mod tests {
         assert_eq!(volume_percent(PA_VOLUME_NORM / 2), 50);
         assert_eq!(volume_percent(PA_VOLUME_NORM), 100);
         assert_eq!(volume_percent(PA_VOLUME_NORM * 3 / 2), 150);
+    }
+
+    #[test]
+    fn slider_percentages_create_valid_mono_volumes() {
+        for (percent, expected) in [
+            (0, 0),
+            (50, PA_VOLUME_NORM / 2),
+            (100, PA_VOLUME_NORM),
+            (u32::MAX, PA_VOLUME_NORM),
+        ] {
+            let volume = cvolume_for_percent(percent);
+            assert_eq!(volume.channels, 1);
+            assert_eq!(volume.values[0], expected);
+            // SAFETY: the helper built a C volume with one valid channel.
+            assert_ne!(unsafe { pa_cvolume_valid(&volume) }, 0);
+        }
     }
 
     #[test]
@@ -529,6 +602,32 @@ mod tests {
     }
 
     #[test]
+    fn set_volume_is_a_no_op_without_a_ready_output_or_connection() {
+        let mut app = App::new();
+        app.init_resource::<PulseAudio>()
+            .add_module(VolumeControlModule);
+
+        app.signal(SetVolume(75));
+        app.flush();
+        assert_eq!(*app.resource::<VolumeState>(), VolumeState::Loading);
+
+        app.resource_mut::<VolumeState>()
+            .set_if_neq(VolumeState::Ready {
+                volume_percent: 50,
+                muted: false,
+            });
+        app.signal(SetVolume(75));
+        app.flush();
+        assert_eq!(
+            *app.resource::<VolumeState>(),
+            VolumeState::Ready {
+                volume_percent: 50,
+                muted: false,
+            }
+        );
+    }
+
+    #[test]
     fn mute_replies_request_refresh_without_changing_observed_mute() {
         for success in [0, 1] {
             let mut app = App::new();
@@ -547,6 +646,33 @@ mod tests {
             let backend = app.resource::<VolumeBackend>();
             let userdata: *mut c_void = Rc::as_ptr(&backend.updates).cast_mut().cast();
             on_mute_done(ptr::null_mut(), success, userdata);
+
+            on_tick(&mut app, &Tick);
+
+            assert!(app.resource::<VolumeBackend>().dirty);
+            assert_eq!(*app.resource::<VolumeState>(), old);
+        }
+    }
+
+    #[test]
+    fn volume_replies_request_refresh_without_changing_observed_volume() {
+        for success in [0, 1] {
+            let mut app = App::new();
+            app.init_resource::<PulseAudio>()
+                .add_module(VolumeControlModule);
+            let old = VolumeState::Ready {
+                volume_percent: 50,
+                muted: false,
+            };
+            app.resource_mut::<VolumeState>().set_if_neq(old);
+            {
+                let mut backend = app.resource_mut::<VolumeBackend>();
+                backend.started = true;
+                backend.loading = true;
+            }
+            let backend = app.resource::<VolumeBackend>();
+            let userdata: *mut c_void = Rc::as_ptr(&backend.updates).cast_mut().cast();
+            on_volume_done(ptr::null_mut(), success, userdata);
 
             on_tick(&mut app, &Tick);
 
