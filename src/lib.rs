@@ -9,7 +9,7 @@
 
 use std::any::Any;
 use std::cell::UnsafeCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::rc::Rc;
@@ -66,6 +66,8 @@ pub struct PulseAudio {
     // C context. This shared owner knows nothing about the data's type.
     callback_data: Vec<Rc<dyn Any>>,
     pending_polls: HashMap<Token, PendingPoll>,
+    // Cancellation requests have their own completions, independent of polls.
+    pending_cancels: HashSet<Token>,
     pending_timers: HashMap<Token, PendingTimer>,
     defer_wake: Option<Token>,
 }
@@ -87,6 +89,7 @@ impl PulseAudio {
             connection_updates: Vec::new(),
             callback_data: Vec::new(),
             pending_polls: HashMap::new(),
+            pending_cancels: HashSet::new(),
             pending_timers: HashMap::new(),
             defer_wake: None,
         }
@@ -95,6 +98,25 @@ impl PulseAudio {
     /// Retain a service's callback data until the context disconnects.
     pub(crate) fn keep_callback_data<T: 'static>(&mut self, data: Rc<T>) {
         self.callback_data.push(data);
+    }
+
+    /// Retire polls for freed, disabled, or changed watches before arming new ones.
+    fn cancel_obsolete_polls(&mut self, ring: &mut Ring) {
+        // SAFETY: no libpulse callback runs while copying watch metadata.
+        let state = unsafe { &*self.mainloop_state.get() };
+        let active: HashMap<_, _> = state
+            .io_watches()
+            .filter(|(_, _, _, events)| *events != PA_IO_EVENT_NULL)
+            .map(|(id, generation, _, _)| (id, generation))
+            .collect();
+
+        for (&token, poll) in &mut self.pending_polls {
+            if !poll.cancel_requested && active.get(&poll.watch_id) != Some(&poll.generation) {
+                let cancel = ring.cancel(token);
+                poll.cancel_requested = true;
+                self.pending_cancels.insert(cancel);
+            }
+        }
     }
 
     /// Submit one poll for each enabled watch's current generation.
@@ -124,6 +146,7 @@ impl PulseAudio {
                     watch_id,
                     generation,
                     fd,
+                    cancel_requested: false,
                 },
             );
         }
@@ -169,6 +192,7 @@ fn on_before_wait(app: &mut App, _: &BeforeWait) {
     run_deferred(app);
 
     let (mut audio, mut ring) = app.query::<(ResMut<PulseAudio>, ResMut<Ring>)>();
+    audio.cancel_obsolete_polls(&mut ring);
     if let Err(error) = audio
         .arm_polls(&mut ring)
         .and_then(|()| audio.arm_timers(&mut ring))
@@ -225,6 +249,23 @@ fn on_io(app: &mut App, event: &IoEvent) {
         return; // A zero-duration timeout normally completes with -ETIME.
     }
 
+    if app
+        .resource_mut::<PulseAudio>()
+        .pending_cancels
+        .remove(&event.token)
+    {
+        if app.resource_mut::<Ring>().finish(event.token).is_none() {
+            app.resource_mut::<PulseAudio>()
+                .pending_cancels
+                .insert(event.token);
+        } else if event.result != 0 && event.result != -libc::ENOENT {
+            eprintln!("PulseAudio poll cancellation failed: {}", event.result);
+        }
+        // Even a successful cancellation does not finish the original poll;
+        // ENOENT means it finished before the cancellation reached the kernel.
+        return;
+    }
+
     let timer = app
         .resource_mut::<PulseAudio>()
         .pending_timers
@@ -239,6 +280,7 @@ fn on_io(app: &mut App, event: &IoEvent) {
         watch_id,
         generation,
         fd,
+        cancel_requested,
     }) = app
         .resource_mut::<PulseAudio>()
         .pending_polls
@@ -256,6 +298,7 @@ fn on_io(app: &mut App, event: &IoEvent) {
                 watch_id,
                 generation,
                 fd,
+                cancel_requested,
             },
         );
         return;
@@ -332,6 +375,8 @@ struct PendingPoll {
     generation: u64,
     // An owned duplicate, kept open until the poll is finished.
     fd: OwnedFd,
+    // The cancellation request may complete before or after this poll.
+    cancel_requested: bool,
 }
 
 struct PendingTimer {

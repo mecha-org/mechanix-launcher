@@ -27,6 +27,7 @@ fn unconnected_fixture_initializes_the_pulse_audio_resource() {
         audio.mainloop_state.get().cast()
     );
     assert!(audio.pending_polls.is_empty());
+    assert!(audio.pending_cancels.is_empty());
     assert!(audio.pending_timers.is_empty());
     assert!(audio.context.is_none());
     assert_eq!(audio.connection_state(), &ConnectionState::Connecting);
@@ -245,16 +246,14 @@ fn disabled_watches_do_not_arm_polls() {
     assert_eq!(audio.pending_polls.len(), 1);
 
     audio.mainloop_api.io_enable.unwrap()(event, PA_IO_EVENT_NULL);
+    audio.cancel_obsolete_polls(&mut ring);
     audio.arm_polls(&mut ring).unwrap();
-    assert_eq!(
-        audio.pending_polls.len(),
-        1,
-        "old polls are retained for now"
-    );
+    assert_eq!(audio.pending_polls.len(), 1, "wait for the poll completion");
+    assert_eq!(audio.pending_cancels.len(), 1);
 }
 
 #[test]
-fn changed_interests_arm_a_new_poll_without_discarding_the_old_one() {
+fn changed_interests_arm_a_new_poll_while_retiring_the_old_one() {
     let (reader, _writer) = UnixStream::pair().unwrap();
     let mut audio = PulseAudio::new();
     let mut ring = Ring::new(8);
@@ -265,9 +264,11 @@ fn changed_interests_arm_a_new_poll_without_discarding_the_old_one() {
     let watch_id = old_poll.watch_id;
 
     audio.mainloop_api.io_enable.unwrap()(event, PA_IO_EVENT_OUTPUT);
+    audio.cancel_obsolete_polls(&mut ring);
     audio.arm_polls(&mut ring).unwrap();
     audio.arm_polls(&mut ring).unwrap();
     assert_eq!(audio.pending_polls.len(), 2);
+    assert_eq!(audio.pending_cancels.len(), 1);
     assert_eq!(audio.pending_polls[&old_token].generation, 0);
     let (&new_token, new_poll) = audio
         .pending_polls
@@ -366,6 +367,230 @@ fn dispatch_poll(app: &mut App, token: Token) {
     let event = wait_for_poll(&mut app.resource_mut::<Ring>(), token);
     app.signal(event);
     app.flush();
+}
+
+// Bound cancellation tests without relying on socket activity to wake Ring.
+// Dispatch every CQE; a cancellation and its poll may complete in either order.
+fn dispatch_cancelled_poll(app: &mut App, poll: Token) -> Vec<IoEvent> {
+    let deadline = app.resource_mut::<Ring>().timeout(Duration::from_secs(1));
+    let mut seen = Vec::new();
+    for _ in 0..10 {
+        for event in app.resource_mut::<Ring>().wait() {
+            assert_ne!(event.token, deadline, "poll cancellation did not complete");
+            app.signal(event);
+            seen.push(event);
+        }
+        app.flush();
+        let audio = app.resource::<PulseAudio>();
+        if !audio.pending_polls.contains_key(&poll) && audio.pending_cancels.is_empty() {
+            return seen;
+        }
+    }
+    panic!("poll cancellation did not complete: {seen:?}");
+}
+
+#[test]
+fn freeing_a_watch_cancels_its_poll_and_releases_its_fd() {
+    let (reader, _writer) = UnixStream::pair().unwrap();
+    let data = Readiness::default();
+    let mut app = polling_app();
+    let (watch, poll) = arm_callback(
+        &mut app,
+        reader.as_raw_fd(),
+        PA_IO_EVENT_INPUT,
+        Some(record_readiness),
+        &data,
+    );
+    let fd = app.resource::<PulseAudio>().pending_polls[&poll]
+        .fd
+        .as_raw_fd();
+
+    app.resource::<PulseAudio>().mainloop_api.io_free.unwrap()(watch);
+    drop(reader);
+    before_wait(&mut app);
+    let cancel = *app
+        .resource::<PulseAudio>()
+        .pending_cancels
+        .iter()
+        .next()
+        .unwrap();
+    assert!(
+        app.resource::<PulseAudio>()
+            .pending_polls
+            .contains_key(&poll)
+    );
+
+    let seen = dispatch_cancelled_poll(&mut app, poll);
+    assert_eq!(seen.iter().find(|e| e.token == cancel).unwrap().result, 0);
+    assert_eq!(
+        seen.iter().find(|e| e.token == poll).unwrap().result,
+        -libc::ECANCELED
+    );
+    assert_eq!(data.calls.get(), 0);
+    assert_eq!(unsafe { libc::fcntl(fd, libc::F_GETFD) }, -1);
+    assert!(app.resource_mut::<Ring>().finish(cancel).is_none());
+    assert!(app.resource_mut::<Ring>().finish(poll).is_none());
+}
+
+#[test]
+fn disabling_a_watch_cancels_its_poll_only_once() {
+    let (reader, _writer) = UnixStream::pair().unwrap();
+    let data = Readiness::default();
+    let mut app = polling_app();
+    let (watch, poll) = arm_callback(
+        &mut app,
+        reader.as_raw_fd(),
+        PA_IO_EVENT_INPUT,
+        Some(record_readiness),
+        &data,
+    );
+
+    app.resource::<PulseAudio>().mainloop_api.io_enable.unwrap()(watch, PA_IO_EVENT_NULL);
+    before_wait(&mut app);
+    let cancel = *app
+        .resource::<PulseAudio>()
+        .pending_cancels
+        .iter()
+        .next()
+        .unwrap();
+    before_wait(&mut app);
+    assert_eq!(app.resource::<PulseAudio>().pending_cancels.len(), 1);
+    assert!(
+        app.resource::<PulseAudio>()
+            .pending_cancels
+            .contains(&cancel)
+    );
+
+    // Deliver the cancel CQE first, then run BeforeWait again while the
+    // original poll is still tracked: it must not submit a second cancel.
+    let deadline = app.resource_mut::<Ring>().timeout(Duration::from_secs(1));
+    let mut completions = Vec::new();
+    while completions.len() < 2 {
+        for event in app.resource_mut::<Ring>().wait() {
+            assert_ne!(event.token, deadline, "poll cancellation did not complete");
+            completions.push(event);
+        }
+    }
+    let cancel_event = *completions.iter().find(|e| e.token == cancel).unwrap();
+    let poll_event = *completions.iter().find(|e| e.token == poll).unwrap();
+    app.signal(cancel_event);
+    app.flush();
+    before_wait(&mut app);
+    assert!(app.resource::<PulseAudio>().pending_cancels.is_empty());
+    assert!(app.resource::<PulseAudio>().pending_polls[&poll].cancel_requested);
+
+    app.signal(poll_event);
+    app.flush();
+    assert_eq!(data.calls.get(), 0);
+    before_wait(&mut app);
+    assert!(app.resource::<PulseAudio>().pending_polls.is_empty());
+    assert!(app.resource::<PulseAudio>().pending_cancels.is_empty());
+}
+
+#[test]
+fn changing_a_watch_cancels_the_old_poll_and_arms_the_new_generation() {
+    let (reader, _writer) = UnixStream::pair().unwrap();
+    let data = Readiness::default();
+    let mut app = polling_app();
+    let (watch, old) = arm_callback(
+        &mut app,
+        reader.as_raw_fd(),
+        PA_IO_EVENT_INPUT,
+        Some(record_readiness),
+        &data,
+    );
+
+    app.resource::<PulseAudio>().mainloop_api.io_enable.unwrap()(
+        watch,
+        PA_IO_EVENT_INPUT | PA_IO_EVENT_HANGUP,
+    );
+    before_wait(&mut app);
+    let new = *app
+        .resource::<PulseAudio>()
+        .pending_polls
+        .keys()
+        .find(|&&token| token != old)
+        .unwrap();
+    assert_eq!(
+        app.resource::<PulseAudio>().pending_polls[&new].generation,
+        1
+    );
+
+    dispatch_cancelled_poll(&mut app, old);
+    assert_eq!(data.calls.get(), 0);
+    assert!(
+        app.resource::<PulseAudio>()
+            .pending_polls
+            .contains_key(&new)
+    );
+    assert!(!app.resource::<PulseAudio>().pending_polls[&new].cancel_requested);
+}
+
+#[test]
+fn readiness_racing_with_removal_never_calls_the_freed_watch() {
+    let (reader, mut writer) = UnixStream::pair().unwrap();
+    let data = Readiness::default();
+    let mut app = polling_app();
+    let (watch, poll) = arm_callback(
+        &mut app,
+        reader.as_raw_fd(),
+        PA_IO_EVENT_INPUT,
+        Some(record_readiness),
+        &data,
+    );
+    writer.write_all(b"x").unwrap();
+    app.resource::<PulseAudio>().mainloop_api.io_free.unwrap()(watch);
+    before_wait(&mut app);
+
+    let seen = dispatch_cancelled_poll(&mut app, poll);
+    assert!(seen.iter().any(|event| event.token == poll));
+    assert_eq!(data.calls.get(), 0);
+}
+
+#[test]
+fn already_completed_poll_and_enoent_cancel_are_finished_independently() {
+    let (reader, mut writer) = UnixStream::pair().unwrap();
+    let data = Readiness::default();
+    let mut app = polling_app();
+    let (watch, poll) = arm_callback(
+        &mut app,
+        reader.as_raw_fd(),
+        PA_IO_EVENT_INPUT,
+        Some(record_readiness),
+        &data,
+    );
+    writer.write_all(b"x").unwrap();
+    // Observe the poll CQE in Ring, but delay dispatch until after io_free.
+    let ready = wait_for_poll(&mut app.resource_mut::<Ring>(), poll);
+    assert_ne!(ready.result & libc::POLLIN as i32, 0);
+    app.resource::<PulseAudio>().mainloop_api.io_free.unwrap()(watch);
+    before_wait(&mut app);
+    let cancel = *app
+        .resource::<PulseAudio>()
+        .pending_cancels
+        .iter()
+        .next()
+        .unwrap();
+
+    app.signal(ready);
+    app.flush();
+    assert!(app.resource::<PulseAudio>().pending_polls.is_empty());
+    assert!(
+        app.resource::<PulseAudio>()
+            .pending_cancels
+            .contains(&cancel)
+    );
+
+    let seen = dispatch_cancelled_poll(&mut app, poll);
+    assert_eq!(
+        seen.iter()
+            .find(|event| event.token == cancel)
+            .unwrap()
+            .result,
+        -libc::ENOENT
+    );
+    assert!(app.resource_mut::<Ring>().finish(cancel).is_none());
+    assert_eq!(data.calls.get(), 0);
 }
 
 #[test]
