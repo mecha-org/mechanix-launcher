@@ -332,7 +332,7 @@ fn polling_app() -> App {
     let mut app = App::new();
     app.add_module(RingModule::default())
         .init_resource::<PulseAudio>()
-        .system(on_tick)
+        .system(context::on_tick)
         .system(on_before_wait)
         .system(on_io);
     app

@@ -3,7 +3,7 @@
 //! `pa_context` does the actual PulseAudio protocol work. We give it the
 //! Ring-backed `pa_mainloop_api`, which tells us when to call libpulse again.
 //! Its C state callback cannot access `App`: it copies important transitions
-//! into a stable queue. `on_tick` in `lib.rs` later drains that queue and
+//! into a stable queue. `on_tick` below later drains that queue and
 //! publishes `ConnectionStateChanged` on the ordinary App thread.
 
 use std::cell::RefCell;
@@ -13,8 +13,87 @@ use std::ptr::{self, NonNull};
 use libpulse_sys::context::{self as pulse, pa_context};
 use libpulse_sys::error::pa_strerror;
 use libpulse_sys::mainloop::api::pa_mainloop_api;
+use mecha_wayland::prelude::{App, Signal, Tick};
 
-use crate::ConnectionState;
+use crate::PulseAudio;
+
+/// Connection lifecycle reported by libpulse, delivered on the App thread.
+/// `Connecting` is the initial state; intermediate handshake states remain
+/// internal to libpulse and are not emitted separately.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectionState {
+    Connecting,
+    Ready,
+    Failed(String),
+    Terminated,
+}
+
+/// A change in the shared connection's state, queued on `Tick` after the
+/// libpulse callback has returned. This is a mecha-wayland `Signal`.
+pub struct ConnectionStateChanged(pub ConnectionState);
+impl Signal for ConnectionStateChanged {}
+
+impl PulseAudio {
+    /// Start connecting once. Installation returns before the handshake ends.
+    pub(crate) fn start_connection(&mut self) {
+        if self.context.is_none() {
+            match Context::connect(&self.mainloop_api) {
+                Ok(context) => self.context = Some(context),
+                Err(error) => self.connection_updates.push(ConnectionState::Failed(error)),
+            }
+        }
+    }
+
+    /// Most recently reported connection state.
+    pub fn connection_state(&self) -> &ConnectionState {
+        &self.connection_state
+    }
+
+    /// A borrow for issuing an operation; async callbacks need separate
+    /// owned userdata because this borrow ends before the reply arrives.
+    pub(crate) fn context(&self) -> Option<&Context> {
+        self.context.as_ref()
+    }
+
+    fn take_connection_updates(&mut self) -> Vec<ConnectionState> {
+        // Merge early setup failures with changes reported by the live C
+        // context. Neither queue calls back into App while libpulse runs.
+        let mut updates = std::mem::take(&mut self.connection_updates);
+        if let Some(context) = &self.context {
+            updates.extend(context.take_updates());
+        }
+        updates
+    }
+
+    pub(crate) fn has_connection_updates(&self) -> bool {
+        !self.connection_updates.is_empty()
+            || self.context.as_ref().is_some_and(Context::has_updates)
+    }
+}
+
+/// Transfer C state notifications into ordinary app-wide signals on Tick.
+pub(crate) fn on_tick(app: &mut App, _: &Tick) {
+    // Never pass an App pointer to libpulse. It only writes to its queue;
+    // here, after its callback returned, we drain and publish the updates.
+    let updates = app.resource_mut::<PulseAudio>().take_connection_updates();
+    for state in updates {
+        // Synchronous setup failure and the callback might report the same
+        // state. Publish only actual changes.
+        if app.resource::<PulseAudio>().connection_state == state {
+            continue;
+        }
+        app.resource_mut::<PulseAudio>().connection_state = state.clone();
+        app.signal(ConnectionStateChanged(state));
+    }
+}
+
+impl Drop for PulseAudio {
+    fn drop(&mut self) {
+        // Disconnect before the API, mainloop state, or retained callback
+        // data drop. C callbacks can still access these during disconnect.
+        self.context.take();
+    }
+}
 
 /// Owns one libpulse reference; Rust must release it with `pa_context_unref`.
 pub(crate) struct Context {

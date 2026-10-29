@@ -24,23 +24,8 @@ mod mainloop;
 mod volume;
 
 // re-export
+pub use context::{ConnectionState, ConnectionStateChanged};
 pub use volume::{VolumeControlModule, VolumeState};
-
-/// Connection lifecycle reported by libpulse, delivered on the App thread.
-/// `Connecting` is the initial state; the intermediate handshake states are
-/// internal to libpulse and are not emitted separately.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConnectionState {
-    Connecting,
-    Ready,
-    Failed(String),
-    Terminated,
-}
-
-/// A change in the shared connection's state, queued on `Tick` after the
-/// libpulse callback has returned. This is a mecha-wayland `Signal`.
-pub struct ConnectionStateChanged(pub ConnectionState);
-impl Signal for ConnectionStateChanged {}
 
 /// Connect to the local PulseAudio-compatible server through Ring.
 ///
@@ -54,21 +39,12 @@ impl Module for PulseAudioModule {
         // Install the shared state and systems before asking libpulse to
         // connect. It may register I/O watches and timers immediately.
         app.init_resource::<PulseAudio>()
-            .system(on_tick)
+            .system(context::on_tick)
             .system(on_before_wait)
             .system(on_io);
-        let audio = &mut app.resource_mut::<PulseAudio>();
-        if audio.context.is_none() {
-            // A failed setup is reported later as a signal, not a panic or
-            // a blocking wait in install(). Context::connect starts the
-            // connection; the Ring runner subsequently drives it to Ready.
-            match context::Context::connect(&audio.mainloop_api) {
-                Ok(context) => audio.context = Some(context),
-                Err(error) => audio
-                    .connection_updates
-                    .push(ConnectionState::Failed(error)),
-            }
-        }
+        // This starts connecting without blocking; the context module owns
+        // the setup/error path and later publishes state changes on Tick.
+        app.resource_mut::<PulseAudio>().start_connection();
     }
 }
 
@@ -116,38 +92,9 @@ impl PulseAudio {
         }
     }
 
-    /// Most recently reported connection state.
-    pub fn connection_state(&self) -> &ConnectionState {
-        &self.connection_state
-    }
-
-    /// A borrow for issuing an operation; async callbacks need separate
-    /// owned userdata because this borrow ends before the reply arrives.
-    pub(crate) fn context(&self) -> Option<&context::Context> {
-        self.context.as_ref()
-    }
-
     /// Retain a service's callback data until the context disconnects.
     pub(crate) fn keep_callback_data<T: 'static>(&mut self, data: Rc<T>) {
         self.callback_data.push(data);
-    }
-
-    fn take_connection_updates(&mut self) -> Vec<ConnectionState> {
-        // Merge early setup failures with changes reported by the live C
-        // context. Neither queue calls back into App while libpulse runs.
-        let mut updates = std::mem::take(&mut self.connection_updates);
-        if let Some(context) = &self.context {
-            updates.extend(context.take_updates());
-        }
-        updates
-    }
-
-    fn has_connection_updates(&self) -> bool {
-        !self.connection_updates.is_empty()
-            || self
-                .context
-                .as_ref()
-                .is_some_and(context::Context::has_updates)
     }
 
     /// Submit one poll for each enabled watch's current generation.
@@ -210,14 +157,6 @@ impl PulseAudio {
     }
 }
 
-impl Drop for PulseAudio {
-    fn drop(&mut self) {
-        // Disconnect before the API, mainloop state or retained callback data
-        // drop. C callbacks can still access these during disconnect.
-        self.context.take();
-    }
-}
-
 impl Default for PulseAudio {
     fn default() -> Self {
         Self::new()
@@ -249,22 +188,6 @@ fn on_before_wait(app: &mut App, _: &BeforeWait) {
         // Runnable work must not sleep waiting for unrelated socket activity.
         // This is a one-shot wake, not a periodic polling timer.
         audio.defer_wake = Some(ring.timeout(Duration::ZERO));
-    }
-}
-
-fn on_tick(app: &mut App, _: &Tick) {
-    // This is the boundary between C callbacks and app systems. Read the
-    // queued values, update the resource, then signal consumers. In
-    // particular, no `&mut App` is ever passed as C callback userdata.
-    let updates = app.resource_mut::<PulseAudio>().take_connection_updates();
-    for state in updates {
-        // A synchronous connect error and the state callback can report the
-        // same failure. Emit only actual changes in observed state.
-        if app.resource::<PulseAudio>().connection_state == state {
-            continue;
-        }
-        app.resource_mut::<PulseAudio>().connection_state = state.clone();
-        app.signal(ConnectionStateChanged(state));
     }
 }
 
