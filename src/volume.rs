@@ -1,4 +1,4 @@
-//! Read-only volume and mute state for the server's current default sink.
+//! Volume and mute state for the server's current default sink.
 //!
 //! Libpulse callbacks copy information into this service's queue;
 //! App systems then publish `VolumeState`. No callback holds an App pointer.
@@ -42,6 +42,12 @@ impl Resource for VolumeState {}
 /// On changes, read [`VolumeState`] using `OnChanged<VolumeState>`.
 pub struct VolumeControlModule;
 
+/// Request a specific mute state for the default output.
+/// A UI button can send `SetMuted(true)` or `SetMuted(false)`; the UI decides
+/// which one. Observed [`VolumeState`] is updated from a fresh server query.
+pub struct SetMuted(pub bool);
+impl Signal for SetMuted {}
+
 impl Module for VolumeControlModule {
     fn install(self, app: &mut App) {
         app.init_resource::<VolumeState>();
@@ -50,7 +56,8 @@ impl Module for VolumeControlModule {
         }
         app.init_resource::<VolumeBackend>()
             .system(on_connection)
-            .system(on_tick);
+            .system(on_tick)
+            .system(on_set_muted);
         // The service owns the typed queue; PulseAudio retains a generic
         // reference until its context has disconnected all callbacks.
         let updates = Rc::clone(&app.resource::<VolumeBackend>().updates);
@@ -81,6 +88,7 @@ struct VolumeBackend {
     updates: Rc<RefCell<Vec<VolumeUpdate>>>,
     started: bool,
     request: Request,
+    default_sink: Option<CString>,
     dirty: bool,
     snapshot: Option<VolumeState>,
 }
@@ -108,6 +116,7 @@ fn on_connection(app: &mut App, event: &PulseAudioContextConnectionStateChanged)
                 backend.updates.borrow_mut().clear();
                 backend.started = false;
                 backend.request = Request::Idle;
+                backend.default_sink = None;
                 backend.dirty = false;
                 backend.snapshot = None;
             }
@@ -198,6 +207,53 @@ fn request_sink(app: &mut App, name: &CStr) {
     }
 }
 
+fn on_set_muted(app: &mut App, request: &SetMuted) {
+    // While the default is being refreshed, wait for that query to finish.
+    // The cached name still belongs to the read path; it is not sent here.
+    {
+        let backend = app.resource::<VolumeBackend>();
+        if backend.request != Request::Idle || backend.dirty || backend.default_sink.is_none() {
+            return;
+        }
+    }
+    if !matches!(app.resource::<VolumeState>(), VolumeState::Ready { .. })
+        || !matches!(
+            app.resource::<PulseAudio>().connection_state(),
+            ConnectionState::Ready
+        )
+    {
+        return;
+    }
+    let Some((context, userdata)) = context_and_queue(app) else {
+        return;
+    };
+    // SAFETY: context is borrowed for this call; both it and the callback
+    // queue remain alive through the asynchronous acknowledgement. The server
+    // resolves @DEFAULT_SINK@ when handling the request, not our cached name.
+    let operation = unsafe {
+        pulse::pa_context_set_sink_mute_by_name(
+            context.raw(),
+            c"@DEFAULT_SINK@".as_ptr(),
+            i32::from(request.0),
+            Some(on_mute_done),
+            userdata,
+        )
+    };
+    release(operation, "set default output mute");
+}
+
+extern "C" fn on_mute_done(_: *mut pa_context, success: i32, userdata: *mut c_void) {
+    if success == 0 {
+        eprintln!("PulseAudio: could not set default output mute");
+    }
+    // SAFETY: the retained Rc keeps the volume queue alive until libpulse
+    // can no longer invoke this callback. No App borrow crosses the FFI call.
+    let queue = unsafe { &*userdata.cast::<RefCell<Vec<VolumeUpdate>>>() };
+    // The UI may issue another request without waiting for this one; don't
+    // guess the result. Refresh the server-observed state after each reply.
+    queue.borrow_mut().push(VolumeUpdate::Dirty);
+}
+
 /// Release the application's operation reference. Libpulse retains its own
 /// reference until it calls the completion callback.
 fn release(operation: *mut pa_operation, description: &str) -> bool {
@@ -226,9 +282,14 @@ fn on_tick(app: &mut App, _: &Tick) {
                 if app.resource::<VolumeBackend>().request == Request::Server =>
             {
                 if let Some(name) = name {
+                    app.resource_mut::<VolumeBackend>().default_sink = Some(name.clone());
                     request_sink(app, &name);
                 } else {
-                    app.resource_mut::<VolumeBackend>().request = Request::Idle;
+                    {
+                        let mut backend = app.resource_mut::<VolumeBackend>();
+                        backend.request = Request::Idle;
+                        backend.default_sink = None;
+                    }
                     app.resource_mut::<VolumeState>()
                         .set_if_neq(VolumeState::Unavailable);
                 }
@@ -500,5 +561,58 @@ mod tests {
 
         drop(app);
         assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn set_muted_is_a_no_op_without_a_ready_output_or_connection() {
+        let mut app = App::new();
+        app.init_resource::<PulseAudio>()
+            .add_module(VolumeControlModule);
+
+        app.signal(SetMuted(true));
+        app.flush();
+        assert_eq!(*app.resource::<VolumeState>(), VolumeState::Loading);
+
+        app.resource_mut::<VolumeState>()
+            .set_if_neq(VolumeState::Ready {
+                volume_percent: 50,
+                muted: false,
+            });
+        app.signal(SetMuted(false));
+        app.flush();
+        assert_eq!(
+            *app.resource::<VolumeState>(),
+            VolumeState::Ready {
+                volume_percent: 50,
+                muted: false,
+            }
+        );
+    }
+
+    #[test]
+    fn mute_replies_request_refresh_without_changing_observed_mute() {
+        for success in [0, 1] {
+            let mut app = App::new();
+            app.init_resource::<PulseAudio>()
+                .add_module(VolumeControlModule);
+            let old = VolumeState::Ready {
+                volume_percent: 50,
+                muted: false,
+            };
+            app.resource_mut::<VolumeState>().set_if_neq(old);
+            {
+                let mut backend = app.resource_mut::<VolumeBackend>();
+                backend.started = true;
+                backend.request = Request::Server; // Wait until the current query completes.
+            }
+            let backend = app.resource::<VolumeBackend>();
+            let userdata: *mut c_void = Rc::as_ptr(&backend.updates).cast_mut().cast();
+            on_mute_done(ptr::null_mut(), success, userdata);
+
+            on_tick(&mut app, &Tick);
+
+            assert!(app.resource::<VolumeBackend>().dirty);
+            assert_eq!(*app.resource::<VolumeState>(), old);
+        }
     }
 }
