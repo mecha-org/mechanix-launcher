@@ -2,8 +2,6 @@
 //! that launches on tap.
 
 mod drawer;
-mod entries;
-mod icons;
 mod launch;
 mod rank;
 mod row;
@@ -18,7 +16,7 @@ use mecha_wayland::prelude::*;
 use screen::Screen;
 
 use drawer::DrawerBuilder;
-use icons::{IconDirs, active_theme};
+use apps::{IconDirs, active_theme, data_dirs};
 
 /// The drawer's two faces, Regular and Light Geist Mono, for the host's
 /// `FontBook`.
@@ -41,7 +39,7 @@ impl AppDrawer {
     /// launches by spawning the entry's command.
     pub fn new() -> AppDrawer {
         let var = |k: &str| std::env::var(k).ok();
-        let data_dirs = entries::data_dirs(var);
+        let data_dirs = data_dirs(var);
         let config = var("XDG_CONFIG_HOME")
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)

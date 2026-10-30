@@ -3,7 +3,7 @@
 use mecha_wayland::mechanix_widgets::{self as mw, TextWrap};
 use mecha_wayland::prelude::*;
 
-use crate::icons::RowIcon;
+use apps::RowIcon;
 
 const HEIGHT: f32 = 56.0;
 const ICON: f32 = 48.0;

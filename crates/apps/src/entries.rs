@@ -6,25 +6,25 @@ use std::path::{Path, PathBuf};
 
 /// A launchable application.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DesktopApp {
-    pub(crate) id: String,
-    pub(crate) name: String,
-    pub(crate) exec: Vec<String>,
-    pub(crate) icon: Option<String>,
+pub struct DesktopApp {
+    pub id: String,
+    pub name: String,
+    pub exec: Vec<String>,
+    pub icon: Option<String>,
 }
 
 /// The fields of one displayable `[Desktop Entry]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Parsed {
-    pub(crate) name: String,
-    pub(crate) exec: Vec<String>,
-    pub(crate) icon: Option<String>,
+pub struct Parsed {
+    pub name: String,
+    pub exec: Vec<String>,
+    pub icon: Option<String>,
 }
 
 const FIELD_CODES: &str = "fFuUicdDnNvmk";
 
 /// Parses a desktop file; `None` when it is hidden, not an application or malformed.
-pub(crate) fn parse(contents: &str) -> Option<Parsed> {
+pub fn parse(contents: &str) -> Option<Parsed> {
     let mut in_entry = false;
     let (mut kind, mut name, mut exec, mut icon) = (None, None, None, None);
     let (mut no_display, mut hidden, mut terminal) = (false, false, false);
@@ -68,7 +68,7 @@ pub(crate) fn parse(contents: &str) -> Option<Parsed> {
 }
 
 /// Turns an `Exec` value into an argv, dropping field codes.
-pub(crate) fn exec_argv(exec: &str) -> Option<Vec<String>> {
+pub fn exec_argv(exec: &str) -> Option<Vec<String>> {
     // Desktop-entry string escapes first.
     let mut text = String::new();
     let mut chars = exec.chars();
@@ -163,7 +163,7 @@ fn expand_codes(arg: &str) -> Option<String> {
 }
 
 /// XDG data directories, highest priority first.
-pub(crate) fn data_dirs(var: impl Fn(&str) -> Option<String>) -> Vec<PathBuf> {
+pub fn data_dirs(var: impl Fn(&str) -> Option<String>) -> Vec<PathBuf> {
     let non_empty = |name: &str| var(name).filter(|v| !v.is_empty());
     let mut dirs = Vec::new();
     if let Some(home) = non_empty("XDG_DATA_HOME") {
@@ -182,7 +182,7 @@ pub(crate) fn data_dirs(var: impl Fn(&str) -> Option<String>) -> Vec<PathBuf> {
 }
 
 /// Installed applications from `<dir>/applications` of each data dir, A-Z.
-pub(crate) fn scan(data_dirs: &[PathBuf]) -> Vec<DesktopApp> {
+pub fn scan(data_dirs: &[PathBuf]) -> Vec<DesktopApp> {
     let mut seen = HashSet::new();
     let mut apps = Vec::new();
     for dir in data_dirs {

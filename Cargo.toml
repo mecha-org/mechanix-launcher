@@ -26,6 +26,7 @@ members = [
     "crates/gestures",
     "crates/screen",
     "crates/app-drawer",
+    "crates/apps",
     "crates/search",
     "crates/running-apps",
     "crates/notifications",
@@ -44,6 +45,7 @@ home = { path = "crates/home" }
 gestures = { path = "crates/gestures" }
 screen = { path = "crates/screen" }
 app-drawer = { path = "crates/app-drawer" }
+apps = { path = "crates/apps" }
 search = { path = "crates/search" }
 running-apps = { path = "crates/running-apps" }
 notifications = { path = "crates/notifications" }

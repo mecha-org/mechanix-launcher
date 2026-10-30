@@ -8,7 +8,7 @@ use mecha_wayland::prelude::*;
 
 /// 48px times the largest scale we target (2.25), rounded up to 3x. PNGs are
 /// fixed pixels, so pick one that stays sharp after a rescale.
-pub(crate) const PNG_MIN_PX: u32 = 144;
+pub const PNG_MIN_PX: u32 = 144;
 
 /// Largest PNG side kept in the atlas; bigger ones are halved to fit.
 const PNG_MAX_PX: u32 = 256;
@@ -17,13 +17,13 @@ const PNG_MAX_PX: u32 = 256;
 const ICON_PX: u32 = 48;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum IconFile {
+pub enum IconFile {
     Svg(PathBuf),
     Png(PathBuf),
 }
 
 /// `gtk-icon-theme-name` from `<config_home>/gtk-3.0/settings.ini`, unquoted.
-pub(crate) fn active_theme(config_home: &Path) -> Option<String> {
+pub fn active_theme(config_home: &Path) -> Option<String> {
     let text = std::fs::read_to_string(config_home.join("gtk-3.0/settings.ini")).ok()?;
     text.lines().find_map(|line| {
         let (key, value) = line.split_once('=')?;
@@ -55,14 +55,14 @@ fn inherits(bases: &[PathBuf], theme: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-pub(crate) struct IconDirs {
+pub struct IconDirs {
     bases: Vec<PathBuf>,
     themes: Vec<String>,
     pixmaps: Vec<PathBuf>,
 }
 
 impl IconDirs {
-    pub(crate) fn new(data_dirs: &[PathBuf], active: Option<&str>) -> IconDirs {
+    pub fn new(data_dirs: &[PathBuf], active: Option<&str>) -> IconDirs {
         let bases: Vec<PathBuf> = data_dirs.iter().map(|d| d.join("icons")).collect();
         let mut pixmaps: Vec<PathBuf> = data_dirs.iter().map(|d| d.join("pixmaps")).collect();
         let system = PathBuf::from("/usr/share/pixmaps");
@@ -88,7 +88,7 @@ impl IconDirs {
         }
     }
 
-    pub(crate) fn find(&self, icon: &str) -> Option<IconFile> {
+    pub fn find(&self, icon: &str) -> Option<IconFile> {
         let path = Path::new(icon);
         if path.is_absolute() {
             return Some(match path.extension().and_then(|e| e.to_str()) {
@@ -172,14 +172,14 @@ fn subdirs(dir: &Path) -> Vec<PathBuf> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RowIcon {
+pub enum RowIcon {
     /// Drawn with `widgets::image`, untinted.
     Image(SpriteId),
     /// The generic app glyph, drawn with `widgets::icon` in `OnSurfaceVariant`.
     Glyph(SpriteId),
 }
 
-pub(crate) struct IconCache {
+pub struct IconCache {
     glyph: SpriteId,
     /// `None` marks a file that failed once, so it is not retried or re-logged.
     loaded: HashMap<IconFile, Option<SpriteId>>,
@@ -188,7 +188,7 @@ pub(crate) struct IconCache {
 impl Resource for IconCache {}
 
 impl IconCache {
-    pub(crate) fn new(atlas: &mut Atlas) -> Self {
+    pub fn new(atlas: &mut Atlas) -> Self {
         let glyph = atlas
             .insert_svg(assets::icons::APP, ICON_PX)
             .expect("embedded app glyph is a valid SVG");
@@ -198,7 +198,7 @@ impl IconCache {
         }
     }
 
-    pub(crate) fn get(&mut self, atlas: &mut Atlas, file: Option<&IconFile>) -> RowIcon {
+    pub fn get(&mut self, atlas: &mut Atlas, file: Option<&IconFile>) -> RowIcon {
         let Some(file) = file else {
             return RowIcon::Glyph(self.glyph);
         };

@@ -8,8 +8,7 @@ use mecha_wayland::prelude::*;
 use screen::{AppLaunched, Hidden, Shown};
 
 use crate::Launcher;
-use crate::entries::{DesktopApp, scan};
-use crate::icons::{IconCache, IconDirs, RowIcon};
+use apps::{DesktopApp, IconCache, IconDirs, RowIcon, scan};
 use crate::rank::{Hit, Ranker, fit};
 use crate::row::{GAP, NAME_PX, RowBuilder, SIDE, Tapped};
 use crate::search_bar::SearchBar;
@@ -359,7 +358,7 @@ mod tests {
 
     use super::*;
     use crate::AppDrawer;
-    use crate::icons::IconDirs;
+    use apps::IconDirs;
     use crate::row::Row;
 
     const SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" fill="#0a0"/></svg>"##;
