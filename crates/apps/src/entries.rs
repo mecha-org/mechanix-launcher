@@ -11,6 +11,8 @@ pub struct DesktopApp {
     pub name: String,
     pub exec: Vec<String>,
     pub icon: Option<String>,
+    /// `StartupWMClass`: the app id its windows are expected to carry.
+    pub startup_wm_class: Option<String>,
 }
 
 /// The fields of one displayable `[Desktop Entry]`.
@@ -19,6 +21,7 @@ pub struct Parsed {
     pub name: String,
     pub exec: Vec<String>,
     pub icon: Option<String>,
+    pub startup_wm_class: Option<String>,
 }
 
 const FIELD_CODES: &str = "fFuUicdDnNvmk";
@@ -26,7 +29,7 @@ const FIELD_CODES: &str = "fFuUicdDnNvmk";
 /// Parses a desktop file; `None` when it is hidden, not an application or malformed.
 pub fn parse(contents: &str) -> Option<Parsed> {
     let mut in_entry = false;
-    let (mut kind, mut name, mut exec, mut icon) = (None, None, None, None);
+    let (mut kind, mut name, mut exec, mut icon, mut wm_class) = (None, None, None, None, None);
     let (mut no_display, mut hidden, mut terminal) = (false, false, false);
     for line in contents.lines() {
         let line = line.trim();
@@ -49,6 +52,7 @@ pub fn parse(contents: &str) -> Option<Parsed> {
             "Name" => name = Some(value.to_string()),
             "Exec" => exec = Some(value.to_string()),
             "Icon" => icon = Some(value.to_string()),
+            "StartupWMClass" => wm_class = Some(value.to_string()),
             "NoDisplay" => no_display = value == "true",
             "Hidden" => hidden = value == "true",
             "Terminal" => terminal = value == "true",
@@ -64,6 +68,7 @@ pub fn parse(contents: &str) -> Option<Parsed> {
         name,
         exec,
         icon: icon.filter(|i| !i.is_empty()),
+        startup_wm_class: wm_class.filter(|c| !c.is_empty()),
     })
 }
 
@@ -208,6 +213,7 @@ pub fn scan(data_dirs: &[PathBuf]) -> Vec<DesktopApp> {
                     name: p.name,
                     exec: p.exec,
                     icon: p.icon,
+                    startup_wm_class: p.startup_wm_class,
                 });
             }
         }
@@ -280,6 +286,13 @@ mod tests {
         assert_eq!(p.name, "Foo");
         assert_eq!(p.exec, vec!["foo"]);
         assert_eq!(p.icon.as_deref(), Some("foo"));
+    }
+
+    #[test]
+    fn startup_wm_class_is_parsed() {
+        let p = parse(&format!("{GOOD}StartupWMClass=Foo-App\n")).unwrap();
+        assert_eq!(p.startup_wm_class.as_deref(), Some("Foo-App"));
+        assert_eq!(parse(GOOD).unwrap().startup_wm_class, None);
     }
 
     #[test]
