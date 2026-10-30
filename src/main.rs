@@ -157,6 +157,7 @@ fn main() {
         .add_module(WindowModule)
         .add_module(InteractivityModule)
         .add_module(AnimationModule)
+        .add_module(ScrollModule)
         .add_module(RenderModule::default())
         .insert_resource(Atlas::new());
 
@@ -182,6 +183,7 @@ fn main() {
                 .bind::<WlSeat>()
                 .bind::<ZwlrLayerShellV1>(),
         )
+        .add_module(TextInputModule)
         .add_module(PresentationModule {
             app_id: "mechanix.launcher".into(),
             budget: Budget::default(),
@@ -210,6 +212,7 @@ mod tests {
             .add_module(WindowModule)
             .add_module(InteractivityModule)
             .add_module(AnimationModule)
+            .add_module(ScrollModule)
             .add_module(RenderModule::default())
             .insert_resource(Atlas::new());
         app.add_module(MechanixTheme::dark());
