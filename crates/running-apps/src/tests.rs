@@ -248,10 +248,14 @@ impl Ui {
     }
 
     fn contact(&mut self, phase: ContactPhase, at: Point) {
+        self.contact_by(0, phase, at);
+    }
+
+    fn contact_by(&mut self, touch: u32, phase: ContactPhase, at: Point) {
         let window = self.win;
         self.app.signal(ContactInput {
             window,
-            contact: ContactId::Touch(0),
+            contact: ContactId::Touch(touch),
             phase,
             position: at,
             time: 0,
@@ -261,18 +265,28 @@ impl Ui {
 
     /// A finger drag from the middle of `card`'s header by `dx`.
     fn drag(&mut self, card: NodeId, dx: f32) {
-        let header = self.card(card).header();
-        let r = self.app.component::<ComputedLayout>(header).unwrap().rect;
-        let at = Point::new(r.x() + r.width() / 2.0 - 60.0, r.y() + r.height() / 2.0);
-        self.contact(ContactPhase::Moved, at);
-        self.contact(ContactPhase::Pressed, at);
+        self.drag_by(0, card, dx);
+    }
+
+    /// [`Ui::drag`] with touch point `touch`.
+    fn drag_by(&mut self, touch: u32, card: NodeId, dx: f32) {
+        let at = self.grip(card);
+        self.contact_by(touch, ContactPhase::Moved, at);
+        self.contact_by(touch, ContactPhase::Pressed, at);
         for i in 1..=4 {
             let step = Point::new(at.x + dx * i as f32 / 4.0, at.y);
-            self.contact(ContactPhase::Moved, step);
+            self.contact_by(touch, ContactPhase::Moved, step);
         }
         let end = Point::new(at.x + dx, at.y);
-        self.contact(ContactPhase::Released, end);
+        self.contact_by(touch, ContactPhase::Released, end);
         self.app.tick();
+    }
+
+    /// Where a drag of `card` starts: left of its header's middle.
+    fn grip(&self, card: NodeId) -> Point {
+        let header = self.card(card).header();
+        let r = self.app.component::<ComputedLayout>(header).unwrap().rect;
+        Point::new(r.x() + r.width() / 2.0 - 60.0, r.y() + r.height() / 2.0)
     }
 }
 
@@ -532,4 +546,27 @@ fn in_place_thumbnail_recreation_commits_on_an_idle_frame() {
     assert_eq!(after[0].0, id(8));
     assert_eq!(after[0].1, before[0].1, "placed where the old one was");
     assert_eq!(ui.sink.commits(), [ui.win], "nothing else redraws, so ask for the commit");
+}
+
+#[test]
+fn hidden_mid_swipe_resets_the_card() {
+    let mut ui = ui("midswipe", registry(&[("files", Some(2), &[7]), ("clock", Some(1), &[9])]));
+    ui.emit(Shown);
+    let files = ui.cards()[0];
+    let at = ui.grip(files);
+    ui.contact(ContactPhase::Moved, at);
+    ui.contact(ContactPhase::Pressed, at);
+    ui.contact(ContactPhase::Moved, Point::new(at.x + 80.0, at.y));
+    ui.app.tick();
+    assert_eq!(ui.card(files).offset(), 80.0);
+
+    // Swiped home with the finger still down; that touch never ends here.
+    ui.emit(Hidden);
+    assert_eq!(ui.card(files).offset(), 0.0);
+    assert_eq!(ui.card(files).opacity(), 1.0);
+
+    // The next swipe, by a new touch point, works.
+    ui.emit(Shown);
+    ui.drag_by(1, files, 200.0);
+    assert_eq!(*ui.closed.borrow(), [id(7)]);
 }

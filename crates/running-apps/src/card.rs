@@ -273,6 +273,26 @@ fn restyle(ctx: &mut Context<'_, Card>) {
     }
 }
 
+/// Drops any press or swipe in progress and puts the card back in place.
+/// For a screen hidden mid-gesture: that contact's release may never
+/// reach the card, and a held drag would ignore every later press.
+pub(crate) fn reset_gesture(app: &mut App, card: NodeId) {
+    let Some(c) = app.widget_mut::<Card>(card) else {
+        return;
+    };
+    c.drag = None;
+    c.dx = 0.0;
+    c.swallow_click = false;
+    let (veil, paint) = (c.veil.id(), veil_paint(c.opacity()));
+    let style = card_style(0.0);
+    if app.component::<LayoutStyle>(card).is_some_and(|s| *s != style) {
+        *app.component_mut::<LayoutStyle>(card).unwrap() = style;
+    }
+    if app.component::<Paint>(veil).is_some_and(|p| *p != paint) {
+        *app.component_mut::<Paint>(veil).unwrap() = paint;
+    }
+}
+
 /// ✕ and swipe-away: every window is asked to close; the card dims and
 /// ignores input until the registry drops it.
 fn close_app(ctx: &mut Context<'_, Card>) {

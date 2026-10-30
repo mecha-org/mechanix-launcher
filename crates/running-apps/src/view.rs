@@ -9,7 +9,7 @@ use mecha_wayland::prelude::*;
 use screen::{Hidden, Shown};
 
 use crate::WindowAction;
-use crate::card::{Activate, Card, CardBuilder, CloseWindows, SIDE, hole_style};
+use crate::card::{self, Activate, Card, CardBuilder, CloseWindows, SIDE, hole_style};
 use crate::thumbs::{Place, ThumbKey, ThumbSink};
 
 /// Glyph size of the ✕.
@@ -164,6 +164,7 @@ fn on_hidden(app: &mut App, e: &Emitted<Hidden>) {
         };
         v.shown = false;
         let sink = v.thumbs.clone();
+        let cards: Vec<NodeId> = v.slots.iter().map(|s| s.card).collect();
         let thumbs: Vec<ThumbKey> = v
             .slots
             .iter_mut()
@@ -174,6 +175,9 @@ fn on_hidden(app: &mut App, e: &Emitted<Hidden>) {
             .collect();
         for key in thumbs {
             sink.destroy(app, key);
+        }
+        for card in cards {
+            card::reset_gesture(app, card);
         }
     }
 }
