@@ -25,12 +25,16 @@ pub use assets::fonts::{GEIST_MONO, GEIST_MONO_LIGHT};
 /// Runs an app's argv.
 type Launcher = Rc<dyn Fn(&[String]) -> io::Result<()>>;
 
+/// Brings a running app's window to the front.
+type Activator = Rc<dyn Fn(&mut App, ToplevelId)>;
+
 /// The drawer screen. Its window must have the drawer's `Atlas` and
 /// `FontBook` (Regular and Light Geist Mono) in place before it is built.
 pub struct AppDrawer {
     data_dirs: Vec<PathBuf>,
     icon_dirs: Rc<IconDirs>,
     launcher: Launcher,
+    activator: Activator,
     at_top: Rc<Cell<bool>>,
 }
 
@@ -62,6 +66,7 @@ impl AppDrawer {
             data_dirs,
             icon_dirs: Rc::new(icon_dirs),
             launcher: Rc::new(launch::spawn),
+            activator: Rc::new(drawer::activate_toplevel),
             at_top: Rc::new(Cell::new(true)),
         }
     }
@@ -72,6 +77,12 @@ impl AppDrawer {
         f: impl Fn(&[String]) -> io::Result<()> + 'static,
     ) -> AppDrawer {
         self.launcher = Rc::new(f);
+        self
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn activator(mut self, f: impl Fn(&mut App, ToplevelId) + 'static) -> AppDrawer {
+        self.activator = Rc::new(f);
         self
     }
 
@@ -89,7 +100,7 @@ impl Default for AppDrawer {
 
 impl Screen for AppDrawer {
     fn build(&self, app: &mut App, parent: NodeId) -> NodeId {
-        drawer::install(app);
+        drawer::install(app, self.activator.clone());
         app.spawn(
             parent,
             DrawerBuilder {

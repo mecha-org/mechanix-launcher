@@ -122,6 +122,25 @@ impl Registry {
         self.apps.iter().find(|a| a.entry == Some(entry))
     }
 
+    /// The running app whose entry has desktop id `id` (as in
+    /// [`DesktopApp::id`]), if it is running.
+    pub fn running_by_desktop_id(&self, id: &str) -> Option<&RunningApp> {
+        self.apps
+            .iter()
+            .find(|a| a.entry.and_then(|i| self.entries.get(i)).is_some_and(|e| e.id == id))
+    }
+
+    /// A registry holding exactly `entries` and `apps`, for tests of
+    /// consumers that need no compositor or scan.
+    #[doc(hidden)]
+    pub fn fixture(entries: Vec<DesktopApp>, apps: Vec<RunningApp>) -> Registry {
+        Registry {
+            data_dirs: Vec::new(),
+            entries,
+            apps,
+        }
+    }
+
     /// Rescans the entries; whether they changed.
     fn rescan(&mut self) -> bool {
         let entries = scan(&self.data_dirs);
@@ -300,6 +319,19 @@ mod tests {
             entry("b.desktop", "other", None),
         ];
         assert_eq!(match_entry("b", &clash), Some(1));
+    }
+
+    #[test]
+    fn running_by_desktop_id_finds_the_entry_s_app() {
+        let entries = vec![
+            entry("a.desktop", "a", None),
+            entry("b.desktop", "b", None),
+        ];
+        let apps = group(&[win(1, "b", 1), win(2, "zzz", 2)], &entries);
+        let registry = Registry::fixture(entries, apps);
+        assert_eq!(registry.running_by_desktop_id("b.desktop").unwrap().front, id(1));
+        assert!(registry.running_by_desktop_id("a.desktop").is_none());
+        assert!(registry.running_by_desktop_id("zzz.desktop").is_none());
     }
 
     #[test]

@@ -7,8 +7,8 @@ use std::rc::Rc;
 use mecha_wayland::prelude::*;
 use screen::{AppLaunched, Hidden, Shown};
 
-use crate::Launcher;
-use apps::{DesktopApp, IconCache, IconDirs, RowIcon, scan};
+use crate::{Activator, Launcher};
+use apps::{DesktopApp, Registry, RegistryChanged, IconCache, IconDirs, RowIcon, scan};
 use crate::rank::{Hit, Ranker, fit};
 use crate::row::{GAP, NAME_PX, RowBuilder, SIDE, Tapped};
 use crate::search_bar::SearchBar;
@@ -140,8 +140,61 @@ impl Widget for Drawer {
     }
 }
 
+/// The running apps' front windows by desktop id, and how to activate one.
+/// Kept current from the [`Registry`], which may be absent (no compositor
+/// support, or tests): then nothing is running and taps launch.
+struct Running {
+    fronts: Vec<(String, ToplevelId)>,
+    activator: Activator,
+}
+impl Resource for Running {}
+
+/// Sent by a tap on a running app; the activator runs with the app.
+struct Activate(ToplevelId);
+impl Signal for Activate {}
+
+/// Production activator: raise the window for the seat, if the compositor
+/// offers toplevel management.
+pub(crate) fn activate_toplevel(app: &mut App, id: ToplevelId) {
+    if !(app.has_resource::<Toplevels>() && app.has_resource::<Wayland>() && app.has_resource::<WlSeat>())
+    {
+        return;
+    }
+    let (toplevels, mut wl, seat) = app.query::<(Res<Toplevels>, ResMut<Wayland>, Res<WlSeat>)>();
+    toplevels.activate(&mut wl, *seat, id);
+}
+
+fn sync_running(app: &mut App) {
+    if !app.has_resource::<Registry>() {
+        return;
+    }
+    let fronts = {
+        let registry = app.resource::<Registry>();
+        registry
+            .apps()
+            .iter()
+            .filter_map(|a| {
+                let entry = registry.entries().get(a.entry?)?;
+                Some((entry.id.clone(), a.front))
+            })
+            .collect()
+    };
+    app.resource_mut::<Running>().fronts = fronts;
+}
+
 /// Registers the drawer's systems. Call once.
-pub(crate) fn install(app: &mut App) {
+pub(crate) fn install(app: &mut App, activator: Activator) {
+    app.insert_resource(Running {
+        fronts: Vec::new(),
+        activator,
+    });
+    sync_running(app);
+    app.system(|app: &mut App, _: &RegistryChanged| sync_running(app))
+        .system(|app: &mut App, _: &Emitted<Shown>| sync_running(app))
+        .system(|app: &mut App, e: &Activate| {
+            let activator = app.resource::<Running>().activator.clone();
+            activator(app, e.0);
+        });
     if !app.has_resource::<IconCache>() {
         let cache = IconCache::new(&mut app.resource_mut::<Atlas>());
         app.insert_resource(cache);
@@ -269,6 +322,18 @@ fn launch(ctx: &mut Context<'_, Drawer>, index: usize) {
         return;
     };
     let (id, exec, launcher) = (app.id.clone(), app.exec.clone(), d.launcher.clone());
+    let front = ctx
+        .resource::<Running>()
+        .fronts
+        .iter()
+        .find(|(running, _)| *running == id)
+        .map(|&(_, front)| front);
+    if let Some(front) = front {
+        ctx.signal(Activate(front));
+        clear_query(ctx);
+        ctx.signal(AppLaunched);
+        return;
+    }
     match launcher(&exec) {
         Ok(()) => {
             clear_query(ctx);
@@ -358,7 +423,7 @@ mod tests {
 
     use super::*;
     use crate::AppDrawer;
-    use apps::IconDirs;
+    use apps::{AppKey, IconDirs, RunningApp};
     use crate::row::Row;
 
     const SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" fill="#0a0"/></svg>"##;
@@ -433,7 +498,14 @@ mod tests {
     }
 
     fn ui(screen: AppDrawer) -> Ui {
+        ui_with(screen, None)
+    }
+
+    fn ui_with(screen: AppDrawer, registry: Option<Registry>) -> Ui {
         let mut app = App::new();
+        if let Some(registry) = registry {
+            app.insert_resource(registry);
+        }
         app.add_module(LayoutModule)
             .add_module(PaintModule)
             .add_module(WindowModule)
@@ -625,6 +697,72 @@ mod tests {
         assert_eq!(*seen.borrow(), [["chromium-browser", "--incognito"]]);
         assert_eq!(ui.text(), "");
         assert_eq!(ui.rows().len(), 3);
+        assert_eq!(ui.app.resource::<Launched>().0, 1);
+    }
+
+    fn registry_with(running: &[(&str, u32)]) -> Registry {
+        let entries = vec![
+            DesktopApp {
+                id: "chromium.desktop".into(),
+                name: "Chromium".into(),
+                exec: vec!["chromium-browser".into(), "--incognito".into()],
+                icon: None,
+                startup_wm_class: None,
+            },
+        ];
+        let apps = running
+            .iter()
+            .map(|&(app_id, n)| RunningApp {
+                key: AppKey::AppId(app_id.into()),
+                entry: Some(0),
+                windows: vec![ToplevelId::from_raw(n)],
+                front: ToplevelId::from_raw(n),
+                last_used: 1,
+            })
+            .collect();
+        Registry::fixture(entries, apps)
+    }
+
+    #[test]
+    fn tap_on_running_app_activates_instead() {
+        let launched: Rc<RefCell<Vec<Vec<String>>>> = Rc::default();
+        let activated: Rc<RefCell<Vec<ToplevelId>>> = Rc::default();
+        let (l, a) = (launched.clone(), activated.clone());
+        let screen = drawer(&three("run"))
+            .launcher(move |argv| {
+                l.borrow_mut().push(argv.to_vec());
+                Ok(())
+            })
+            .activator(move |_, id| a.borrow_mut().push(id));
+        let mut ui = ui_with(screen, Some(registry_with(&[("chromium", 7)])));
+        ui.type_in("chr");
+        let row = ui.rows()[0];
+        ui.click(row);
+
+        assert_eq!(*activated.borrow(), [ToplevelId::from_raw(7)]);
+        assert!(launched.borrow().is_empty());
+        assert_eq!(ui.text(), "");
+        assert_eq!(ui.app.resource::<Launched>().0, 1);
+    }
+
+    #[test]
+    fn tap_on_stopped_app_still_launches() {
+        let launched: Rc<RefCell<Vec<Vec<String>>>> = Rc::default();
+        let activated: Rc<RefCell<Vec<ToplevelId>>> = Rc::default();
+        let (l, a) = (launched.clone(), activated.clone());
+        let screen = drawer(&three("stopped"))
+            .launcher(move |argv| {
+                l.borrow_mut().push(argv.to_vec());
+                Ok(())
+            })
+            .activator(move |_, id| a.borrow_mut().push(id));
+        let mut ui = ui_with(screen, Some(registry_with(&[])));
+        ui.type_in("chr");
+        let row = ui.rows()[0];
+        ui.click(row);
+
+        assert_eq!(launched.borrow().len(), 1);
+        assert!(activated.borrow().is_empty());
         assert_eq!(ui.app.resource::<Launched>().0, 1);
     }
 
