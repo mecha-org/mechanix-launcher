@@ -9,14 +9,14 @@ mod search_bar;
 
 use std::cell::Cell;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use mecha_wayland::prelude::*;
 use screen::Screen;
 
 use drawer::DrawerBuilder;
-use apps::{IconDirs, active_theme, data_dirs};
+use apps::IconDirs;
 
 /// The drawer's two faces, Regular and Light Geist Mono, for the host's
 /// `FontBook`.
@@ -42,14 +42,7 @@ impl AppDrawer {
     /// Apps and icons from the XDG data dirs and the active GTK icon theme;
     /// launches by spawning the entry's command.
     pub fn new() -> AppDrawer {
-        let var = |k: &str| std::env::var(k).ok();
-        let data_dirs = data_dirs(var);
-        let config = var("XDG_CONFIG_HOME")
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| var("HOME").map(|h| Path::new(&h).join(".config")));
-        let theme = config.as_deref().and_then(active_theme);
-        let icon_dirs = IconDirs::new(&data_dirs, theme.as_deref());
+        let (data_dirs, icon_dirs) = apps::host_sources();
         AppDrawer::with_sources(data_dirs, icon_dirs)
     }
 

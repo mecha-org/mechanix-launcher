@@ -10,7 +10,8 @@ use nav::core::{
 use nav::shell::{NavModule, nav_window};
 use notifications::{Notifications, NotificationsModule};
 use quick_settings::{QuickSettingsModule, QuickSettingsScreen};
-use running_apps::RunningApps;
+use apps::RegistryModule;
+use running_apps::{RunningApps, RunningAppsModule};
 use search::Search;
 use status_bar::{
     DEFAULT_BAR_HEIGHT, DEFAULT_ICON_SIZE, StatusBarModule, StatusBarScreen, StatusIcons,
@@ -90,12 +91,13 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
                 .close(bottom_quick(), INSTANT),
         )
         .initially_open();
-    let running = container(RUNNING, RunningApps)
+    let running = container(RUNNING, RunningApps::new())
         .open(
             swipe(BOTTOM_EDGE, Direction::Up, Timing::Held).span(Span::Middle),
             INSTANT,
         )
-        .close(bottom_quick(), INSTANT);
+        .close(bottom_quick(), INSTANT)
+        .close(OnExternal(ExternalEvent::AppLaunched), INSTANT);
 
     NavModule::new(cfg)
         .action(bottom_corner(Span::LeftCorner), show_keyboard)
@@ -202,6 +204,12 @@ fn main() {
                 .bind::<ZwlrLayerShellV1>(),
         )
         .add_module(TextInputModule)
+        .add_module(ToplevelsModule)
+        .add_module(RegistryModule {
+            data_dirs: apps::host_sources().0,
+        })
+        // Places the previews before presentation commits a frame.
+        .add_module(RunningAppsModule)
         .add_module(PresentationModule {
             app_id: "mechanix.launcher".into(),
             budget: Budget::default(),
@@ -266,6 +274,7 @@ mod tests {
             .add_module(AnimationModule)
             .add_module(ScrollModule)
             .add_module(RenderModule::default())
+            .add_module(RunningAppsModule)
             .insert_resource(Atlas::new());
         app.add_module(MechanixTheme::dark());
         let (regular, light) = {

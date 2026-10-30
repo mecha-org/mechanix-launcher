@@ -10,6 +10,7 @@ keyboard.workspace = true
 screen.workspace = true
 home.workspace = true
 app-drawer.workspace = true
+apps.workspace = true
 search.workspace = true
 running-apps.workspace = true
 notifications.workspace = true
