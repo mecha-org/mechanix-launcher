@@ -21,6 +21,9 @@ pub(crate) struct Place {
 
 /// Makes, places and removes previews of windows on a nav window.
 pub(crate) trait ThumbSink {
+    /// Whether previews can be made at all; without them the cards have
+    /// no preview box.
+    fn available(&self, app: &App) -> bool;
     /// A preview of `toplevel` on `window`'s surface; `None` when previews
     /// are unavailable. It shows nothing until its first [`set`](Self::set).
     fn create(&self, app: &mut App, window: NodeId, toplevel: ToplevelId) -> Option<ThumbKey>;
@@ -39,6 +42,10 @@ pub(crate) struct WaylandThumbs {
 }
 
 impl ThumbSink for WaylandThumbs {
+    fn available(&self, app: &App) -> bool {
+        app.has_resource::<Toplevels>() && app.resource::<Toplevels>().thumbnails_available()
+    }
+
     fn create(&self, app: &mut App, window: NodeId, toplevel: ToplevelId) -> Option<ThumbKey> {
         if !(app.has_resource::<Toplevels>()
             && app.has_resource::<Wayland>()

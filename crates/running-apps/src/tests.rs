@@ -34,10 +34,19 @@ struct Sink {
     next: Cell<ThumbKey>,
     /// Windows whose commit was requested, in order.
     commits: RefCell<Vec<NodeId>>,
+    /// Stands for a compositor without `phosh_private`.
+    unavailable: Cell<bool>,
 }
 
 impl ThumbSink for Rc<Sink> {
+    fn available(&self, _: &App) -> bool {
+        !self.unavailable.get()
+    }
+
     fn create(&self, _: &mut App, _: NodeId, toplevel: ToplevelId) -> Option<ThumbKey> {
+        if self.unavailable.get() {
+            return None;
+        }
         let key = self.next.get();
         self.next.set(key + 1);
         self.live.borrow_mut().insert(key, toplevel);
@@ -144,6 +153,10 @@ struct Ui {
 }
 
 fn ui(name: &str, registry: Registry) -> Ui {
+    ui_with(name, registry, Rc::default())
+}
+
+fn ui_with(name: &str, registry: Registry, sink: Rc<Sink>) -> Ui {
     let mut app = App::new();
     app.insert_resource(registry);
     app.add_module(LayoutModule)
@@ -170,7 +183,6 @@ fn ui(name: &str, registry: Registry) -> Ui {
         )
         .id();
 
-    let sink = Rc::new(Sink::default());
     let activated: Rc<RefCell<Vec<ToplevelId>>> = Rc::default();
     let closed: Rc<RefCell<Vec<ToplevelId>>> = Rc::default();
     let (a, c) = (activated.clone(), closed.clone());
@@ -591,4 +603,19 @@ fn window_keyed_card_follows_its_title() {
     assert_eq!(ui.names(), ["Scratch"]);
     ui.set_registry(lone("Renamed"));
     assert_eq!(ui.names(), ["Renamed"]);
+}
+
+#[test]
+fn no_thumbnails_means_no_preview_hole() {
+    let sink = Rc::new(Sink::default());
+    sink.unavailable.set(true);
+    let mut ui = ui_with("noholes", three(), sink);
+    ui.emit(Shown);
+    ui.frame();
+    for card in ui.cards() {
+        let hole = ui.card(card).hole();
+        let r = ui.app.component::<Layout>(hole).unwrap().rect;
+        assert_eq!(r.height(), 0.0, "header-only card");
+    }
+    assert!(ui.sink.take().is_empty());
 }
