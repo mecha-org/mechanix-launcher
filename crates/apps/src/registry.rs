@@ -29,6 +29,10 @@ pub struct RunningApp {
     pub front: ToplevelId,
     /// The highest `last_activated` of the windows.
     pub last_used: u64,
+    /// For [`AppKey::Window`], that window's title, which is all there is
+    /// to name it by; empty for an app id, so a title change in a window
+    /// that has one is not a change to the running apps.
+    pub title: String,
 }
 
 /// Running apps from the open windows, most recently used first. Windows
@@ -56,6 +60,10 @@ pub fn group(toplevels: &[ToplevelInfo], entries: &[DesktopApp]) -> Vec<RunningA
                     AppKey::AppId(id) => match_entry(id, entries),
                     AppKey::Window(_) => None,
                 };
+                let title = match &key {
+                    AppKey::AppId(_) => String::new(),
+                    AppKey::Window(_) => t.title.clone(),
+                };
                 index.insert(key.clone(), apps.len());
                 apps.push(RunningApp {
                     key,
@@ -63,6 +71,7 @@ pub fn group(toplevels: &[ToplevelInfo], entries: &[DesktopApp]) -> Vec<RunningA
                     windows: vec![t.id],
                     front: t.id,
                     last_used: t.last_activated,
+                    title,
                 });
             }
         }
@@ -156,8 +165,9 @@ impl Registry {
 }
 
 /// Signalled when [`Registry`] changed: the running apps differ (a window
-/// came, went or was activated; a title-only change does not count), or a
-/// rescan found different installed apps.
+/// came, went or was activated, or a window with no app id was renamed;
+/// other title changes do not count), or a rescan found different
+/// installed apps.
 pub struct RegistryChanged;
 impl Signal for RegistryChanged {}
 
@@ -270,6 +280,28 @@ mod tests {
         assert!(apps.iter().any(|a| a.key == AppKey::Window(id(1))));
         assert!(apps.iter().any(|a| a.key == AppKey::Window(id(2))));
         assert!(apps.iter().all(|a| a.entry.is_none()));
+    }
+
+    #[test]
+    fn window_keyed_app_carries_its_title_and_a_rename_is_a_change() {
+        let mut lone = win(1, "", 1);
+        lone.title = "Scratch".into();
+        let mut notes = win(2, "notes", 2);
+        notes.title = "Shopping list".into();
+        let apps = group(&[lone.clone(), notes.clone()], &[]);
+        let by_window = apps.iter().find(|a| a.key == AppKey::Window(id(1))).unwrap();
+        assert_eq!(by_window.title, "Scratch");
+        let by_id = apps.iter().find(|a| a.key != AppKey::Window(id(1))).unwrap();
+        assert_eq!(by_id.title, "", "an app id names its own card");
+
+        // Renaming the window-keyed app's window changes the running apps;
+        // renaming an app-id window does not.
+        let mut renamed = lone.clone();
+        renamed.title = "Renamed".into();
+        assert_ne!(group(&[renamed, notes.clone()], &[]), apps);
+        let mut retitled = notes;
+        retitled.title = "Todo".into();
+        assert_eq!(group(&[lone, retitled], &[]), apps);
     }
 
     #[test]

@@ -112,6 +112,7 @@ fn registry(apps: &[(&str, Option<usize>, &[u32])]) -> Registry {
             windows: windows.iter().map(|&n| id(n)).collect(),
             front: id(windows[0]),
             last_used: 100 - i as u64,
+            title: String::new(),
         })
         .collect();
     Registry::fixture(entries(), apps)
@@ -569,4 +570,25 @@ fn hidden_mid_swipe_resets_the_card() {
     ui.emit(Shown);
     ui.drag_by(1, files, 200.0);
     assert_eq!(*ui.closed.borrow(), [id(7)]);
+}
+
+#[test]
+fn window_keyed_card_follows_its_title() {
+    let lone = |title: &str| {
+        Registry::fixture(
+            entries(),
+            vec![RunningApp {
+                key: AppKey::Window(id(5)),
+                entry: None,
+                windows: vec![id(5)],
+                front: id(5),
+                last_used: 1,
+                title: title.into(),
+            }],
+        )
+    };
+    let mut ui = ui("titled", lone("Scratch"));
+    assert_eq!(ui.names(), ["Scratch"]);
+    ui.set_registry(lone("Renamed"));
+    assert_eq!(ui.names(), ["Renamed"]);
 }

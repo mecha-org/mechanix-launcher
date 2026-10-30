@@ -718,6 +718,7 @@ mod tests {
                 windows: vec![ToplevelId::from_raw(n)],
                 front: ToplevelId::from_raw(n),
                 last_used: 1,
+                title: String::new(),
             })
             .collect();
         Registry::fixture(entries, apps)

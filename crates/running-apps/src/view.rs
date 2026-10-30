@@ -197,15 +197,6 @@ struct Want {
     windows: Vec<ToplevelId>,
 }
 
-/// A window's title, for an app with no app id to show.
-fn title_of(app: &App, id: ToplevelId) -> String {
-    if !app.has_resource::<Toplevels>() {
-        return String::new();
-    }
-    let toplevels = app.resource::<Toplevels>();
-    toplevels.get(id).map(|t| t.title.clone()).unwrap_or_default()
-}
-
 fn wanted(app: &mut App, view: NodeId) -> Vec<Want> {
     if !app.has_resource::<Registry>() {
         return Vec::new();
@@ -221,7 +212,7 @@ fn wanted(app: &mut App, view: NodeId) -> Vec<Want> {
                 let name = match (entry, &a.key) {
                     (Some(e), _) => e.name.clone(),
                     (None, AppKey::AppId(id)) => id.clone(),
-                    (None, AppKey::Window(_)) => title_of(app, a.front),
+                    (None, AppKey::Window(_)) => a.title.clone(),
                 };
                 let file = entry.and_then(|e| e.icon.as_deref()).and_then(|i| dirs.find(i));
                 (a.key.clone(), name, file, a.front, a.windows.clone())
