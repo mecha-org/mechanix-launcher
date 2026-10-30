@@ -3,6 +3,7 @@
 
 pub mod fonts {
     pub const GEIST_MONO: &[u8] = include_bytes!("../fonts/GeistMono-Regular.ttf");
+    pub const GEIST_MONO_LIGHT: &[u8] = include_bytes!("../fonts/GeistMono-Light.ttf");
 }
 
 pub mod icons {

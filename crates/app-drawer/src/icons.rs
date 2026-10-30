@@ -1,7 +1,7 @@
 //! Freedesktop icon lookup for `Icon=` values, and loading the result into
 //! the toolkit's sprite atlas for the drawer's rows.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use mecha_wayland::prelude::*;
@@ -171,6 +171,7 @@ fn subdirs(dir: &Path) -> Vec<PathBuf> {
     v
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RowIcon {
     /// Drawn with `widgets::image`, untinted.
     Image(SpriteId),
@@ -183,6 +184,8 @@ pub(crate) struct IconCache {
     /// `None` marks a file that failed once, so it is not retried or re-logged.
     loaded: HashMap<IconFile, Option<SpriteId>>,
 }
+
+impl Resource for IconCache {}
 
 impl IconCache {
     pub(crate) fn new(atlas: &mut Atlas) -> Self {

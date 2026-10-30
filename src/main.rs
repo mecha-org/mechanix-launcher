@@ -73,7 +73,7 @@ fn navigation(cfg: NavConfig) -> NavModule {
     let home = container(HOME_ID, Home)
         .open(bottom_quick(), FADE)
         .child(
-            container(DRAWER, AppDrawer)
+            container(DRAWER, AppDrawer::new())
                 .open_close(swipe(HOME, Direction::Up, Timing::Any), INSTANT)
                 .close(bottom_quick(), INSTANT),
         )
