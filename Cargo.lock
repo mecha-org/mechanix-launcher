@@ -838,7 +838,6 @@ dependencies = [
  "assets",
  "mecha-wayland",
  "screen",
- "tracing",
 ]
 
 [[package]]
