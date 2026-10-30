@@ -428,7 +428,7 @@ impl Stack {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
     use std::time::{Duration, Instant};
 
@@ -437,8 +437,8 @@ mod tests {
 
     use super::*;
     use crate::core::{
-        AreaId, BOTTOM_EDGE, Direction, FADE, Final, INSTANT, Motion, NavConfig, Span, TOP_EDGE,
-        Timing, container, swipe,
+        AreaId, BOTTOM_EDGE, Direction, FADE, Final, INSTANT, Motion, NavConfig, OnExternal, Span,
+        TOP_EDGE, Timing, container, gated, swipe,
     };
 
     const HOME: AreaId = AreaId("home");
@@ -649,6 +649,17 @@ mod tests {
         );
     }
 
+    fn home_down(stack: &mut Stack) {
+        swipe_on(
+            stack,
+            HOME,
+            pt(300.0, 600.0),
+            pt(300.0, 800.0),
+            Duration::from_millis(200),
+            (0.0, 1.0),
+        );
+    }
+
     fn home_right(stack: &mut Stack) {
         swipe_on(
             stack,
@@ -835,6 +846,40 @@ mod tests {
         );
         assert!(open_ones(&stack).is_empty());
         assert_eq!(stack.state(DRAWER).presence, 0.0);
+        assert!(settled(&stack));
+    }
+
+    #[test]
+    fn a_gated_close_keeps_the_drawer_open() {
+        let gate = Rc::new(Cell::new(false));
+        let drawer = container(DRAWER, Dummy)
+            .open(swipe(HOME, Direction::Up, Timing::Any), INSTANT)
+            .close(
+                gated(swipe(HOME, Direction::Down, Timing::Any), gate.clone()),
+                INSTANT,
+            );
+        let mut stack = build(rest(home(true, drawer)));
+        home_up(&mut stack);
+        assert_eq!(target(&stack, DRAWER), Final::Open);
+        home_down(&mut stack);
+        assert_eq!(target(&stack, DRAWER), Final::Open);
+        gate.set(true);
+        home_down(&mut stack);
+        assert_eq!(target(&stack, DRAWER), Final::Closed);
+        assert!(settled(&stack));
+    }
+
+    #[test]
+    fn app_launched_closes_home_and_children() {
+        let home =
+            home(true, drawer(INSTANT)).close(OnExternal(ExternalEvent::AppLaunched), INSTANT);
+        let mut stack = build(rest(home));
+        home_up(&mut stack);
+        assert_eq!(open_ones(&stack), [HOME_ID, DRAWER]);
+        stack.handle(Input::External(ExternalEvent::AppLaunched));
+        assert_eq!(target(&stack, HOME_ID), Final::Closed);
+        assert_eq!(target(&stack, DRAWER), Final::Closed);
+        assert!(open_ones(&stack).is_empty());
         assert!(settled(&stack));
     }
 

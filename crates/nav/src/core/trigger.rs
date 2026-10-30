@@ -1,12 +1,19 @@
+use std::cell::Cell;
+use std::rc::Rc;
+
 use gestures::Axis;
 
-use super::AreaId;
 use super::config::NavConfig;
 use super::gesture::{Detect, Gesture, Phase};
+use super::{AreaId, EXTERNAL};
 
-/// Events from outside the touch stream. None exist yet.
+/// Events from outside the touch stream.
 #[non_exhaustive]
-pub enum ExternalEvent {}
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ExternalEvent {
+    /// A screen started an app.
+    AppLaunched,
+}
 
 pub trait Trigger: 'static {
     fn area(&self) -> AreaId;
@@ -154,8 +161,53 @@ impl Trigger for Swipe {
     }
 }
 
+/// Fires on one [`ExternalEvent`] and on no gesture.
+pub struct OnExternal(pub ExternalEvent);
+
+impl Trigger for OnExternal {
+    fn area(&self) -> AreaId {
+        EXTERNAL
+    }
+
+    fn detect(&self, _g: &Gesture, _phase: Phase, _cfg: &NavConfig) -> Detect {
+        Detect::Ignore
+    }
+
+    fn on_external(&self, e: &ExternalEvent) -> bool {
+        *e == self.0
+    }
+}
+
+/// A trigger that only detects while its gate is open; built with [`gated`].
+pub struct Gated<T> {
+    inner: T,
+    gate: Rc<Cell<bool>>,
+}
+
+/// `t`, ignoring every gesture while `gate` is false. An ignored trigger
+/// is dropped for the rest of its gesture, so a gate closed at any point
+/// of a drag keeps it from firing for that whole drag.
+pub fn gated<T: Trigger>(t: T, gate: Rc<Cell<bool>>) -> Gated<T> {
+    Gated { inner: t, gate }
+}
+
+impl<T: Trigger> Trigger for Gated<T> {
+    fn area(&self) -> AreaId {
+        self.inner.area()
+    }
+
+    fn detect(&self, g: &Gesture, phase: Phase, cfg: &NavConfig) -> Detect {
+        if !self.gate.get() {
+            return Detect::Ignore;
+        }
+        self.inner.detect(g, phase, cfg)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
     use std::time::Duration;
 
     use mecha_wayland::prelude::{Point, Size};
@@ -315,6 +367,31 @@ mod tests {
                 assert_eq!(d, expect, "x {x}, {span:?}");
             }
         }
+    }
+
+    #[test]
+    fn gated_ignores_while_closed() {
+        let bare = swipe(TOP_EDGE, Direction::Down, Timing::Any);
+        let gate = Rc::new(Cell::new(false));
+        let t = gated(bare, gate.clone());
+        let cfg = NavConfig::default();
+        for dy in [0.0, 45.0, 200.0] {
+            for phase in [Phase::Moving, Phase::Released] {
+                assert_eq!(t.detect(&down(dy), phase, &cfg), Detect::Ignore, "{dy}");
+            }
+        }
+        gate.set(true);
+        for dy in [0.0, 45.0, 200.0] {
+            for phase in [Phase::Moving, Phase::Released] {
+                assert_eq!(
+                    t.detect(&down(dy), phase, &cfg),
+                    bare.detect(&down(dy), phase, &cfg),
+                    "{dy}"
+                );
+            }
+        }
+        assert_eq!(t.area(), TOP_EDGE);
+        assert!(t.mirrored().is_none());
     }
 
     #[test]
