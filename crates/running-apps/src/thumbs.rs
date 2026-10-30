@@ -26,6 +26,9 @@ pub(crate) trait ThumbSink {
     fn create(&self, app: &mut App, window: NodeId, toplevel: ToplevelId) -> Option<ThumbKey>;
     fn set(&self, app: &mut App, thumb: ThumbKey, place: Place);
     fn destroy(&self, app: &mut App, thumb: ThumbKey);
+    /// Make `window`'s surface commit this frame even if nothing on it
+    /// redraws: placements only apply on a commit.
+    fn commit(&self, app: &mut App, window: NodeId);
 }
 
 /// Previews through `phosh_private`, when the compositor offers it.
@@ -65,6 +68,12 @@ impl ThumbSink for WaylandThumbs {
     fn destroy(&self, app: &mut App, thumb: ThumbKey) {
         if let Some(t) = self.live.borrow_mut().remove(&thumb) {
             t.destroy(&mut app.resource_mut::<Wayland>());
+        }
+    }
+
+    fn commit(&self, app: &mut App, window: NodeId) {
+        if app.has_resource::<Surfaces>() {
+            app.resource_mut::<Surfaces>().request_commit(window);
         }
     }
 }

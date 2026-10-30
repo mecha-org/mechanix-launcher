@@ -32,6 +32,8 @@ struct Sink {
     calls: RefCell<Vec<Call>>,
     live: RefCell<HashMap<ThumbKey, ToplevelId>>,
     next: Cell<ThumbKey>,
+    /// Windows whose commit was requested, in order.
+    commits: RefCell<Vec<NodeId>>,
 }
 
 impl ThumbSink for Rc<Sink> {
@@ -52,11 +54,19 @@ impl ThumbSink for Rc<Sink> {
         let id = self.live.borrow_mut().remove(&thumb).expect("destroyed once");
         self.calls.borrow_mut().push(Call::Destroy(id));
     }
+
+    fn commit(&self, _: &mut App, window: NodeId) {
+        self.commits.borrow_mut().push(window);
+    }
 }
 
 impl Sink {
     fn take(&self) -> Vec<Call> {
         std::mem::take(&mut *self.calls.borrow_mut())
+    }
+
+    fn commits(&self) -> Vec<NodeId> {
+        std::mem::take(&mut *self.commits.borrow_mut())
     }
 
     fn live(&self) -> Vec<ToplevelId> {
@@ -495,4 +505,31 @@ fn new_app_while_shown_gets_a_thumbnail() {
     ui.set_registry(registry(&[("camera", Some(0), &[2]), ("clock", Some(1), &[1])]));
     assert_eq!(ui.names(), ["Camera", "Clock"]);
     assert_eq!(ui.sink.live(), [id(1), id(2)]);
+}
+
+#[test]
+fn placing_requests_a_commit_and_an_idle_frame_does_not() {
+    let mut ui = ui("commit", three());
+    ui.emit(Shown);
+    ui.frame();
+    assert_eq!(ui.sink.commits(), [ui.win]);
+    ui.frame();
+    assert!(ui.sink.commits().is_empty());
+}
+
+#[test]
+fn in_place_thumbnail_recreation_commits_on_an_idle_frame() {
+    let mut ui = ui("recreate", registry(&[("files", Some(2), &[7, 8])]));
+    ui.emit(Shown);
+    ui.frame();
+    let before = sets(&ui.sink.take());
+    ui.sink.commits();
+    // The front window closes: same card, same box, a new preview.
+    ui.set_registry(registry(&[("files", Some(2), &[8])]));
+    ui.frame();
+    let after = sets(&ui.sink.take());
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].0, id(8));
+    assert_eq!(after[0].1, before[0].1, "placed where the old one was");
+    assert_eq!(ui.sink.commits(), [ui.win], "nothing else redraws, so ask for the commit");
 }

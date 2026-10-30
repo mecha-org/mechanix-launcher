@@ -405,7 +405,7 @@ fn window_size(app: &App, view: NodeId) -> Option<Size> {
 
 /// Each frame of the screen's window, after layout and scroll and before
 /// presentation commits: every preview whose box or fade changed since it
-/// was last placed is placed again.
+/// was last placed is placed again, and the surface is made to commit.
 pub(crate) fn place_thumbnails(app: &mut App, f: &Frame) {
     for view in views(app) {
         let Some(v) = app.widget::<View>(view) else {
@@ -430,10 +430,16 @@ pub(crate) fn place_thumbnails(app: &mut App, f: &Frame) {
                 sends.push((i, key, place));
             }
         }
+        if sends.is_empty() {
+            continue;
+        }
         for (i, key, place) in sends {
             sink.set(app, key, place);
             app.widget_mut::<View>(view).unwrap().slots[i].sent = Some(place);
         }
+        // A placement applies at the surface's next commit, which a frame
+        // with nothing to redraw would not make.
+        sink.commit(app, f.0);
     }
 }
 
