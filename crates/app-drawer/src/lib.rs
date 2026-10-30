@@ -1,3 +1,6 @@
+#[cfg_attr(not(test), allow(dead_code))]
+mod entries;
+
 use mecha_wayland::prelude::*;
 use screen::{Screen, placeholder_page};
 
