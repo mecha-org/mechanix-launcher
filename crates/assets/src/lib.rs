@@ -7,6 +7,9 @@ pub mod fonts {
 
 pub mod icons {
     pub const AIRPLANE: &[u8] = include_bytes!("../icons/airplane.svg");
+    pub const APP: &[u8] = include_bytes!("../icons/app.svg");
+    pub const SEARCH: &[u8] = include_bytes!("../icons/magnifying-glass.svg");
+    pub const CLEAR: &[u8] = include_bytes!("../icons/x.svg");
 
     pub mod wifi {
         pub const HIGH: &[u8] = include_bytes!("../icons/wifi/wifi-high.svg");

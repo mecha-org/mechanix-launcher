@@ -1,6 +1,8 @@
 #[cfg_attr(not(test), allow(dead_code))]
 mod entries;
 #[cfg_attr(not(test), allow(dead_code))]
+mod icons;
+#[cfg_attr(not(test), allow(dead_code))]
 mod rank;
 
 use mecha_wayland::prelude::*;

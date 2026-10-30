@@ -45,10 +45,13 @@ dependencies = [
 name = "app-drawer"
 version = "0.1.0"
 dependencies = [
+ "assets",
  "mecha-wayland",
  "nucleo-matcher",
+ "png 0.18.1",
  "screen",
  "status-bar",
+ "tracing",
 ]
 
 [[package]]
