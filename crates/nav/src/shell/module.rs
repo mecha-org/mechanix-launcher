@@ -486,7 +486,8 @@ pub(crate) mod tests {
                 .open_close(swipe(HOME_AREA, Direction::Up, Timing::Any), INSTANT),
         );
         let mut app = app_with(module_with(home));
-        heard.take();
+        // Closed at startup: one Hidden, no Shown.
+        assert_eq!(heard.take(), (0, 1));
 
         swipe_home(&mut app, -200.0);
         apply(&mut app);
@@ -513,6 +514,27 @@ pub(crate) mod tests {
         app.signal(AppLaunched);
         app.flush();
         assert_eq!(display(&app, node_of(&app, HOME)), Display::Hidden);
+    }
+
+    #[test]
+    fn app_launched_hides_child_screen() {
+        let heard = Heard::default();
+        let home = container(HOME, Label("Home"))
+            .initially_open()
+            .close(OnExternal(ExternalEvent::AppLaunched), INSTANT)
+            .child(
+                container(DRAWER, heard.clone())
+                    .initially_open()
+                    .open_close(swipe(HOME_AREA, Direction::Up, Timing::Any), INSTANT),
+            );
+        let mut app = app_with(module_with(home));
+        assert_eq!(display(&app, node_of(&app, DRAWER)), Display::Flex);
+        heard.take();
+        app.signal(AppLaunched);
+        app.flush();
+        assert_eq!(display(&app, node_of(&app, HOME)), Display::Hidden);
+        assert_eq!(display(&app, node_of(&app, DRAWER)), Display::Hidden);
+        assert_eq!(heard.take(), (0, 1));
     }
 
     #[test]

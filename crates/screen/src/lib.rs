@@ -16,7 +16,8 @@ pub struct Shown;
 impl Event for Shown {}
 
 /// Emitted by the nav at the node a [`Screen::build`] returned when the
-/// screen's container is hidden.
+/// screen's container is hidden. A screen that starts closed hears one
+/// `Hidden` at startup; one that starts open hears no `Shown`.
 pub struct Hidden;
 impl Event for Hidden {}
 
