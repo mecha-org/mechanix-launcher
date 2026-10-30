@@ -20,6 +20,10 @@ use screen::Screen;
 use drawer::DrawerBuilder;
 use icons::{IconDirs, active_theme};
 
+/// The drawer's two faces, Regular and Light Geist Mono, for the host's
+/// `FontBook`.
+pub use assets::fonts::{GEIST_MONO, GEIST_MONO_LIGHT};
+
 /// Runs an app's argv.
 type Launcher = Rc<dyn Fn(&[String]) -> io::Result<()>>;
 
@@ -44,6 +48,14 @@ impl AppDrawer {
             .or_else(|| var("HOME").map(|h| Path::new(&h).join(".config")));
         let theme = config.as_deref().and_then(active_theme);
         let icon_dirs = IconDirs::new(&data_dirs, theme.as_deref());
+        AppDrawer::with_sources(data_dirs, icon_dirs)
+    }
+
+    /// Apps and icons from `data_dirs` only, with no active icon theme
+    /// (hicolor and pixmaps); launches by spawning. For tests and fixtures
+    /// that must not depend on the host's installed apps or theme.
+    pub fn from_data_dirs(data_dirs: Vec<PathBuf>) -> AppDrawer {
+        let icon_dirs = IconDirs::new(&data_dirs, None);
         AppDrawer::with_sources(data_dirs, icon_dirs)
     }
 

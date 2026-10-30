@@ -1,11 +1,11 @@
-use app_drawer::AppDrawer;
+use app_drawer::{AppDrawer, GEIST_MONO, GEIST_MONO_LIGHT};
 use home::Home;
 use keyboard::{KeyboardModule, show_keyboard};
 use mecha_wayland::mechanix_widgets::prelude::FontBook;
 use mecha_wayland::prelude::*;
 use nav::core::{
-    AreaId, BOTTOM_EDGE, ContainerId, Direction, FADE, INSTANT, NavConfig, Span, TOP_EDGE, Timing,
-    container, swipe,
+    AreaId, BOTTOM_EDGE, ContainerId, Direction, ExternalEvent, FADE, INSTANT, NavConfig,
+    OnExternal, Span, TOP_EDGE, Timing, container, gated, swipe,
 };
 use nav::shell::{NavModule, nav_window};
 use notifications::{Notifications, NotificationsModule};
@@ -13,8 +13,7 @@ use quick_settings::{QuickSettingsModule, QuickSettingsScreen};
 use running_apps::RunningApps;
 use search::Search;
 use status_bar::{
-    DEFAULT_BAR_HEIGHT, DEFAULT_ICON_SIZE, GEIST_MONO_BYTES, StatusBarModule, StatusBarScreen,
-    StatusIcons,
+    DEFAULT_BAR_HEIGHT, DEFAULT_ICON_SIZE, StatusBarModule, StatusBarScreen, StatusIcons,
 };
 
 const HOME: AreaId = AreaId("home");
@@ -65,16 +64,24 @@ fn panel(id: ContainerId, screen: impl screen::Screen, span: Span) -> nav::core:
         .close(swipe(PANEL, Direction::Up, Timing::Any), INSTANT)
 }
 
-fn navigation(cfg: NavConfig) -> NavModule {
+fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
     let strip = LayoutStyle::default().height(px(cfg.bottom_strip_height));
     let bar = LayoutStyle::default().height(px(DEFAULT_BAR_HEIGHT));
     let sides = Anchor::LEFT | Anchor::RIGHT;
 
+    // The drawer closes on a down drag only while its list rests at the top;
+    // further down, the drag scrolls.
+    let at_top = drawer.at_top();
     let home = container(HOME_ID, Home)
         .open(bottom_quick(), FADE)
+        .close(OnExternal(ExternalEvent::AppLaunched), INSTANT)
         .child(
-            container(DRAWER, AppDrawer::new())
-                .open_close(swipe(HOME, Direction::Up, Timing::Any), INSTANT)
+            container(DRAWER, drawer)
+                .open(swipe(HOME, Direction::Up, Timing::Any), INSTANT)
+                .close(
+                    gated(swipe(HOME, Direction::Down, Timing::Any), at_top),
+                    INSTANT,
+                )
                 .close(bottom_quick(), INSTANT),
         )
         .child(
@@ -163,11 +170,16 @@ fn main() {
 
     app.add_module(MechanixTheme::dark());
 
-    let font = app
-        .resource_mut::<Atlas>()
-        .add_font(GEIST_MONO_BYTES)
-        .expect("GeistMono font loads");
-    app.insert_resource(FontBook::new(font));
+    let (regular, light) = {
+        let mut atlas = app.resource_mut::<Atlas>();
+        (
+            atlas.add_font(GEIST_MONO).expect("GeistMono font loads"),
+            atlas
+                .add_font(GEIST_MONO_LIGHT)
+                .expect("GeistMono Light font loads"),
+        )
+    };
+    app.insert_resource(FontBook::new(regular).light(light));
 
     let icons = StatusIcons::load(&mut app.resource_mut::<Atlas>(), DEFAULT_ICON_SIZE)
         .expect("Status bar icons load");
@@ -189,7 +201,7 @@ fn main() {
             budget: Budget::default(),
         });
 
-    app.add_module(navigation(NavConfig::default()))
+    app.add_module(navigation(NavConfig::default(), AppDrawer::new()))
         .add_module(StatusBarModule)
         .add_module(NotificationsModule)
         .add_module(KeyboardModule)
@@ -201,6 +213,40 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Twenty apps, each with its own SVG icon (about what the 4a has), so
+    /// the budget doesn't depend on the host's installed apps.
+    fn fixture_drawer() -> AppDrawer {
+        let data = std::env::temp_dir().join(format!("launcher-budget-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&data);
+        let apps = data.join("applications");
+        let icons = data.join("icons/hicolor/scalable/apps");
+        std::fs::create_dir_all(&apps).unwrap();
+        std::fs::create_dir_all(&icons).unwrap();
+        for i in 0..20u32 {
+            let id = format!("app{i:02}");
+            std::fs::write(
+                apps.join(format!("{id}.desktop")),
+                format!(
+                    "[Desktop Entry]\nType=Application\nName=App {}\nExec=true\nIcon={id}\n",
+                    char::from(b'A' + i as u8)
+                ),
+            )
+            .unwrap();
+            // A distinct colour and shape per app, so no two icons share a slot.
+            let (r, g, b) = ((i * 37) % 256, (i * 91) % 256, (i * 151) % 256);
+            std::fs::write(
+                icons.join(format!("{id}.svg")),
+                format!(
+                    r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect width="48" height="48" rx="{}" fill="#{r:02x}{g:02x}{b:02x}"/><circle cx="{}" cy="24" r="8" fill="#fff"/></svg>"##,
+                    i % 12,
+                    8 + i
+                ),
+            )
+            .unwrap();
+        }
+        AppDrawer::from_data_dirs(vec![data])
+    }
 
     /// The launcher's UI as `main` builds it, without the compositor and
     /// D-Bus: the theme, the font, the status icons, every nav window and
@@ -216,17 +262,22 @@ mod tests {
             .add_module(RenderModule::default())
             .insert_resource(Atlas::new());
         app.add_module(MechanixTheme::dark());
-        let font = app
-            .resource_mut::<Atlas>()
-            .add_font(GEIST_MONO_BYTES)
-            .expect("GeistMono font loads");
-        app.insert_resource(FontBook::new(font));
+        let (regular, light) = {
+            let mut atlas = app.resource_mut::<Atlas>();
+            (
+                atlas.add_font(GEIST_MONO).expect("GeistMono font loads"),
+                atlas
+                    .add_font(GEIST_MONO_LIGHT)
+                    .expect("GeistMono Light font loads"),
+            )
+        };
+        app.insert_resource(FontBook::new(regular).light(light));
         let icons = StatusIcons::load(&mut app.resource_mut::<Atlas>(), DEFAULT_ICON_SIZE)
             .expect("Status bar icons load");
         app.insert_resource(icons);
         // PresentationModule registers Role; it needs a live compositor.
         app.register_component::<Role>();
-        app.add_module(navigation(NavConfig::default()));
+        app.add_module(navigation(NavConfig::default(), fixture_drawer()));
         keyboard::spawn_ui(&mut app);
         app.tick();
         app
