@@ -188,7 +188,7 @@ pub(crate) fn scan(data_dirs: &[PathBuf]) -> Vec<DesktopApp> {
     for dir in data_dirs {
         let root = dir.join("applications");
         let mut files = Vec::new();
-        collect(&root, &mut files);
+        collect(&root, 0, &mut files);
         files.sort();
         for file in files {
             let Ok(rel) = file.strip_prefix(&root) else {
@@ -216,14 +216,21 @@ pub(crate) fn scan(data_dirs: &[PathBuf]) -> Vec<DesktopApp> {
     apps
 }
 
-fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
+/// Deepest directory nesting walked; symlinked dirs are followed, so this
+/// also bounds a symlink loop.
+const MAX_DEPTH: usize = 8;
+
+fn collect(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+    if depth > MAX_DEPTH {
+        return;
+    }
     let Ok(read) = fs::read_dir(dir) else {
         return;
     };
     for entry in read.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect(&path, out);
+            collect(&path, depth + 1, out);
         } else if path.extension().is_some_and(|e| e == "desktop") {
             out.push(path);
         }
@@ -335,6 +342,27 @@ mod tests {
         let apps = scan(&[root.join("a"), root.join("b")]);
         fs::remove_dir_all(&root).unwrap();
         assert!(apps.is_empty());
+    }
+
+    #[test]
+    fn scan_survives_symlink_loop() {
+        let root = tree(
+            "loop",
+            &[(
+                "a/applications/ok.desktop",
+                "[Desktop Entry]\nType=Application\nName=Ok\nExec=ok\n",
+            )],
+        );
+        let apps_dir = root.join("a/applications");
+        std::os::unix::fs::symlink(&apps_dir, apps_dir.join("loop")).unwrap();
+        let apps = scan(&[root.join("a")]);
+        fs::remove_dir_all(&root).unwrap();
+        assert!(apps.iter().any(|a| a.id == "ok.desktop"));
+        assert!(
+            apps.iter().all(|a| a.id.matches("loop-").count() <= 8),
+            "walk went too deep: {:?}",
+            apps.iter().map(|a| &a.id).collect::<Vec<_>>()
+        );
     }
 
     #[test]
