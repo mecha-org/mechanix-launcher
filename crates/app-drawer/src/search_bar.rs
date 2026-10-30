@@ -11,7 +11,7 @@ const FIELD_HEIGHT: f32 = 54.0;
 const LINE: f32 = 2.0;
 const GLYPH: u32 = 22;
 const CLEAR_GLYPH: u32 = 18;
-/// The clear button's touch target.
+/// The clear button's touch target (its width; it spans the field's height).
 const CLEAR: f32 = 44.0;
 const TEXT_PX: u16 = 20;
 
@@ -105,7 +105,13 @@ impl SearchBar {
                 .color(text)
                 .caret(caret)
                 .border(0.0, Color::TRANSPARENT)
-                .style(LayoutStyle::default().grow(1.0)),
+                // Text never runs under the clear button.
+                .style(LayoutStyle::default().grow(1.0).padding(Insets::new(
+                    px(0.0),
+                    px(CLEAR),
+                    px(0.0),
+                    px(0.0),
+                ))),
         );
         // The whole slot is the field's press target.
         *s.component_mut::<LayoutStyle>(input).unwrap() = LayoutStyle::default()
@@ -113,13 +119,16 @@ impl SearchBar {
             .align_items(Align::Center)
             .size(percent(100.0), percent(100.0));
 
+        // Over the input's right end, so a press on it still hits the input
+        // and text-input does not blur the field.
         let clear = s.spawn(
-            field,
+            slot,
             div().style(
                 LayoutStyle::default()
+                    .absolute()
+                    .inset(Insets::new(px(0.0), px(0.0), px(0.0), auto()))
+                    .width(px(CLEAR))
                     .center()
-                    .size(px(CLEAR), px(CLEAR))
-                    .shrink(0.0)
                     .hidden(),
             ),
         );

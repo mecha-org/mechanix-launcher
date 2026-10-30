@@ -417,6 +417,22 @@ mod tests {
         app.resource_mut::<Launched>().0 += 1;
     }
 
+    /// text-input's press rule, which needs a compositor to install: a
+    /// press in the field's window whose targets miss the focused field
+    /// blurs it.
+    fn blur_on_outside_press(app: &mut App, e: &Emitted<Press>) {
+        let fields: Vec<NodeId> = app
+            .widgets::<Drawer>()
+            .filter(|(_, d)| d.focused)
+            .map(|(_, d)| d.bar.input.id())
+            .collect();
+        for field in fields {
+            if !e.targets.iter().any(|&t| t == field) {
+                app.emit(InputFocus { focused: false }, field);
+            }
+        }
+    }
+
     fn ui(screen: AppDrawer) -> Ui {
         let mut app = App::new();
         app.add_module(LayoutModule)
@@ -427,7 +443,8 @@ mod tests {
             .add_module(ScrollModule)
             .add_module(MechanixTheme::dark())
             .init_resource::<Launched>()
-            .system(count_launch);
+            .system(count_launch)
+            .system(blur_on_outside_press);
         app.insert_resource(Atlas::new());
         let (regular, light) = {
             let mut atlas = app.resource_mut::<Atlas>();
@@ -549,14 +566,48 @@ mod tests {
     }
 
     #[test]
+    fn clear_button_lies_inside_the_field() {
+        let mut ui = ui(drawer(&three("inside")));
+        ui.type_in("c");
+        let clear = ui.me().bar.clear.id();
+        let rect = |n| ui.app.component::<ComputedLayout>(n).unwrap().rect;
+        let (field, button) = (rect(ui.input()), rect(clear));
+        assert!(button.width() >= 44.0 && button.height() > 0.0);
+        assert!(field.contains(button.origin));
+        assert!(button.right() <= field.right() && button.bottom() <= field.bottom());
+    }
+
+    #[test]
     fn clear_restores_the_list() {
         let mut ui = ui(drawer(&three("clear")));
         ui.type_in("chr");
         assert_eq!(ui.rows().len(), 1);
+        assert_eq!(ui.me().keyboard(), KeyboardInteractivity::Exclusive);
+
+        // A real tap at the button's centre, through hit testing.
         let clear = ui.me().bar.clear.id();
-        ui.click(clear);
+        let r = ui.app.component::<ComputedLayout>(clear).unwrap().rect;
+        let at = Point::new(r.x() + r.width() / 2.0, r.y() + r.height() / 2.0);
+        for phase in [
+            ContactPhase::Moved,
+            ContactPhase::Pressed,
+            ContactPhase::Released,
+        ] {
+            let window = ui.win;
+            ui.app.signal(ContactInput {
+                window,
+                contact: ContactId::Touch(0),
+                phase,
+                position: at,
+                time: 0,
+            });
+            ui.app.flush();
+        }
+        ui.app.tick();
+
         assert_eq!(ui.names(), ["Camera", "Chromium", "Clock"]);
         assert_eq!(ui.text(), "");
+        assert_eq!(ui.me().keyboard(), KeyboardInteractivity::Exclusive);
     }
 
     #[test]
