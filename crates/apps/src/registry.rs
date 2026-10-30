@@ -136,7 +136,8 @@ impl Registry {
     }
 }
 
-/// Signalled when [`Registry`] changed: the open windows changed, or a
+/// Signalled when [`Registry`] changed: the running apps differ (a window
+/// came, went or was activated; a title-only change does not count), or a
 /// rescan found different installed apps.
 pub struct RegistryChanged;
 impl Signal for RegistryChanged {}
@@ -166,21 +167,30 @@ impl Module for RegistryModule {
 }
 
 fn on_toplevels_changed(app: &mut App, _: &ToplevelsChanged) {
-    {
-        let (toplevels, mut registry) = app.query::<(Res<Toplevels>, ResMut<Registry>)>();
-        registry.regroup(&toplevels);
+    if !app.has_resource::<Toplevels>() {
+        return;
     }
-    app.signal(RegistryChanged);
+    let changed = {
+        let (toplevels, mut registry) = app.query::<(Res<Toplevels>, ResMut<Registry>)>();
+        let before = std::mem::take(&mut registry.apps);
+        registry.regroup(&toplevels);
+        registry.apps != before
+    };
+    if changed {
+        app.signal(RegistryChanged);
+    }
 }
 
 fn on_shown(app: &mut App, _: &Emitted<Shown>) {
-    let changed = {
+    let changed = if app.has_resource::<Toplevels>() {
         let (toplevels, mut registry) = app.query::<(Res<Toplevels>, ResMut<Registry>)>();
         let changed = registry.rescan();
         if changed {
             registry.regroup(&toplevels);
         }
         changed
+    } else {
+        app.resource_mut::<Registry>().rescan()
     };
     if changed {
         app.signal(RegistryChanged);

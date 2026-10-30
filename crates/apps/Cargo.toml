@@ -11,3 +11,4 @@ tracing = "0.1"
 
 [dev-dependencies]
 png = "0.18"
+wayland = { git = "https://github.com/mecha-org/mecha-wayland", branch = "dev", features = ["fake"] }

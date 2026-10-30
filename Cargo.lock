@@ -64,6 +64,7 @@ dependencies = [
  "png 0.18.1",
  "screen",
  "tracing",
+ "wayland",
 ]
 
 [[package]]
