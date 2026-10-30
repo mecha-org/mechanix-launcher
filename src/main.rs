@@ -116,11 +116,14 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
             )
             .container(running),
         )
-        .window(nav_window(
-            BOTTOM_EDGE,
-            role(Layer::Top, Anchor::BOTTOM | sides, 0, "bottom-edge"),
-            strip,
-        ))
+        .window(
+            nav_window(
+                BOTTOM_EDGE,
+                role(Layer::Top, Anchor::BOTTOM | sides, 0, "bottom-edge"),
+                strip,
+            )
+            .transparent(),
+        )
         .window(
             nav_window(
                 PANEL,
@@ -130,11 +133,14 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
             .container(panel(NOTIFICATIONS, Notifications, Span::LeftHalf))
             .container(panel(QUICK_SETTINGS, QuickSettingsScreen, Span::RightHalf)),
         )
-        .window(nav_window(
-            TOP_EDGE,
-            role(Layer::Overlay, Anchor::TOP | sides, -1, "top-edge"),
-            bar.clone(),
-        ))
+        .window(
+            nav_window(
+                TOP_EDGE,
+                role(Layer::Overlay, Anchor::TOP | sides, -1, "top-edge"),
+                bar.clone(),
+            )
+            .transparent(),
+        )
         .window(
             nav_window(
                 STATUS_BAR,

@@ -19,6 +19,7 @@ pub struct WindowSpec {
     layout: LayoutStyle,
     containers: Vec<ContainerSpec>,
     no_input: bool,
+    clear: Color,
 }
 
 pub fn nav_window(area: AreaId, role: Role, layout: LayoutStyle) -> WindowSpec {
@@ -28,6 +29,7 @@ pub fn nav_window(area: AreaId, role: Role, layout: LayoutStyle) -> WindowSpec {
         layout,
         containers: Vec::new(),
         no_input: false,
+        clear: Color::BLACK,
     }
 }
 
@@ -42,6 +44,13 @@ impl WindowSpec {
     /// Applied on the window's first `Resized`.
     pub fn no_input(mut self) -> Self {
         self.no_input = true;
+        self
+    }
+
+    /// Clears to transparent instead of black: where nothing is drawn,
+    /// what is beneath shows. Input is unchanged.
+    pub fn transparent(mut self) -> Self {
+        self.clear = Color::TRANSPARENT;
         self
     }
 }
@@ -108,10 +117,7 @@ impl Module for NavModule {
             let node = app
                 .spawn_with(
                     root,
-                    window()
-                        .title(w.area.0)
-                        .layout(w.layout)
-                        .clear(Color::BLACK),
+                    window().title(w.area.0).layout(w.layout).clear(w.clear),
                     (w.role,),
                 )
                 .id();
@@ -331,6 +337,31 @@ pub(crate) mod tests {
                 false
             })
             .count()
+    }
+
+    #[test]
+    fn a_transparent_window_clears_to_transparent_and_the_rest_to_black() {
+        let m = NavModule::new(NavConfig::default())
+            .window(nav_window(
+                HOME_AREA,
+                role(Layer::Bottom, "home"),
+                LayoutStyle::default(),
+            ))
+            .window(
+                nav_window(
+                    BOTTOM_EDGE,
+                    role(Layer::Top, "bottom-edge"),
+                    LayoutStyle::default().height(px(20.0)),
+                )
+                .transparent(),
+            );
+        let app = app_with(m);
+        let clears: Vec<Color> = app
+            .resource::<Windows>()
+            .iter()
+            .map(|w| app.widget::<Window>(w).unwrap().clear())
+            .collect();
+        assert_eq!(clears, vec![Color::BLACK, Color::TRANSPARENT]);
     }
 
     #[test]
