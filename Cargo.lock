@@ -692,6 +692,7 @@ dependencies = [
  "interactivity",
  "layout",
  "render",
+ "ring",
  "wayland",
  "window",
  "xkbcommon",

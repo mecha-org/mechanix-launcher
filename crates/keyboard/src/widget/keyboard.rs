@@ -1,11 +1,12 @@
 //! The keyboard widget: spawns one subtree per keymap view (only the current
-//! view is shown), wires each key's `Clicked` to [`dispatch`](crate::input::dispatch),
-//! and handles [`SwitchView`](crate::view::SwitchView) to toggle which view is
+//! view is shown), wires each key's `Clicked` to [`dispatch`](crate::input::dispatch)
+//! (or, for repeating control keys, `Press`/`Release` to
+//! [`hold`](crate::input::hold)/[`release`](crate::input::release)), and handles [`SwitchView`](crate::view::SwitchView) to toggle which view is
 //! visible.
 
 use mecha_wayland::prelude::*;
 
-use crate::input::dispatch;
+use crate::input::{dispatch, hold, release, repeats};
 use crate::layout::style::KeyState;
 use crate::layout::tokens::Fonts;
 use crate::layout::{KeyAction, Keymap, Modifier};
@@ -128,8 +129,20 @@ impl Widget for Keyboard {
                         _ => {}
                     }
 
-                    // Each key gets its own handler that dispatches its action
-                    // through the Keyboard's action logic.
+                    // Control keys stay down while pressed so the client
+                    // repeats them; `Exit` also releases, covering a cancelled
+                    // touch (which never sends `Release`) and sliding off.
+                    if let KeyAction::EmitKeysym(ks) = key.action
+                        && repeats(&key.action)
+                    {
+                        s.on::<Press>(key_handle, move |ctx, _| hold(ctx, ks));
+                        s.on::<Release>(key_handle, |ctx, _| release(ctx));
+                        s.on::<Exit>(key_handle, |ctx, _| release(ctx));
+                        continue;
+                    }
+
+                    // Each other key gets its own handler that dispatches its
+                    // action through the Keyboard's action logic.
                     let action = key.action.clone();
                     s.on::<Clicked>(key_handle, move |ctx, _| {
                         dispatch(ctx, &action);
