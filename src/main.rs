@@ -173,6 +173,7 @@ fn main() {
     app.insert_resource(icons);
 
     app.add_module(RingModule::default())
+        .add_module(TimerModule)
         .add_module(DBusModule::new().system().session())
         .add_module(
             WaylandModule::new()

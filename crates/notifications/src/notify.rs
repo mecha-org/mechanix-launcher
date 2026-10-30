@@ -1,5 +1,5 @@
-use crate::expiry_timeout::schedule_expire;
 use crate::markup::Markup;
+use crate::millis::Millis;
 use crate::{
     notification_store::{Entry, NotificationStore},
     notify_signal::NotificationSignal::{AddNotification, UpdateNotification},
@@ -15,7 +15,7 @@ pub struct Notification {
     pub summary: String,
     pub body: Markup,
     pub actions: Vec<(String, String)>,
-    pub expire_timeout: i32,
+    pub expire_timeout: Option<Millis>,
     pub hints: Categories,
 }
 
@@ -78,7 +78,7 @@ impl From<NotifyArgs> for Notify {
                 summary,
                 body,
                 actions,
-                expire_timeout,
+                expire_timeout: Millis::from_expire_timeout(expire_timeout),
                 hints: urgency,
             },
         }
@@ -88,12 +88,10 @@ impl From<NotifyArgs> for Notify {
 pub fn append_notifications(app: &mut App, notify: &Notify) -> u32 {
     let replaced_notification = replace_notification(app, notify);
     if let Some(id) = replaced_notification {
-        schedule_expire(app, id, notify.notification.expire_timeout);
         app.signal(UpdateNotification(id));
         return id;
     }
     let id = add_notification(app, notify);
-    schedule_expire(app, id, notify.notification.expire_timeout);
     app.signal(AddNotification(id));
     id
 }
@@ -119,7 +117,8 @@ fn add_notification(app: &mut App, notify: &Notify) -> u32 {
         id,
         received_time: SystemTime::now(),
         notification: notify.notification.clone(),
-        expiry_timeout: None,
+        // no controls applied yet
+        control: None,
     });
     id
 }
