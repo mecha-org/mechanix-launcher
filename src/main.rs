@@ -1,6 +1,6 @@
 use app_drawer::{AppDrawer, GEIST_MONO, GEIST_MONO_LIGHT};
 use apps::RegistryModule;
-use home::{Home, HomeVisible};
+use home::Home;
 use keyboard::{KeyboardModule, hide_keyboard, show_keyboard, suspend_keyboard_zone};
 use mecha_wayland::mechanix_widgets::prelude::FontBook;
 use mecha_wayland::prelude::*;
@@ -8,7 +8,7 @@ use nav::core::{
     AreaId, BOTTOM_EDGE, ContainerId, Direction, ExternalEvent, FADE, INSTANT, NavConfig,
     OnExternal, Span, TOP_EDGE, Timing, container, gated, swipe,
 };
-use nav::shell::{NavModule, nav_window};
+use nav::shell::{ContainerShown, NavModule, nav_window};
 use notifications::{Notifications, NotificationsModule};
 use quick_settings::{QuickSettingsModule, QuickSettingsScreen};
 use running_apps::{RunningApps, RunningAppsModule};
@@ -27,6 +27,35 @@ const RUNNING: ContainerId = ContainerId("running");
 const NOTIFICATIONS: ContainerId = ContainerId("notifications");
 const QUICK_SETTINGS: ContainerId = ContainerId("quick_settings");
 const STATUS: ContainerId = ContainerId("status");
+
+/// The launcher screens that cover apps. While any is open the keyboard
+/// reserves no space, so they and the apps under them keep their full
+/// size; opening one hides the keyboard.
+const COVERS: [ContainerId; 4] = [HOME_ID, RUNNING, NOTIFICATIONS, QUICK_SETTINGS];
+
+/// The [`COVERS`] open now.
+struct OpenCovers(Vec<ContainerId>);
+impl Resource for OpenCovers {}
+
+fn on_container_shown(app: &mut App, s: &ContainerShown) {
+    if !COVERS.contains(&s.id) {
+        return;
+    }
+    let any_open = {
+        let mut open = app.resource_mut::<OpenCovers>();
+        open.0.retain(|&id| id != s.id);
+        if s.shown {
+            open.0.push(s.id);
+        }
+        !open.0.is_empty()
+    };
+    // Hiding clears the zone first, so the app under resizes as the
+    // screen comes up.
+    if s.shown {
+        hide_keyboard(app);
+    }
+    suspend_keyboard_zone(app, any_open);
+}
 
 const ALL_SIDES: Anchor = Anchor::from_bits_truncate(
     Anchor::TOP.bits() | Anchor::BOTTOM.bits() | Anchor::LEFT.bits() | Anchor::RIGHT.bits(),
@@ -95,9 +124,6 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
     NavModule::new(cfg)
         .action(bottom_corner(Span::LeftCorner), show_keyboard)
         .action(bottom_corner(Span::RightCorner), show_keyboard)
-        // Going home drops the keyboard and its zone so the app under it
-        // regains its full size.
-        .action(bottom_quick(), hide_keyboard)
         .window(
             nav_window(
                 HOME,
@@ -222,10 +248,10 @@ fn main() {
         .add_module(KeyboardModule { bottom_gap })
         .add_module(QuickSettingsModule);
 
-    // The keyboard reserves its height over apps but not over home, which
-    // starts open.
+    // Home starts open.
+    app.insert_resource(OpenCovers(vec![HOME_ID]));
     suspend_keyboard_zone(&mut app, true);
-    app.system(|app: &mut App, v: &HomeVisible| suspend_keyboard_zone(app, v.0));
+    app.system(on_container_shown);
 
     app.run();
 }

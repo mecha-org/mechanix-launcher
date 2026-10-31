@@ -21,6 +21,16 @@ pub(crate) struct NavWindow {
     pub(crate) no_input: bool,
 }
 
+/// Signalled when a container is shown or hidden, as its screen hears
+/// `Shown` or `Hidden`: for the host, which sees containers by id rather
+/// than by screen node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContainerShown {
+    pub id: ContainerId,
+    pub shown: bool,
+}
+impl Signal for ContainerShown {}
+
 /// What a [`NavModule::action`](super::NavModule::action) runs.
 pub(crate) type Action = Rc<dyn Fn(&mut App)>;
 
@@ -114,6 +124,7 @@ pub(crate) fn apply(app: &mut App) {
                     Display::Hidden
                 };
                 (
+                    c.id,
                     c.node,
                     c.screen,
                     c.cover,
@@ -133,13 +144,16 @@ pub(crate) fn apply(app: &mut App) {
         (containers, windows, frames)
     };
 
-    for (node, screen, cover, display, alpha) in containers {
+    for (id, node, screen, cover, display, alpha) in containers {
         if app.component::<LayoutStyle>(node).unwrap().display != display {
             app.component_mut::<LayoutStyle>(node).unwrap().display = display;
-            match display {
-                Display::Flex => app.emit(Shown, screen),
-                _ => app.emit(Hidden, screen),
+            let shown = display == Display::Flex;
+            if shown {
+                app.emit(Shown, screen);
+            } else {
+                app.emit(Hidden, screen);
             }
+            app.signal(ContainerShown { id, shown });
         }
         let paint = cover_paint(alpha);
         if *app.component::<Paint>(cover).unwrap() != paint {

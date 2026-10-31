@@ -212,7 +212,7 @@ pub(crate) mod tests {
         NavConfig, OnExternal, Timing, container, swipe,
     };
     use crate::shell::apply::window_layers;
-    use crate::shell::apply::{Nav, apply};
+    use crate::shell::apply::{ContainerShown, Nav, apply};
 
     pub(crate) const HOME_AREA: AreaId = AreaId("home");
     pub(crate) const PANEL_AREA: AreaId = AreaId("panel");
@@ -535,6 +535,33 @@ pub(crate) mod tests {
         app.flush();
         assert_eq!(display(&app, node_of(&app, DRAWER)), Display::Hidden);
         assert_eq!(heard.take(), (0, 1));
+    }
+
+    #[derive(Default)]
+    struct Signalled(Vec<ContainerShown>);
+    impl Resource for Signalled {}
+
+    #[test]
+    fn containers_signal_shown_and_hidden_by_id() {
+        let home = container(HOME, Label("Home")).initially_open().child(
+            container(DRAWER, Label("Drawer"))
+                .open_close(swipe(HOME_AREA, Direction::Up, Timing::Any), INSTANT),
+        );
+        let mut app = app_with(module_with(home));
+        app.init_resource::<Signalled>()
+            .system(|app: &mut App, s: &ContainerShown| app.resource_mut::<Signalled>().0.push(*s));
+
+        swipe_home(&mut app, -200.0);
+        apply(&mut app);
+        app.flush();
+        swipe_home(&mut app, 200.0);
+        apply(&mut app);
+        app.flush();
+        let shown = |id, shown| ContainerShown { id, shown };
+        assert_eq!(
+            app.resource::<Signalled>().0,
+            [shown(DRAWER, true), shown(DRAWER, false)]
+        );
     }
 
     #[test]
