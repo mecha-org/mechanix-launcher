@@ -45,6 +45,10 @@ pub struct InputMethodState {
     pub current: InputMethodContext,
     /// The pending inbound context — what events are filling this batch.
     pending: InputMethodContext,
+    /// Whether this batch carries an `activate`. A text input re-enabled
+    /// while already active (a field tapped again) sends one, and that should
+    /// bring back a keyboard the user hid.
+    pending_activate: bool,
 
     /// Number of `done` events received. This is the serial echoed back in
     /// `commit(serial)`.
@@ -155,6 +159,7 @@ fn on_input_method_event(app: &mut App, event: &ZwpInputMethodV2Event) {
                     active: true,
                     ..Default::default()
                 };
+                st.pending_activate = true;
                 tracing::info!("input-method: activate (pending)");
                 None
             }
@@ -171,6 +176,7 @@ fn on_input_method_event(app: &mut App, event: &ZwpInputMethodV2Event) {
             }
             ZwpInputMethodV2Event::Done { .. } => {
                 let next = st.pending.clone();
+                let activated = std::mem::take(&mut st.pending_activate);
                 let prev = std::mem::replace(&mut st.current, next);
                 st.serial = st.serial.wrapping_add(1);
                 let now = &st.current;
@@ -180,15 +186,20 @@ fn on_input_method_event(app: &mut App, event: &ZwpInputMethodV2Event) {
                     "input-method: state applied"
                 );
 
-                if now.active && (!prev.active || prev.purpose != now.purpose) {
+                if now.active && (activated || !prev.active || prev.purpose != now.purpose) {
                     focused = Some(TextInputFocused {
                         purpose: now.purpose,
                     });
                 }
                 // Only an activate/deactivate moves the surface, so other
                 // `done`s (e.g. surrounding-text updates) don't undo a manual
-                // show or hide.
-                (prev.active != now.active).then_some(now.active)
+                // show or hide. An activate shows it even when already
+                // active: the field was tapped again.
+                if now.active && activated {
+                    Some(true)
+                } else {
+                    (prev.active != now.active).then_some(now.active)
+                }
             }
             ZwpInputMethodV2Event::Unavailable { .. } => {
                 st.inert = true;
@@ -202,5 +213,62 @@ fn on_input_method_event(app: &mut App, event: &ZwpInputMethodV2Event) {
     }
     if let Some(visible) = apply_visible {
         app.set_keyboard_visibility(visible);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::visibility::KeyboardVisibility;
+
+    fn app() -> App {
+        let mut app = App::new();
+        app.insert_resource(KeyboardVisibility::default());
+        app.insert_resource(InputMethodState::default());
+        app
+    }
+
+    fn send(app: &mut App, events: &[fn(ZwpInputMethodV2) -> ZwpInputMethodV2Event]) {
+        let im = ZwpInputMethodV2(ObjectId(1));
+        for e in events {
+            on_input_method_event(app, &e(im));
+        }
+    }
+
+    fn activate(input_method: ZwpInputMethodV2) -> ZwpInputMethodV2Event {
+        ZwpInputMethodV2Event::Activate { input_method }
+    }
+    fn deactivate(input_method: ZwpInputMethodV2) -> ZwpInputMethodV2Event {
+        ZwpInputMethodV2Event::Deactivate { input_method }
+    }
+    fn done(input_method: ZwpInputMethodV2) -> ZwpInputMethodV2Event {
+        ZwpInputMethodV2Event::Done { input_method }
+    }
+
+    #[test]
+    fn activate_shows_and_deactivate_hides() {
+        let mut app = app();
+        send(&mut app, &[activate, done]);
+        assert!(app.keyboard_visible());
+        send(&mut app, &[deactivate, done]);
+        assert!(!app.keyboard_visible());
+    }
+
+    #[test]
+    fn tapping_the_field_again_brings_back_a_hidden_keyboard() {
+        let mut app = app();
+        send(&mut app, &[activate, done]);
+        app.set_keyboard_visibility(false);
+        send(&mut app, &[activate, done]);
+        assert!(app.keyboard_visible());
+    }
+
+    #[test]
+    fn a_done_without_activate_keeps_a_manual_hide() {
+        let mut app = app();
+        send(&mut app, &[activate, done]);
+        app.set_keyboard_visibility(false);
+        send(&mut app, &[done]);
+        assert!(!app.keyboard_visible());
     }
 }
