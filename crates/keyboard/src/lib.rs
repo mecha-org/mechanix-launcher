@@ -20,4 +20,5 @@ mod widget;
 mod zone;
 
 pub use module::{KeyboardModule, spawn_ui};
-pub use visibility::show_keyboard;
+pub use visibility::{hide_keyboard, show_keyboard};
+pub use zone::suspend_keyboard_zone;

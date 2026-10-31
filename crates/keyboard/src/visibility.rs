@@ -71,6 +71,13 @@ pub fn show_keyboard(app: &mut App) {
     app.set_keyboard_visibility(true);
 }
 
+/// Hide the keyboard, e.g. on the way home, so its exclusive zone goes and
+/// the app under it gets its full size back. Needs the
+/// [`KeyboardModule`](crate::KeyboardModule) installed.
+pub fn hide_keyboard(app: &mut App) {
+    app.set_keyboard_visibility(false);
+}
+
 /// On [`KeyboardVisibilityChanged`], broadcast [`ApplyKeyboardVisibility`] to
 /// the root and every descendant so the surface widget re-applies `Display`.
 fn on_keyboard_visibility_changed(app: &mut App, _: &KeyboardVisibilityChanged) {

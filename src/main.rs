@@ -1,6 +1,6 @@
 use app_drawer::{AppDrawer, GEIST_MONO, GEIST_MONO_LIGHT};
-use home::Home;
-use keyboard::{KeyboardModule, show_keyboard};
+use home::{Home, HomeVisible};
+use keyboard::{KeyboardModule, hide_keyboard, show_keyboard, suspend_keyboard_zone};
 use mecha_wayland::mechanix_widgets::prelude::FontBook;
 use mecha_wayland::prelude::*;
 use nav::core::{
@@ -93,6 +93,9 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
     NavModule::new(cfg)
         .action(bottom_corner(Span::LeftCorner), show_keyboard)
         .action(bottom_corner(Span::RightCorner), show_keyboard)
+        // Going home drops the keyboard and its zone so the app under it
+        // regains its full size.
+        .action(bottom_quick(), hide_keyboard)
         .window(
             nav_window(
                 HOME,
@@ -112,7 +115,10 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
         .window(
             nav_window(
                 BOTTOM_EDGE,
-                role(Layer::Top, Anchor::BOTTOM | sides, 0, "bottom-edge"),
+                // Above the keyboard, in the gap it leaves under its keys;
+                // zone -1 keeps it on the edge rather than above the
+                // keyboard's zone.
+                role(Layer::Overlay, Anchor::BOTTOM | sides, -1, "bottom-edge"),
                 strip,
             )
             .transparent(),
@@ -200,11 +206,18 @@ fn main() {
             budget: Budget::default(),
         });
 
-    app.add_module(navigation(NavConfig::default(), AppDrawer::new()))
+    let cfg = NavConfig::default();
+    let bottom_gap = cfg.bottom_strip_height;
+    app.add_module(navigation(cfg, AppDrawer::new()))
         .add_module(StatusBarModule)
         .add_module(NotificationsModule)
-        .add_module(KeyboardModule)
+        .add_module(KeyboardModule { bottom_gap })
         .add_module(QuickSettingsModule);
+
+    // The keyboard reserves its height over apps but not over home, which
+    // starts open.
+    suspend_keyboard_zone(&mut app, true);
+    app.system(|app: &mut App, v: &HomeVisible| suspend_keyboard_zone(app, v.0));
 
     app.run();
 }
@@ -277,7 +290,7 @@ mod tests {
         // PresentationModule registers Role; it needs a live compositor.
         app.register_component::<Role>();
         app.add_module(navigation(NavConfig::default(), fixture_drawer()));
-        keyboard::spawn_ui(&mut app);
+        keyboard::spawn_ui(&mut app, NavConfig::default().bottom_strip_height);
         app.tick();
         app
     }

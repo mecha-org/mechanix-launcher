@@ -26,7 +26,12 @@ use crate::zone::ExclusiveZone;
 ///
 /// Add this after any other `Layer::Top` windows (such as the `NavModule`'s) so
 /// the keyboard surface stacks above them.
-pub struct KeyboardModule;
+#[derive(Debug, Clone, Copy, Default)]
+pub struct KeyboardModule {
+    /// Empty space under the keys, logical px: room for a host's bottom-edge
+    /// swipe strip, which should sit in a layer above the keyboard.
+    pub bottom_gap: f32,
+}
 
 impl Module for KeyboardModule {
     fn install(self, app: &mut App) {
@@ -36,7 +41,7 @@ impl Module for KeyboardModule {
         app.add_module(VirtualKeyboardModule)
             .add_module(InputMethodModule);
         app.system(on_text_input_focused);
-        spawn_ui(app);
+        spawn_ui(app, self.bottom_gap);
     }
 }
 
@@ -45,7 +50,7 @@ impl Module for KeyboardModule {
 /// [`KeyboardModule`] installs after binding them; public so a host can
 /// build the keyboard headlessly, as the launcher's atlas budget test does.
 #[doc(hidden)]
-pub fn spawn_ui(app: &mut App) {
+pub fn spawn_ui(app: &mut App, bottom_gap: f32) {
     // Load the keymap from layout.yaml (env var, local file, or bundled fallback).
     let keymap = layout::load_keymap();
 
@@ -70,6 +75,7 @@ pub fn spawn_ui(app: &mut App) {
                 root,
                 fonts,
                 keymap,
+                bottom_gap,
             },
         )
         .id();

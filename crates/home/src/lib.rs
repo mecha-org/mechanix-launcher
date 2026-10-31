@@ -1,10 +1,16 @@
 use mecha_wayland::prelude::*;
-use screen::Screen;
+use screen::{Hidden, Screen, Shown};
 
 /// Longer side of the Comet wheel, logical pixels.
 const LOGO_SIZE: u32 = 120;
 
 pub struct Home;
+
+/// Signalled when the home screen shows (`true`) or hides (`false`). It
+/// starts shown and signals nothing for that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HomeVisible(pub bool);
+impl Signal for HomeVisible {}
 
 impl Screen for Home {
     fn build(&self, app: &mut App, parent: NodeId) -> NodeId {
@@ -34,6 +40,9 @@ impl Widget for HomePage {
             .expect("embedded Comet logo is a valid SVG");
         let color = s.color(ColorRole::OnSurface);
         s.spawn(me, icon(logo).color(color));
+
+        s.on::<Shown>(me, |ctx, _| ctx.signal(HomeVisible(true)));
+        s.on::<Hidden>(me, |ctx, _| ctx.signal(HomeVisible(false)));
         b
     }
 }
