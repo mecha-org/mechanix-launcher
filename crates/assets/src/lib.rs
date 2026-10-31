@@ -11,6 +11,8 @@ pub mod icons {
     pub const APP: &[u8] = include_bytes!("../icons/app.svg");
     pub const SEARCH: &[u8] = include_bytes!("../icons/magnifying-glass.svg");
     pub const CLEAR: &[u8] = include_bytes!("../icons/x.svg");
+    /// The Comet wheel, traced from the boot splash.
+    pub const COMET_LOGO: &[u8] = include_bytes!("../icons/comet-logo.svg");
 
     pub mod wifi {
         pub const HIGH: &[u8] = include_bytes!("../icons/wifi/wifi-high.svg");
