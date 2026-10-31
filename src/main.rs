@@ -12,7 +12,6 @@ use nav::shell::{NavModule, nav_window};
 use notifications::{Notifications, NotificationsModule};
 use quick_settings::{QuickSettingsModule, QuickSettingsScreen};
 use running_apps::{RunningApps, RunningAppsModule};
-use search::Search;
 use status_bar::{
     DEFAULT_BAR_HEIGHT, DEFAULT_ICON_SIZE, StatusBarModule, StatusBarScreen, StatusIcons,
 };
@@ -24,7 +23,6 @@ const STATUS_BAR: AreaId = AreaId("status-bar");
 
 const HOME_ID: ContainerId = ContainerId("home");
 const DRAWER: ContainerId = ContainerId("drawer");
-const SEARCH: ContainerId = ContainerId("search");
 const RUNNING: ContainerId = ContainerId("running");
 const NOTIFICATIONS: ContainerId = ContainerId("notifications");
 const QUICK_SETTINGS: ContainerId = ContainerId("quick_settings");
@@ -83,11 +81,6 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
                     gated(swipe(HOME, Direction::Down, Timing::Any), at_top),
                     INSTANT,
                 )
-                .close(bottom_quick(), INSTANT),
-        )
-        .child(
-            container(SEARCH, Search)
-                .open_close(swipe(HOME, Direction::Right, Timing::Any), INSTANT)
                 .close(bottom_quick(), INSTANT),
         )
         .initially_open();

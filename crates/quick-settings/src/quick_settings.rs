@@ -7,6 +7,7 @@ use crate::util::full_width;
 
 const TOP_HEIGHT: f32 = HEADER_HEIGHT + SLIDERS_HEIGHT;
 const SECTION_GAP: f32 = 31.0;
+const MAX_HEIGHT: f32 = 600.0;
 
 pub struct QuickSettings;
 
@@ -27,6 +28,7 @@ impl Widget for QuickSettings {
         *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
             .fill()
             .width(percent(100.0))
+            .max_height(px(MAX_HEIGHT))
             .column()
             .gap(px(SECTION_GAP))
             .justify(Justify::SpaceBetween);

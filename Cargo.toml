@@ -11,7 +11,6 @@ screen.workspace = true
 home.workspace = true
 app-drawer.workspace = true
 apps.workspace = true
-search.workspace = true
 running-apps.workspace = true
 notifications.workspace = true
 quick-settings.workspace = true
@@ -28,7 +27,6 @@ members = [
     "crates/screen",
     "crates/app-drawer",
     "crates/apps",
-    "crates/search",
     "crates/running-apps",
     "crates/notifications",
     "crates/quick-settings",
@@ -47,7 +45,6 @@ gestures = { path = "crates/gestures" }
 screen = { path = "crates/screen" }
 app-drawer = { path = "crates/app-drawer" }
 apps = { path = "crates/apps" }
-search = { path = "crates/search" }
 running-apps = { path = "crates/running-apps" }
 notifications = { path = "crates/notifications" }
 quick-settings = { path = "crates/quick-settings" }
