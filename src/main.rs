@@ -1,4 +1,5 @@
 use app_drawer::{AppDrawer, GEIST_MONO, GEIST_MONO_LIGHT};
+use apps::RegistryModule;
 use home::Home;
 use keyboard::{KeyboardModule, show_keyboard};
 use mecha_wayland::mechanix_widgets::prelude::FontBook;
@@ -10,7 +11,6 @@ use nav::core::{
 use nav::shell::{NavModule, nav_window};
 use notifications::{Notifications, NotificationsModule};
 use quick_settings::{QuickSettingsModule, QuickSettingsScreen};
-use apps::RegistryModule;
 use running_apps::{RunningApps, RunningAppsModule};
 use search::Search;
 use status_bar::{

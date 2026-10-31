@@ -102,7 +102,9 @@ impl Module for RunningAppsModule {
 /// Production activator: raise the window for the seat, if the compositor
 /// offers toplevel management.
 fn activate_toplevel(app: &mut App, id: ToplevelId) {
-    if !(app.has_resource::<Toplevels>() && app.has_resource::<Wayland>() && app.has_resource::<WlSeat>())
+    if !(app.has_resource::<Toplevels>()
+        && app.has_resource::<Wayland>()
+        && app.has_resource::<WlSeat>())
     {
         return;
     }

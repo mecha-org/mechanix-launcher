@@ -152,16 +152,14 @@ impl Widget for Card {
 
         let header = s.spawn(
             me,
-            div()
-                .background(s.color(ColorRole::SurfaceBright))
-                .style(
-                    LayoutStyle::default()
-                        .row()
-                        .align_items(Align::Center)
-                        .gap(px(12.0))
-                        .size(percent(100.0), px(HEADER))
-                        .padding(Insets::new(px(0.0), px(4.0), px(0.0), px(12.0))),
-                ),
+            div().background(s.color(ColorRole::SurfaceBright)).style(
+                LayoutStyle::default()
+                    .row()
+                    .align_items(Align::Center)
+                    .gap(px(12.0))
+                    .size(percent(100.0), px(HEADER))
+                    .padding(Insets::new(px(0.0), px(4.0), px(0.0), px(12.0))),
+            ),
         );
         let size = LayoutStyle::default().size(px(ICON), px(ICON)).shrink(0.0);
         match b.icon {
@@ -198,7 +196,12 @@ impl Widget for Card {
         );
         let close = s.spawn(
             header,
-            div().style(LayoutStyle::default().size(px(CLOSE), px(CLOSE)).shrink(0.0).center()),
+            div().style(
+                LayoutStyle::default()
+                    .size(px(CLOSE), px(CLOSE))
+                    .shrink(0.0)
+                    .center(),
+            ),
         );
         let cross_color = s.color(ColorRole::OnSurface);
         s.spawn(close, icon(b.cross).color(cross_color));
@@ -284,7 +287,10 @@ pub(crate) fn set_width(app: &mut App, card: NodeId, width: f32) {
     };
     c.width = width;
     let style = card_style(c.dy, width);
-    if app.component::<LayoutStyle>(card).is_some_and(|s| *s != style) {
+    if app
+        .component::<LayoutStyle>(card)
+        .is_some_and(|s| *s != style)
+    {
         *app.component_mut::<LayoutStyle>(card).unwrap() = style;
     }
 }
@@ -301,7 +307,10 @@ pub(crate) fn reset_gesture(app: &mut App, card: NodeId) {
     c.swallow_click = false;
     let (veil, paint) = (c.veil.id(), veil_paint(c.opacity()));
     let style = card_style(0.0, c.width);
-    if app.component::<LayoutStyle>(card).is_some_and(|s| *s != style) {
+    if app
+        .component::<LayoutStyle>(card)
+        .is_some_and(|s| *s != style)
+    {
         *app.component_mut::<LayoutStyle>(card).unwrap() = style;
     }
     if app.component::<Paint>(veil).is_some_and(|p| *p != paint) {

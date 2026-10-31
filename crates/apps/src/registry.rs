@@ -249,7 +249,10 @@ mod tests {
 
     #[test]
     fn windows_group_by_app_id_case_insensitively() {
-        let apps = group(&[win(1, "Org.Mecha.Notes", 1), win(2, "org.mecha.notes", 2)], &[]);
+        let apps = group(
+            &[win(1, "Org.Mecha.Notes", 1), win(2, "org.mecha.notes", 2)],
+            &[],
+        );
         assert_eq!(apps.len(), 1);
         assert_eq!(apps[0].key, AppKey::AppId("org.mecha.notes".into()));
         assert_eq!(apps[0].windows, [id(1), id(2)]);
@@ -281,9 +284,15 @@ mod tests {
         let mut notes = win(2, "notes", 2);
         notes.title = "Shopping list".into();
         let apps = group(&[lone.clone(), notes.clone()], &[]);
-        let by_window = apps.iter().find(|a| a.key == AppKey::Window(id(1))).unwrap();
+        let by_window = apps
+            .iter()
+            .find(|a| a.key == AppKey::Window(id(1)))
+            .unwrap();
         assert_eq!(by_window.title, "Scratch");
-        let by_id = apps.iter().find(|a| a.key != AppKey::Window(id(1))).unwrap();
+        let by_id = apps
+            .iter()
+            .find(|a| a.key != AppKey::Window(id(1)))
+            .unwrap();
         assert_eq!(by_id.title, "", "an app id names its own card");
 
         // Renaming the window-keyed app's window changes the running apps;
@@ -306,7 +315,12 @@ mod tests {
     #[test]
     fn apps_order_most_recent_first() {
         let apps = group(
-            &[win(1, "a", 1), win(2, "b", 9), win(3, "c", 1), win(4, "a", 4)],
+            &[
+                win(1, "a", 1),
+                win(2, "b", 9),
+                win(3, "c", 1),
+                win(4, "a", 4),
+            ],
             &[],
         );
         let keys: Vec<_> = apps.iter().map(|a| a.key.clone()).collect();

@@ -70,7 +70,12 @@ impl Widget for View {
 
         let empty = s.spawn(
             me,
-            div().style(LayoutStyle::default().center().width(percent(100.0)).grow(1.0)),
+            div().style(
+                LayoutStyle::default()
+                    .center()
+                    .width(percent(100.0))
+                    .grow(1.0),
+            ),
         );
         s.spawn(
             empty,
@@ -207,7 +212,13 @@ fn wanted(app: &mut App, view: NodeId) -> Vec<Want> {
         return Vec::new();
     }
     let dirs = app.widget::<View>(view).unwrap().icon_dirs.clone();
-    let found: Vec<(AppKey, String, Option<apps::IconFile>, ToplevelId, Vec<ToplevelId>)> = {
+    let found: Vec<(
+        AppKey,
+        String,
+        Option<apps::IconFile>,
+        ToplevelId,
+        Vec<ToplevelId>,
+    )> = {
         let registry = app.resource::<Registry>();
         registry
             .apps()
@@ -219,7 +230,9 @@ fn wanted(app: &mut App, view: NodeId) -> Vec<Want> {
                     (None, AppKey::AppId(id)) => id.clone(),
                     (None, AppKey::Window(_)) => a.title.clone(),
                 };
-                let file = entry.and_then(|e| e.icon.as_deref()).and_then(|i| dirs.find(i));
+                let file = entry
+                    .and_then(|e| e.icon.as_deref())
+                    .and_then(|i| dirs.find(i));
                 (a.key.clone(), name, file, a.front, a.windows.clone())
             })
             .collect()

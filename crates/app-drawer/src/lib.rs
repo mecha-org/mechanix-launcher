@@ -15,8 +15,8 @@ use std::rc::Rc;
 use mecha_wayland::prelude::*;
 use screen::Screen;
 
-use drawer::DrawerBuilder;
 use apps::IconDirs;
+use drawer::DrawerBuilder;
 
 /// The drawer's two faces, Regular and Light Geist Mono, for the host's
 /// `FontBook`.

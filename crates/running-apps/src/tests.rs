@@ -60,7 +60,11 @@ impl ThumbSink for Rc<Sink> {
     }
 
     fn destroy(&self, _: &mut App, thumb: ThumbKey) {
-        let id = self.live.borrow_mut().remove(&thumb).expect("destroyed once");
+        let id = self
+            .live
+            .borrow_mut()
+            .remove(&thumb)
+            .expect("destroyed once");
         self.calls.borrow_mut().push(Call::Destroy(id));
     }
 
@@ -106,7 +110,11 @@ fn entries() -> Vec<DesktopApp> {
         icon: Some(id.into()),
         startup_wm_class: None,
     };
-    vec![entry("camera", "Camera"), entry("clock", "Clock"), entry("files", "Files")]
+    vec![
+        entry("camera", "Camera"),
+        entry("clock", "Clock"),
+        entry("files", "Files"),
+    ]
 }
 
 /// `(app id, entry, windows)`, most recently used first; the first window
@@ -366,7 +374,10 @@ fn tap_activates_front_and_signals() {
 
 #[test]
 fn x_closes_every_window_and_dims() {
-    let mut ui = ui("x", registry(&[("files", Some(2), &[7, 8]), ("clock", Some(1), &[9])]));
+    let mut ui = ui(
+        "x",
+        registry(&[("files", Some(2), &[7, 8]), ("clock", Some(1), &[9])]),
+    );
     ui.emit(Shown);
     let files = ui.cards()[0];
     let close = ui.card(files).close_button();
@@ -394,7 +405,10 @@ fn x_closes_every_window_and_dims() {
     assert!(alpha.is_some_and(|a| a < 1.0), "{alpha:?}");
 
     // One of two windows goes: still closing.
-    ui.set_registry(registry(&[("files", Some(2), &[8]), ("clock", Some(1), &[9])]));
+    ui.set_registry(registry(&[
+        ("files", Some(2), &[8]),
+        ("clock", Some(1), &[9]),
+    ]));
     let files = ui.cards()[0];
     assert!(ui.card(files).closing());
     // Gone.
@@ -404,7 +418,10 @@ fn x_closes_every_window_and_dims() {
 
 #[test]
 fn swipe_away_closes() {
-    let mut ui = ui("swipe", registry(&[("files", Some(2), &[7, 8]), ("clock", Some(1), &[9])]));
+    let mut ui = ui(
+        "swipe",
+        registry(&[("files", Some(2), &[7, 8]), ("clock", Some(1), &[9])]),
+    );
     ui.emit(Shown);
     let files = ui.cards()[0];
 
@@ -422,14 +439,20 @@ fn swipe_away_closes() {
 
 #[test]
 fn only_an_upward_swipe_closes() {
-    let mut ui = ui("updown", registry(&[("files", Some(2), &[7]), ("clock", Some(1), &[9])]));
+    let mut ui = ui(
+        "updown",
+        registry(&[("files", Some(2), &[7]), ("clock", Some(1), &[9])]),
+    );
     ui.emit(Shown);
     let files = ui.cards()[0];
     ui.drag(files, 200.0);
     assert!(ui.closed.borrow().is_empty(), "down closes nothing");
     assert_eq!(ui.card(files).offset(), 0.0);
     ui.drag_by(0, files, Point::new(-200.0, 0.0));
-    assert!(ui.closed.borrow().is_empty(), "sideways scrolls, it closes nothing");
+    assert!(
+        ui.closed.borrow().is_empty(),
+        "sideways scrolls, it closes nothing"
+    );
     assert_eq!(ui.card(files).offset(), 0.0);
     assert!(!ui.card(files).closing());
 }
@@ -448,8 +471,14 @@ fn cards_sit_side_by_side() {
         assert_eq!(pair[0].y(), pair[1].y(), "one row");
         assert!(pair[1].x() >= pair[0].x() + pair[0].width(), "{rects:?}");
     }
-    assert!(rects[0].x() + rects[0].width() < W, "the next card peeks in");
-    assert!(rects[0].y() >= 0.0 && rects[0].y() + rects[0].height() <= H, "fits the height");
+    assert!(
+        rects[0].x() + rects[0].width() < W,
+        "the next card peeks in"
+    );
+    assert!(
+        rects[0].y() >= 0.0 && rects[0].y() + rects[0].height() <= H,
+        "fits the height"
+    );
 }
 
 #[test]
@@ -482,7 +511,11 @@ fn shown_creates_thumbnails_and_hidden_destroys_them() {
     ui.emit(Shown);
     assert_eq!(
         ui.sink.take(),
-        [Call::Create(id(1)), Call::Create(id(2)), Call::Create(id(3))]
+        [
+            Call::Create(id(1)),
+            Call::Create(id(2)),
+            Call::Create(id(3))
+        ]
     );
 
     // The first frame places each, at the box's window-local position.
@@ -496,7 +529,10 @@ fn shown_creates_thumbnails_and_hidden_destroys_them() {
         assert_eq!(*t, ui.card(*card).front());
         assert_eq!((p.x, p.y), (r.x().round() as i32, r.y().round() as i32));
         assert!((p.scale - r.width() / W).abs() < 1e-4, "{p:?} {r:?}");
-        assert!((r.height() / r.width() - H / W).abs() < 0.01, "box has the output's aspect");
+        assert!(
+            (r.height() / r.width() - H / W).abs() < 0.01,
+            "box has the output's aspect"
+        );
         assert_eq!(p.alpha, 1.0);
     }
 
@@ -540,7 +576,10 @@ fn closed_app_drops_its_card() {
     ui.emit(Shown);
     ui.frame();
     ui.sink.take();
-    ui.set_registry(registry(&[("clock", Some(1), &[1]), ("files", Some(2), &[3])]));
+    ui.set_registry(registry(&[
+        ("clock", Some(1), &[1]),
+        ("files", Some(2), &[3]),
+    ]));
     assert_eq!(ui.names(), ["Clock", "Files"]);
     let calls = ui.sink.take();
     assert!(calls.contains(&Call::Destroy(id(2))), "{calls:?}");
@@ -563,7 +602,10 @@ fn front_change_replaces_the_thumbnail() {
 fn new_app_while_shown_gets_a_thumbnail() {
     let mut ui = ui("new", registry(&[("clock", Some(1), &[1])]));
     ui.emit(Shown);
-    ui.set_registry(registry(&[("camera", Some(0), &[2]), ("clock", Some(1), &[1])]));
+    ui.set_registry(registry(&[
+        ("camera", Some(0), &[2]),
+        ("clock", Some(1), &[1]),
+    ]));
     assert_eq!(ui.names(), ["Camera", "Clock"]);
     assert_eq!(ui.sink.live(), [id(1), id(2)]);
 }
@@ -592,12 +634,19 @@ fn in_place_thumbnail_recreation_commits_on_an_idle_frame() {
     assert_eq!(after.len(), 1);
     assert_eq!(after[0].0, id(8));
     assert_eq!(after[0].1, before[0].1, "placed where the old one was");
-    assert_eq!(ui.sink.commits(), [ui.win], "nothing else redraws, so ask for the commit");
+    assert_eq!(
+        ui.sink.commits(),
+        [ui.win],
+        "nothing else redraws, so ask for the commit"
+    );
 }
 
 #[test]
 fn hidden_mid_swipe_resets_the_card() {
-    let mut ui = ui("midswipe", registry(&[("files", Some(2), &[7]), ("clock", Some(1), &[9])]));
+    let mut ui = ui(
+        "midswipe",
+        registry(&[("files", Some(2), &[7]), ("clock", Some(1), &[9])]),
+    );
     ui.emit(Shown);
     let files = ui.cards()[0];
     let at = ui.grip(files);

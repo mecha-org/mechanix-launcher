@@ -68,7 +68,13 @@ impl ThumbSink for WaylandThumbs {
 
     fn set(&self, app: &mut App, thumb: ThumbKey, p: Place) {
         if let Some(t) = self.live.borrow().get(&thumb) {
-            t.set(&mut app.resource_mut::<Wayland>(), p.x, p.y, p.scale, p.alpha);
+            t.set(
+                &mut app.resource_mut::<Wayland>(),
+                p.x,
+                p.y,
+                p.scale,
+                p.alpha,
+            );
         }
     }
 

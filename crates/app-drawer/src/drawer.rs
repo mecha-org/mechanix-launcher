@@ -7,11 +7,11 @@ use std::rc::Rc;
 use mecha_wayland::prelude::*;
 use screen::{AppLaunched, Hidden, Shown};
 
-use crate::{Activator, Launcher};
-use apps::{DesktopApp, Registry, RegistryChanged, IconCache, IconDirs, RowIcon, scan};
 use crate::rank::{Hit, Ranker, fit};
 use crate::row::{GAP, NAME_PX, RowBuilder, SIDE, Tapped};
 use crate::search_bar::SearchBar;
+use crate::{Activator, Launcher};
+use apps::{DesktopApp, IconCache, IconDirs, Registry, RegistryChanged, RowIcon, scan};
 
 /// Geist Mono advances 600 of its 1000 units per em for every glyph.
 const ADVANCE_EM: f32 = 0.6;
@@ -156,7 +156,9 @@ impl Signal for Activate {}
 /// Production activator: raise the window for the seat, if the compositor
 /// offers toplevel management.
 pub(crate) fn activate_toplevel(app: &mut App, id: ToplevelId) {
-    if !(app.has_resource::<Toplevels>() && app.has_resource::<Wayland>() && app.has_resource::<WlSeat>())
+    if !(app.has_resource::<Toplevels>()
+        && app.has_resource::<Wayland>()
+        && app.has_resource::<WlSeat>())
     {
         return;
     }
@@ -423,8 +425,8 @@ mod tests {
 
     use super::*;
     use crate::AppDrawer;
-    use apps::{AppKey, IconDirs, RunningApp};
     use crate::row::Row;
+    use apps::{AppKey, IconDirs, RunningApp};
 
     const SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" fill="#0a0"/></svg>"##;
 
@@ -701,15 +703,13 @@ mod tests {
     }
 
     fn registry_with(running: &[(&str, u32)]) -> Registry {
-        let entries = vec![
-            DesktopApp {
-                id: "chromium.desktop".into(),
-                name: "Chromium".into(),
-                exec: vec!["chromium-browser".into(), "--incognito".into()],
-                icon: None,
-                startup_wm_class: None,
-            },
-        ];
+        let entries = vec![DesktopApp {
+            id: "chromium.desktop".into(),
+            name: "Chromium".into(),
+            exec: vec!["chromium-browser".into(), "--incognito".into()],
+            icon: None,
+            startup_wm_class: None,
+        }];
         let apps = running
             .iter()
             .map(|&(app_id, n)| RunningApp {
