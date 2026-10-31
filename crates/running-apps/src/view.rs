@@ -1,4 +1,4 @@
-//! The screen: a vertical list of cards kept in step with the registry,
+//! The screen: a row of cards kept in step with the registry,
 //! and the previews that go with them while it is shown.
 
 use std::rc::Rc;
@@ -9,11 +9,13 @@ use mecha_wayland::prelude::*;
 use screen::{Hidden, Shown};
 
 use crate::WindowAction;
-use crate::card::{self, Activate, Card, CardBuilder, CloseWindows, SIDE, hole_style};
+use crate::card::{self, Activate, Card, CardBuilder, CloseWindows, HEADER, SIDE, hole_style};
 use crate::thumbs::{Place, ThumbKey, ThumbSink};
 
 /// Glyph size of the ✕.
 const CROSS: u32 = 20;
+/// A card's share of the window's width, leaving the next one peeking in.
+const CARD_SHARE: f32 = 0.75;
 
 pub(crate) struct ViewBuilder {
     pub icon_dirs: Rc<IconDirs>,
@@ -41,8 +43,9 @@ pub(crate) struct View {
     empty: NodeId,
     slots: Vec<Slot>,
     shown: bool,
-    /// The preview box's height for the window's width and aspect; 0
-    /// before the first layout.
+    /// Each card's width, and its preview box's height for the window's
+    /// aspect; 0 before the first layout.
+    card_width: f32,
     hole_height: f32,
 }
 
@@ -78,9 +81,10 @@ impl Widget for View {
         );
         let list = s.spawn(
             me,
-            scrollable().style(
+            scrollable().axis(Axis::Horizontal).style(
                 LayoutStyle::default()
-                    .block()
+                    .row()
+                    .align_items(Align::Center)
                     .width(percent(100.0))
                     .grow(1.0)
                     .min_height(px(0.0))
@@ -100,6 +104,7 @@ impl Widget for View {
             empty: empty.id(),
             slots: Vec::new(),
             shown: false,
+            card_width: 0.0,
             hole_height: 0.0,
         }
     }
@@ -273,9 +278,9 @@ fn sync(app: &mut App, view: NodeId) {
         for slot in std::mem::take(&mut kept) {
             drop_slot(app, &*sink, slot);
         }
-        let (list, cross, hole_height) = {
+        let (list, cross, width, hole_height) = {
             let v = app.widget::<View>(view).unwrap();
-            (v.list, v.cross, v.hole_height)
+            (v.list, v.cross, v.card_width, v.hole_height)
         };
         for w in want {
             let closing = closing.contains(&w.key);
@@ -289,6 +294,7 @@ fn sync(app: &mut App, view: NodeId) {
                         cross,
                         front: w.front,
                         windows: w.windows,
+                        width,
                         hole_height,
                         closing,
                     },
@@ -310,7 +316,7 @@ fn sync(app: &mut App, view: NodeId) {
     let (show_list, show_empty) = if none {
         (Display::Hidden, Display::Flex)
     } else {
-        (Display::Block, Display::Hidden)
+        (Display::Flex, Display::Hidden)
     };
     for (node, display) in [(list, show_list), (empty, show_empty)] {
         if app.component::<LayoutStyle>(node).unwrap().display != display {
@@ -369,27 +375,32 @@ fn sync_thumbs(app: &mut App, view: NodeId) {
 }
 
 /// The preview box keeps the window's aspect: apps on the phone fill the
-/// output, and this screen's window does too. With no previews to show
-/// (a compositor without `phosh_private`) there is no box: the cards are
-/// headers only.
+/// output, and this screen's window does too. A card takes most of the
+/// width, narrower when header and box would not fit the height. With no
+/// previews to show (a compositor without `phosh_private`) there is no
+/// box: the cards are headers only.
 fn fit_holes(app: &mut App, _: &LayoutDone) {
     for view in views(app) {
         let Some(size) = window_size(app, view) else {
             continue;
         };
-        let height = if app.widget::<View>(view).unwrap().thumbs.available(app) {
-            let width = (size.width - 2.0 * SIDE).max(0.0);
-            (width * size.height / size.width).round()
+        let aspect = size.height / size.width;
+        let (width, height) = if app.widget::<View>(view).unwrap().thumbs.available(app) {
+            let tall = (size.height - 2.0 * SIDE - HEADER).max(0.0);
+            let width = (size.width * CARD_SHARE).min(tall / aspect).round();
+            (width, (width * aspect).round())
         } else {
-            0.0
+            ((size.width * CARD_SHARE).round(), 0.0)
         };
         let v = app.widget_mut::<View>(view).unwrap();
-        if v.hole_height == height {
+        if (v.card_width, v.hole_height) == (width, height) {
             continue;
         }
+        v.card_width = width;
         v.hole_height = height;
         let cards: Vec<NodeId> = v.slots.iter().map(|s| s.card).collect();
         for card in cards {
+            card::set_width(app, card, width);
             let Some(hole) = app.widget::<Card>(card).map(Card::hole) else {
                 continue;
             };

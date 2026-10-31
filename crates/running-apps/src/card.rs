@@ -7,16 +7,16 @@ use screen::AppLaunched;
 
 /// Between the screen's edges and a card.
 pub(crate) const SIDE: f32 = 24.0;
-/// Under each card.
+/// Between neighbouring cards.
 pub(crate) const GAP: f32 = 24.0;
-const HEADER: f32 = 56.0;
+pub(crate) const HEADER: f32 = 56.0;
 const ICON: f32 = 32.0;
 const NAME_PX: f32 = 20.0;
 /// The ✕'s touch target.
 const CLOSE: f32 = 48.0;
-/// A sideways move past this many pixels makes the press a swipe.
+/// An upward move past this many pixels makes the press a swipe.
 const SLOP: f32 = 12.0;
-/// A swipe released this far out closes the app.
+/// A swipe released this far up closes the app.
 const SWIPE_AWAY: f32 = 120.0;
 /// A swipe this far out has faded as far as it fades.
 const FADE_OVER: f32 = 240.0;
@@ -40,6 +40,7 @@ pub(crate) struct CardBuilder {
     pub cross: SpriteId,
     pub front: ToplevelId,
     pub windows: Vec<ToplevelId>,
+    pub width: f32,
     pub hole_height: f32,
     pub closing: bool,
 }
@@ -51,7 +52,7 @@ impl Build for CardBuilder {
 struct Drag {
     contact: ContactId,
     origin: Point,
-    /// Past the slop sideways: the card holds the contact.
+    /// Past the slop upward: the card holds the contact.
     swiping: bool,
 }
 
@@ -63,8 +64,9 @@ pub(crate) struct Card {
     pub(crate) windows: Vec<ToplevelId>,
     closing: bool,
     drag: Option<Drag>,
-    /// How far a swipe has moved the card sideways.
-    dx: f32,
+    /// How far a swipe has moved the card up (negative).
+    dy: f32,
+    width: f32,
     /// The release that ended a swipe is followed by a `Clicked`.
     swallow_click: bool,
     header: NodeId,
@@ -97,7 +99,7 @@ impl Card {
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn offset(&self) -> f32 {
-        self.dx
+        self.dy
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -120,18 +122,19 @@ impl Card {
         if self.closing {
             return DIMMED;
         }
-        let t = (self.dx.abs() / FADE_OVER).min(1.0);
+        let t = (self.dy.abs() / FADE_OVER).min(1.0);
         1.0 - t * (1.0 - FADE_TO)
     }
 }
 
-fn card_style(dx: f32) -> LayoutStyle {
+fn card_style(dy: f32, width: f32) -> LayoutStyle {
     LayoutStyle::default()
         .column()
         .relative()
-        .inset(Insets::new(auto(), auto(), auto(), px(dx)))
-        .width(percent(100.0))
-        .margin(Insets::new(px(0.0), px(0.0), px(GAP), px(0.0)))
+        .inset(Insets::new(px(dy), auto(), auto(), auto()))
+        .width(px(width))
+        .shrink(0.0)
+        .margin(Insets::new(px(0.0), px(GAP), px(0.0), px(0.0)))
 }
 
 pub(crate) fn hole_style(height: f32) -> LayoutStyle {
@@ -145,7 +148,7 @@ impl Widget for Card {
     type Builder = CardBuilder;
 
     fn build(b: CardBuilder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
-        *s.component_mut::<LayoutStyle>(me).unwrap() = card_style(0.0);
+        *s.component_mut::<LayoutStyle>(me).unwrap() = card_style(0.0, b.width);
 
         let header = s.spawn(
             me,
@@ -231,7 +234,8 @@ impl Widget for Card {
             windows: b.windows,
             closing: b.closing,
             drag: None,
-            dx: 0.0,
+            dy: 0.0,
+            width: b.width,
             swallow_click: false,
             header: header.id(),
             close: close.id(),
@@ -251,18 +255,18 @@ fn veil_paint(opacity: f32) -> Paint {
     }
 }
 
-/// Moves the card sideways and repaints its veil to match.
-fn set_offset(ctx: &mut Context<'_, Card>, dx: f32) {
-    ctx.me().dx = dx;
+/// Moves the card up and repaints its veil to match.
+fn set_offset(ctx: &mut Context<'_, Card>, dy: f32) {
+    ctx.me().dy = dy;
     restyle(ctx);
 }
 
 fn restyle(ctx: &mut Context<'_, Card>) {
-    let (dx, veil, paint) = {
+    let (dy, width, veil, paint) = {
         let c = ctx.me();
-        (c.dx, c.veil, veil_paint(c.opacity()))
+        (c.dy, c.width, c.veil, veil_paint(c.opacity()))
     };
-    let style = card_style(dx);
+    let style = card_style(dy, width);
     if *ctx.component::<LayoutStyle>().unwrap() != style {
         *ctx.component_mut::<LayoutStyle>().unwrap() = style;
     }
@@ -270,6 +274,18 @@ fn restyle(ctx: &mut Context<'_, Card>) {
         && *v.component::<Paint>().unwrap() != paint
     {
         *v.component_mut::<Paint>().unwrap() = paint;
+    }
+}
+
+/// Sets the card's width, for the window it shows in.
+pub(crate) fn set_width(app: &mut App, card: NodeId, width: f32) {
+    let Some(c) = app.widget_mut::<Card>(card) else {
+        return;
+    };
+    c.width = width;
+    let style = card_style(c.dy, width);
+    if app.component::<LayoutStyle>(card).is_some_and(|s| *s != style) {
+        *app.component_mut::<LayoutStyle>(card).unwrap() = style;
     }
 }
 
@@ -281,10 +297,10 @@ pub(crate) fn reset_gesture(app: &mut App, card: NodeId) {
         return;
     };
     c.drag = None;
-    c.dx = 0.0;
+    c.dy = 0.0;
     c.swallow_click = false;
     let (veil, paint) = (c.veil.id(), veil_paint(c.opacity()));
-    let style = card_style(0.0);
+    let style = card_style(0.0, c.width);
     if app.component::<LayoutStyle>(card).is_some_and(|s| *s != style) {
         *app.component_mut::<LayoutStyle>(card).unwrap() = style;
     }
@@ -336,7 +352,8 @@ fn on_moved(ctx: &mut Context<'_, Card>, e: &PressMoved) {
     }
     let (dx, dy) = (e.position.x - drag.origin.x, e.position.y - drag.origin.y);
     if !drag.swiping {
-        if dx.abs() <= SLOP || dx.abs() <= dy.abs() {
+        // Only up: sideways belongs to the list's scroll.
+        if -dy <= SLOP || -dy <= dx.abs() {
             return;
         }
         if !ctx.claim_contact(e.contact) {
@@ -346,7 +363,7 @@ fn on_moved(ctx: &mut Context<'_, Card>, e: &PressMoved) {
             d.swiping = true;
         }
     }
-    set_offset(ctx, dx);
+    set_offset(ctx, dy.min(0.0));
 }
 
 fn on_release(ctx: &mut Context<'_, Card>, e: &Release) {
@@ -357,8 +374,8 @@ fn on_release(ctx: &mut Context<'_, Card>, e: &Release) {
         return;
     }
     ctx.me().swallow_click = true;
-    let away = (e.position.x - drag.origin.x).abs() >= SWIPE_AWAY;
-    ctx.me().dx = 0.0;
+    let away = drag.origin.y - e.position.y >= SWIPE_AWAY;
+    ctx.me().dy = 0.0;
     if away {
         close_app(ctx);
     } else {

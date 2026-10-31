@@ -276,21 +276,22 @@ impl Ui {
         self.app.flush();
     }
 
-    /// A finger drag from the middle of `card`'s header by `dx`.
-    fn drag(&mut self, card: NodeId, dx: f32) {
-        self.drag_by(0, card, dx);
+    /// A finger drag from `card`'s header, `dy` up (negative) or down.
+    fn drag(&mut self, card: NodeId, dy: f32) {
+        self.drag_by(0, card, Point::new(0.0, dy));
     }
 
-    /// [`Ui::drag`] with touch point `touch`.
-    fn drag_by(&mut self, touch: u32, card: NodeId, dx: f32) {
+    /// A finger drag from `card`'s header by `d`, with touch point `touch`.
+    fn drag_by(&mut self, touch: u32, card: NodeId, d: Point) {
         let at = self.grip(card);
         self.contact_by(touch, ContactPhase::Moved, at);
         self.contact_by(touch, ContactPhase::Pressed, at);
         for i in 1..=4 {
-            let step = Point::new(at.x + dx * i as f32 / 4.0, at.y);
+            let t = i as f32 / 4.0;
+            let step = Point::new(at.x + d.x * t, at.y + d.y * t);
             self.contact_by(touch, ContactPhase::Moved, step);
         }
-        let end = Point::new(at.x + dx, at.y);
+        let end = Point::new(at.x + d.x, at.y + d.y);
         self.contact_by(touch, ContactPhase::Released, end);
         self.app.tick();
     }
@@ -407,16 +408,48 @@ fn swipe_away_closes() {
     ui.emit(Shown);
     let files = ui.cards()[0];
 
-    ui.drag(files, 30.0);
+    ui.drag(files, -30.0);
     assert!(ui.closed.borrow().is_empty(), "a short drag closes nothing");
     assert!(ui.activated.borrow().is_empty(), "nor taps");
     assert!(!ui.card(files).closing());
     assert_eq!(ui.card(files).offset(), 0.0, "it springs back");
 
-    ui.drag(files, 200.0);
+    ui.drag(files, -200.0);
     assert_eq!(*ui.closed.borrow(), [id(7), id(8)]);
     assert!(ui.activated.borrow().is_empty());
     assert!(ui.card(files).closing());
+}
+
+#[test]
+fn only_an_upward_swipe_closes() {
+    let mut ui = ui("updown", registry(&[("files", Some(2), &[7]), ("clock", Some(1), &[9])]));
+    ui.emit(Shown);
+    let files = ui.cards()[0];
+    ui.drag(files, 200.0);
+    assert!(ui.closed.borrow().is_empty(), "down closes nothing");
+    assert_eq!(ui.card(files).offset(), 0.0);
+    ui.drag_by(0, files, Point::new(-200.0, 0.0));
+    assert!(ui.closed.borrow().is_empty(), "sideways scrolls, it closes nothing");
+    assert_eq!(ui.card(files).offset(), 0.0);
+    assert!(!ui.card(files).closing());
+}
+
+#[test]
+fn cards_sit_side_by_side() {
+    let mut ui = ui("row", three());
+    ui.emit(Shown);
+    ui.frame();
+    let rects: Vec<_> = ui
+        .cards()
+        .iter()
+        .map(|&c| ui.app.component::<Layout>(c).unwrap().rect)
+        .collect();
+    for pair in rects.windows(2) {
+        assert_eq!(pair[0].y(), pair[1].y(), "one row");
+        assert!(pair[1].x() >= pair[0].x() + pair[0].width(), "{rects:?}");
+    }
+    assert!(rects[0].x() + rects[0].width() < W, "the next card peeks in");
+    assert!(rects[0].y() >= 0.0 && rects[0].y() + rects[0].height() <= H, "fits the height");
 }
 
 #[test]
@@ -424,21 +457,22 @@ fn swiping_card_fades_its_preview() {
     let mut ui = ui("fade", registry(&[("clock", Some(1), &[9])]));
     ui.emit(Shown);
     ui.frame();
-    ui.sink.take();
+    let (_, rest) = sets(&ui.sink.take())[0];
     let card = ui.cards()[0];
     let header = ui.card(card).header();
     let r = ui.app.component::<ComputedLayout>(header).unwrap().rect;
     let at = Point::new(r.x() + 40.0, r.y() + r.height() / 2.0);
     ui.contact(ContactPhase::Moved, at);
     ui.contact(ContactPhase::Pressed, at);
-    ui.contact(ContactPhase::Moved, Point::new(at.x + 80.0, at.y));
+    ui.contact(ContactPhase::Moved, Point::new(at.x, at.y - 80.0));
     ui.app.tick();
     ui.frame();
     let s = sets(&ui.sink.take());
     assert_eq!(s.len(), 1);
     let (_, p) = s[0];
     assert!(p.alpha < 1.0 && p.alpha > 0.0, "{p:?}");
-    assert!(p.x > 24, "the preview moves with the card: {p:?}");
+    assert_eq!(p.y, rest.y - 80, "the preview moves with the card: {p:?}");
+    assert_eq!(p.x, rest.x);
 }
 
 #[test]
@@ -489,14 +523,14 @@ fn scroll_moves_thumbnails() {
     assert!(ui.sink.take().is_empty(), "an idle frame sends nothing");
 
     let list = ui.app.widget::<View>(ui.view).unwrap().list();
-    ui.app.component_mut::<Viewport>(list).unwrap().scroll.y = 50.0;
+    ui.app.component_mut::<Viewport>(list).unwrap().scroll.x = 50.0;
     ui.frame();
     let after = sets(&ui.sink.take());
     assert_eq!(after.len(), 3);
     for ((t0, p0), (t1, p1)) in before.iter().zip(&after) {
         assert_eq!(t0, t1);
-        assert_eq!(p1.y, p0.y - 50);
-        assert_eq!(p1.x, p0.x);
+        assert_eq!(p1.x, p0.x - 50);
+        assert_eq!(p1.y, p0.y);
     }
 }
 
@@ -569,9 +603,9 @@ fn hidden_mid_swipe_resets_the_card() {
     let at = ui.grip(files);
     ui.contact(ContactPhase::Moved, at);
     ui.contact(ContactPhase::Pressed, at);
-    ui.contact(ContactPhase::Moved, Point::new(at.x + 80.0, at.y));
+    ui.contact(ContactPhase::Moved, Point::new(at.x, at.y - 80.0));
     ui.app.tick();
-    assert_eq!(ui.card(files).offset(), 80.0);
+    assert_eq!(ui.card(files).offset(), -80.0);
 
     // Swiped home with the finger still down; that touch never ends here.
     ui.emit(Hidden);
@@ -580,7 +614,7 @@ fn hidden_mid_swipe_resets_the_card() {
 
     // The next swipe, by a new touch point, works.
     ui.emit(Shown);
-    ui.drag_by(1, files, 200.0);
+    ui.drag_by(1, files, Point::new(0.0, -200.0));
     assert_eq!(*ui.closed.borrow(), [id(7)]);
 }
 
