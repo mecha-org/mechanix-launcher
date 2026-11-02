@@ -192,9 +192,7 @@ mod tests {
             .add_module(PaintModule)
             .add_module(MechanixTheme::dark());
         let mut atlas = Atlas::new();
-        let font = atlas
-            .add_font(assets::fonts::GEIST_MONO)
-            .unwrap();
+        let font = atlas.add_font(assets::fonts::GEIST_MONO).unwrap();
         app.insert_resource(atlas);
         app.insert_resource(FontBook::new(font));
         app.insert_resource(Requests {

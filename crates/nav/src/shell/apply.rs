@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use mecha_wayland::prelude::*;
+use screen::{Hidden, Shown};
 
 use crate::core::{AreaId, ContainerId, Stack};
 
@@ -20,6 +21,16 @@ pub(crate) struct NavWindow {
     pub(crate) no_input: bool,
 }
 
+/// Signalled when a container is shown or hidden, as its screen hears
+/// `Shown` or `Hidden`: for the host, which sees containers by id rather
+/// than by screen node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContainerShown {
+    pub id: ContainerId,
+    pub shown: bool,
+}
+impl Signal for ContainerShown {}
+
 /// What a [`NavModule::action`](super::NavModule::action) runs.
 pub(crate) type Action = Rc<dyn Fn(&mut App)>;
 
@@ -30,6 +41,8 @@ pub(crate) struct ContainerNodes {
     pub(crate) window: usize,
     /// Holds the screen and any child containers' nodes.
     pub(crate) node: NodeId,
+    /// The node the screen's `build` returned: hears `Shown` and `Hidden`.
+    pub(crate) screen: NodeId,
     /// The black cover, the container node's last child.
     pub(crate) cover: NodeId,
 }
@@ -85,6 +98,8 @@ pub(crate) fn window_layers(nav: &Nav) -> Vec<(NodeId, Layer)> {
 
 /// Pushes the stack's state onto every container node, cover and window,
 /// and asks for a frame on each window with an animating container.
+/// A container whose display changes has `Shown` or `Hidden` emitted at
+/// its screen.
 /// A window with no visible container is not unmapped but moved to
 /// `Layer::Background`, and back to its own layer when shown; hidden
 /// windows stay mapped there and Home covers them this round.
@@ -108,7 +123,14 @@ pub(crate) fn apply(app: &mut App) {
                 } else {
                     Display::Hidden
                 };
-                (c.node, c.cover, display, nav.stack.visual(c.id).cover)
+                (
+                    c.id,
+                    c.node,
+                    c.screen,
+                    c.cover,
+                    display,
+                    nav.stack.visual(c.id).cover,
+                )
             })
             .collect();
         let windows = window_layers(nav);
@@ -122,9 +144,16 @@ pub(crate) fn apply(app: &mut App) {
         (containers, windows, frames)
     };
 
-    for (node, cover, display, alpha) in containers {
+    for (id, node, screen, cover, display, alpha) in containers {
         if app.component::<LayoutStyle>(node).unwrap().display != display {
             app.component_mut::<LayoutStyle>(node).unwrap().display = display;
+            let shown = display == Display::Flex;
+            if shown {
+                app.emit(Shown, screen);
+            } else {
+                app.emit(Hidden, screen);
+            }
+            app.signal(ContainerShown { id, shown });
         }
         let paint = cover_paint(alpha);
         if *app.component::<Paint>(cover).unwrap() != paint {

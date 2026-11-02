@@ -6,6 +6,11 @@ edition = "2024"
 [dependencies]
 mecha-wayland.workspace = true
 screen.workspace = true
+apps.workspace = true
+assets.workspace = true
+tracing = "0.1"
+nucleo-matcher = "0.3"
 
 [dev-dependencies]
+png = "0.18"
 status-bar.workspace = true

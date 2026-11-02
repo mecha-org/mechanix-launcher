@@ -10,7 +10,7 @@ keyboard.workspace = true
 screen.workspace = true
 home.workspace = true
 app-drawer.workspace = true
-search.workspace = true
+apps.workspace = true
 running-apps.workspace = true
 notifications.workspace = true
 quick-settings.workspace = true
@@ -26,7 +26,7 @@ members = [
     "crates/gestures",
     "crates/screen",
     "crates/app-drawer",
-    "crates/search",
+    "crates/apps",
     "crates/running-apps",
     "crates/notifications",
     "crates/quick-settings",
@@ -44,7 +44,7 @@ home = { path = "crates/home" }
 gestures = { path = "crates/gestures" }
 screen = { path = "crates/screen" }
 app-drawer = { path = "crates/app-drawer" }
-search = { path = "crates/search" }
+apps = { path = "crates/apps" }
 running-apps = { path = "crates/running-apps" }
 notifications = { path = "crates/notifications" }
 quick-settings = { path = "crates/quick-settings" }

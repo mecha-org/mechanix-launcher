@@ -10,6 +10,21 @@ pub trait Screen: 'static {
     fn build(&self, app: &mut App, parent: NodeId) -> NodeId;
 }
 
+/// Emitted by the nav at the node a [`Screen::build`] returned when the
+/// screen's container is shown.
+pub struct Shown;
+impl Event for Shown {}
+
+/// Emitted by the nav at the node a [`Screen::build`] returned when the
+/// screen's container is hidden. A screen that starts closed hears one
+/// `Hidden` at startup; one that starts open hears no `Shown`.
+pub struct Hidden;
+impl Event for Hidden {}
+
+/// Signalled by a screen after it starts an app.
+pub struct AppLaunched;
+impl Signal for AppLaunched {}
+
 /// Spawns a themed full-size page showing `label` centred. Used by screens
 /// that have no real page yet.
 pub fn placeholder_page(app: &mut App, parent: NodeId, label: &str) -> NodeId {

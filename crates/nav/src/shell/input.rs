@@ -94,6 +94,7 @@ mod tests {
             contact: ContactId::Touch(0),
             phase,
             position: Point::new(x, y),
+            time: 0,
         });
         app.flush();
     }

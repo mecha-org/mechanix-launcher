@@ -1,0 +1,14 @@
+[package]
+name = "apps"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mecha-wayland.workspace = true
+screen.workspace = true
+assets.workspace = true
+tracing = "0.1"
+
+[dev-dependencies]
+png = "0.18"
+wayland = { git = "https://github.com/mecha-org/mecha-wayland", branch = "dev", features = ["fake"] }

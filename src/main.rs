@@ -1,20 +1,19 @@
-use app_drawer::AppDrawer;
+use app_drawer::{AppDrawer, GEIST_MONO, GEIST_MONO_LIGHT};
+use apps::RegistryModule;
 use home::Home;
-use keyboard::{KeyboardModule, show_keyboard};
+use keyboard::{KeyboardModule, hide_keyboard, show_keyboard, suspend_keyboard_zone};
 use mecha_wayland::mechanix_widgets::prelude::FontBook;
 use mecha_wayland::prelude::*;
 use nav::core::{
-    AreaId, BOTTOM_EDGE, ContainerId, Direction, FADE, INSTANT, NavConfig, Span, TOP_EDGE, Timing,
-    container, swipe,
+    AreaId, BOTTOM_EDGE, ContainerId, Direction, ExternalEvent, FADE, INSTANT, NavConfig,
+    OnExternal, Span, TOP_EDGE, Timing, container, gated, swipe,
 };
-use nav::shell::{NavModule, nav_window};
+use nav::shell::{ContainerShown, NavModule, nav_window};
 use notifications::{Notifications, NotificationsModule};
 use quick_settings::{QuickSettingsModule, QuickSettingsScreen};
-use running_apps::RunningApps;
-use search::Search;
+use running_apps::{RunningApps, RunningAppsModule};
 use status_bar::{
-    DEFAULT_BAR_HEIGHT, DEFAULT_ICON_SIZE, GEIST_MONO_BYTES, StatusBarModule, StatusBarScreen,
-    StatusIcons,
+    DEFAULT_BAR_HEIGHT, DEFAULT_ICON_SIZE, StatusBarModule, StatusBarScreen, StatusIcons,
 };
 
 const HOME: AreaId = AreaId("home");
@@ -24,11 +23,39 @@ const STATUS_BAR: AreaId = AreaId("status-bar");
 
 const HOME_ID: ContainerId = ContainerId("home");
 const DRAWER: ContainerId = ContainerId("drawer");
-const SEARCH: ContainerId = ContainerId("search");
 const RUNNING: ContainerId = ContainerId("running");
 const NOTIFICATIONS: ContainerId = ContainerId("notifications");
 const QUICK_SETTINGS: ContainerId = ContainerId("quick_settings");
 const STATUS: ContainerId = ContainerId("status");
+
+/// The launcher screens that cover apps. While any is open the keyboard
+/// reserves no space, so they and the apps under them keep their full
+/// size; opening one hides the keyboard.
+const COVERS: [ContainerId; 4] = [HOME_ID, RUNNING, NOTIFICATIONS, QUICK_SETTINGS];
+
+/// The [`COVERS`] open now.
+struct OpenCovers(Vec<ContainerId>);
+impl Resource for OpenCovers {}
+
+fn on_container_shown(app: &mut App, s: &ContainerShown) {
+    if !COVERS.contains(&s.id) {
+        return;
+    }
+    let any_open = {
+        let mut open = app.resource_mut::<OpenCovers>();
+        open.0.retain(|&id| id != s.id);
+        if s.shown {
+            open.0.push(s.id);
+        }
+        !open.0.is_empty()
+    };
+    // Hiding clears the zone first, so the app under resizes as the
+    // screen comes up.
+    if s.shown {
+        hide_keyboard(app);
+    }
+    suspend_keyboard_zone(app, any_open);
+}
 
 const ALL_SIDES: Anchor = Anchor::from_bits_truncate(
     Anchor::TOP.bits() | Anchor::BOTTOM.bits() | Anchor::LEFT.bits() | Anchor::RIGHT.bits(),
@@ -65,30 +92,34 @@ fn panel(id: ContainerId, screen: impl screen::Screen, span: Span) -> nav::core:
         .close(swipe(PANEL, Direction::Up, Timing::Any), INSTANT)
 }
 
-fn navigation(cfg: NavConfig) -> NavModule {
+fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
     let strip = LayoutStyle::default().height(px(cfg.bottom_strip_height));
     let bar = LayoutStyle::default().height(px(DEFAULT_BAR_HEIGHT));
     let sides = Anchor::LEFT | Anchor::RIGHT;
 
+    // The drawer closes on a down drag only while its list rests at the top;
+    // further down, the drag scrolls.
+    let at_top = drawer.at_top();
     let home = container(HOME_ID, Home)
         .open(bottom_quick(), FADE)
+        .close(OnExternal(ExternalEvent::AppLaunched), INSTANT)
         .child(
-            container(DRAWER, AppDrawer)
-                .open_close(swipe(HOME, Direction::Up, Timing::Any), INSTANT)
-                .close(bottom_quick(), INSTANT),
-        )
-        .child(
-            container(SEARCH, Search)
-                .open_close(swipe(HOME, Direction::Right, Timing::Any), INSTANT)
+            container(DRAWER, drawer)
+                .open(swipe(HOME, Direction::Up, Timing::Any), INSTANT)
+                .close(
+                    gated(swipe(HOME, Direction::Down, Timing::Any), at_top),
+                    INSTANT,
+                )
                 .close(bottom_quick(), INSTANT),
         )
         .initially_open();
-    let running = container(RUNNING, RunningApps)
+    let running = container(RUNNING, RunningApps::new())
         .open(
             swipe(BOTTOM_EDGE, Direction::Up, Timing::Held).span(Span::Middle),
             INSTANT,
         )
-        .close(bottom_quick(), INSTANT);
+        .close(bottom_quick(), INSTANT)
+        .close(OnExternal(ExternalEvent::AppLaunched), INSTANT);
 
     NavModule::new(cfg)
         .action(bottom_corner(Span::LeftCorner), show_keyboard)
@@ -109,11 +140,17 @@ fn navigation(cfg: NavConfig) -> NavModule {
             )
             .container(running),
         )
-        .window(nav_window(
-            BOTTOM_EDGE,
-            role(Layer::Top, Anchor::BOTTOM | sides, 0, "bottom-edge"),
-            strip,
-        ))
+        .window(
+            nav_window(
+                BOTTOM_EDGE,
+                // Above the keyboard, in the gap it leaves under its keys;
+                // zone -1 keeps it on the edge rather than above the
+                // keyboard's zone.
+                role(Layer::Overlay, Anchor::BOTTOM | sides, -1, "bottom-edge"),
+                strip,
+            )
+            .transparent(),
+        )
         .window(
             nav_window(
                 PANEL,
@@ -123,11 +160,14 @@ fn navigation(cfg: NavConfig) -> NavModule {
             .container(panel(NOTIFICATIONS, Notifications, Span::LeftHalf))
             .container(panel(QUICK_SETTINGS, QuickSettingsScreen, Span::RightHalf)),
         )
-        .window(nav_window(
-            TOP_EDGE,
-            role(Layer::Overlay, Anchor::TOP | sides, -1, "top-edge"),
-            bar.clone(),
-        ))
+        .window(
+            nav_window(
+                TOP_EDGE,
+                role(Layer::Overlay, Anchor::TOP | sides, -1, "top-edge"),
+                bar.clone(),
+            )
+            .transparent(),
+        )
         .window(
             nav_window(
                 STATUS_BAR,
@@ -157,16 +197,22 @@ fn main() {
         .add_module(WindowModule)
         .add_module(InteractivityModule)
         .add_module(AnimationModule)
+        .add_module(ScrollModule)
         .add_module(RenderModule::default())
         .insert_resource(Atlas::new());
 
     app.add_module(MechanixTheme::dark());
 
-    let font = app
-        .resource_mut::<Atlas>()
-        .add_font(GEIST_MONO_BYTES)
-        .expect("GeistMono font loads");
-    app.insert_resource(FontBook::new(font));
+    let (regular, light) = {
+        let mut atlas = app.resource_mut::<Atlas>();
+        (
+            atlas.add_font(GEIST_MONO).expect("GeistMono font loads"),
+            atlas
+                .add_font(GEIST_MONO_LIGHT)
+                .expect("GeistMono Light font loads"),
+        )
+    };
+    app.insert_resource(FontBook::new(regular).light(light));
 
     let icons = StatusIcons::load(&mut app.resource_mut::<Atlas>(), DEFAULT_ICON_SIZE)
         .expect("Status bar icons load");
@@ -182,16 +228,30 @@ fn main() {
                 .bind::<WlSeat>()
                 .bind::<ZwlrLayerShellV1>(),
         )
+        .add_module(TextInputModule)
+        .add_module(ToplevelsModule)
+        .add_module(RegistryModule {
+            data_dirs: apps::host_sources().0,
+        })
+        // Places the previews before presentation commits a frame.
+        .add_module(RunningAppsModule)
         .add_module(PresentationModule {
             app_id: "mechanix.launcher".into(),
             budget: Budget::default(),
         });
 
-    app.add_module(navigation(NavConfig::default()))
+    let cfg = NavConfig::default();
+    let bottom_gap = cfg.bottom_strip_height;
+    app.add_module(navigation(cfg, AppDrawer::new()))
         .add_module(StatusBarModule)
         .add_module(NotificationsModule)
-        .add_module(KeyboardModule)
+        .add_module(KeyboardModule { bottom_gap })
         .add_module(QuickSettingsModule);
+
+    // Home starts open.
+    app.insert_resource(OpenCovers(vec![HOME_ID]));
+    suspend_keyboard_zone(&mut app, true);
+    app.system(on_container_shown);
 
     app.run();
 }
@@ -199,6 +259,40 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Twenty apps, each with its own SVG icon (about what the 4a has), so
+    /// the budget doesn't depend on the host's installed apps.
+    fn fixture_drawer() -> AppDrawer {
+        let data = std::env::temp_dir().join(format!("launcher-budget-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&data);
+        let apps = data.join("applications");
+        let icons = data.join("icons/hicolor/scalable/apps");
+        std::fs::create_dir_all(&apps).unwrap();
+        std::fs::create_dir_all(&icons).unwrap();
+        for i in 0..20u32 {
+            let id = format!("app{i:02}");
+            std::fs::write(
+                apps.join(format!("{id}.desktop")),
+                format!(
+                    "[Desktop Entry]\nType=Application\nName=App {}\nExec=true\nIcon={id}\n",
+                    char::from(b'A' + i as u8)
+                ),
+            )
+            .unwrap();
+            // A distinct colour and shape per app, so no two icons share a slot.
+            let (r, g, b) = ((i * 37) % 256, (i * 91) % 256, (i * 151) % 256);
+            std::fs::write(
+                icons.join(format!("{id}.svg")),
+                format!(
+                    r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect width="48" height="48" rx="{}" fill="#{r:02x}{g:02x}{b:02x}"/><circle cx="{}" cy="24" r="8" fill="#fff"/></svg>"##,
+                    i % 12,
+                    8 + i
+                ),
+            )
+            .unwrap();
+        }
+        AppDrawer::from_data_dirs(vec![data])
+    }
 
     /// The launcher's UI as `main` builds it, without the compositor and
     /// D-Bus: the theme, the font, the status icons, every nav window and
@@ -210,21 +304,28 @@ mod tests {
             .add_module(WindowModule)
             .add_module(InteractivityModule)
             .add_module(AnimationModule)
+            .add_module(ScrollModule)
             .add_module(RenderModule::default())
+            .add_module(RunningAppsModule)
             .insert_resource(Atlas::new());
         app.add_module(MechanixTheme::dark());
-        let font = app
-            .resource_mut::<Atlas>()
-            .add_font(GEIST_MONO_BYTES)
-            .expect("GeistMono font loads");
-        app.insert_resource(FontBook::new(font));
+        let (regular, light) = {
+            let mut atlas = app.resource_mut::<Atlas>();
+            (
+                atlas.add_font(GEIST_MONO).expect("GeistMono font loads"),
+                atlas
+                    .add_font(GEIST_MONO_LIGHT)
+                    .expect("GeistMono Light font loads"),
+            )
+        };
+        app.insert_resource(FontBook::new(regular).light(light));
         let icons = StatusIcons::load(&mut app.resource_mut::<Atlas>(), DEFAULT_ICON_SIZE)
             .expect("Status bar icons load");
         app.insert_resource(icons);
         // PresentationModule registers Role; it needs a live compositor.
         app.register_component::<Role>();
-        app.add_module(navigation(NavConfig::default()));
-        keyboard::spawn_ui(&mut app);
+        app.add_module(navigation(NavConfig::default(), fixture_drawer()));
+        keyboard::spawn_ui(&mut app, NavConfig::default().bottom_strip_height);
         app.tick();
         app
     }

@@ -5,11 +5,12 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use mecha_wayland::prelude::*;
+use screen::AppLaunched;
 
 use super::apply::{Action, ContainerNodes, Nav, NavWindow, apply, on_resized};
 use super::input::on_contact;
 use super::tick::on_frame;
-use crate::core::{AreaId, ContainerSpec, NavConfig, Stack, Trigger};
+use crate::core::{AreaId, ContainerSpec, ExternalEvent, Input, NavConfig, Stack, Trigger};
 
 /// One nav window: its touch area, layer role, layout and containers.
 pub struct WindowSpec {
@@ -18,6 +19,7 @@ pub struct WindowSpec {
     layout: LayoutStyle,
     containers: Vec<ContainerSpec>,
     no_input: bool,
+    clear: Color,
 }
 
 pub fn nav_window(area: AreaId, role: Role, layout: LayoutStyle) -> WindowSpec {
@@ -27,6 +29,7 @@ pub fn nav_window(area: AreaId, role: Role, layout: LayoutStyle) -> WindowSpec {
         layout,
         containers: Vec::new(),
         no_input: false,
+        clear: Color::BLACK,
     }
 }
 
@@ -41,6 +44,13 @@ impl WindowSpec {
     /// Applied on the window's first `Resized`.
     pub fn no_input(mut self) -> Self {
         self.no_input = true;
+        self
+    }
+
+    /// Clears to transparent instead of black: where nothing is drawn,
+    /// what is beneath shows. Input is unchanged.
+    pub fn transparent(mut self) -> Self {
+        self.clear = Color::TRANSPARENT;
         self
     }
 }
@@ -107,10 +117,7 @@ impl Module for NavModule {
             let node = app
                 .spawn_with(
                     root,
-                    window()
-                        .title(w.area.0)
-                        .layout(w.layout)
-                        .clear(Color::BLACK),
+                    window().title(w.area.0).layout(w.layout).clear(w.clear),
                     (w.role,),
                 )
                 .id();
@@ -141,25 +148,26 @@ impl Module for NavModule {
                     (i, windows[i].node)
                 }
                 Some(p) => {
-                    let &(_, i, node) = built
+                    let &(_, i, node, _) = built
                         .iter()
-                        .find(|(c, _, _)| *c == p)
+                        .find(|(c, _, _, _)| *c == p)
                         .expect("a parent is built before its children");
                     (i, node)
                 }
             };
             let node = app.spawn(parent_node, div().style(full_size())).id();
-            screen.build(app, node);
+            let screen = screen.build(app, node);
             windows[window].containers.push(id);
-            built.push((id, window, node));
+            built.push((id, window, node, screen));
         }
         // After every child container, so each cover is its node's last child.
         let containers = built
             .into_iter()
-            .map(|(id, window, node)| ContainerNodes {
+            .map(|(id, window, node, screen)| ContainerNodes {
                 id,
                 window,
                 node,
+                screen,
                 cover: app.spawn(node, div().style(full_size())).id(),
             })
             .collect();
@@ -176,25 +184,35 @@ impl Module for NavModule {
         app.system(on_resized);
         app.system(on_contact);
         app.system(on_frame);
+        app.system(on_app_launched);
         apply(app);
     }
 }
 
+/// Feeds a screen's app launch to the stack, which closes what closes on it.
+fn on_app_launched(app: &mut App, _: &AppLaunched) {
+    app.resource_mut::<Nav>()
+        .stack
+        .handle(Input::External(ExternalEvent::AppLaunched));
+    apply(app);
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::cell::Cell;
     use std::time::{Duration, Instant};
 
     use mecha_wayland::mechanix_widgets::prelude::{FontBook, Text};
-    use screen::{Screen, placeholder_page};
+    use screen::{AppLaunched, Hidden, Screen, Shown, placeholder_page};
     use status_bar::GEIST_MONO_BYTES;
 
     use super::*;
     use crate::core::{
-        AreaId, BOTTOM_EDGE, ContainerId, Direction, FADE, INSTANT, Input, NavConfig, Timing,
-        container, swipe,
+        AreaId, BOTTOM_EDGE, ContainerId, Direction, ExternalEvent, FADE, INSTANT, Input,
+        NavConfig, OnExternal, Timing, container, swipe,
     };
     use crate::shell::apply::window_layers;
-    use crate::shell::apply::{Nav, apply};
+    use crate::shell::apply::{ContainerShown, Nav, apply};
 
     pub(crate) const HOME_AREA: AreaId = AreaId("home");
     pub(crate) const PANEL_AREA: AreaId = AreaId("panel");
@@ -322,6 +340,31 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_transparent_window_clears_to_transparent_and_the_rest_to_black() {
+        let m = NavModule::new(NavConfig::default())
+            .window(nav_window(
+                HOME_AREA,
+                role(Layer::Bottom, "home"),
+                LayoutStyle::default(),
+            ))
+            .window(
+                nav_window(
+                    BOTTOM_EDGE,
+                    role(Layer::Top, "bottom-edge"),
+                    LayoutStyle::default().height(px(20.0)),
+                )
+                .transparent(),
+            );
+        let app = app_with(m);
+        let clears: Vec<Color> = app
+            .resource::<Windows>()
+            .iter()
+            .map(|w| app.widget::<Window>(w).unwrap().clear())
+            .collect();
+        assert_eq!(clears, vec![Color::BLACK, Color::TRANSPARENT]);
+    }
+
+    #[test]
     fn windows_spawn_in_declaration_order() {
         let app = app_with(module(true));
         let ids: Vec<_> = app.resource::<Windows>().iter().collect();
@@ -399,6 +442,157 @@ pub(crate) mod tests {
         assert_eq!(display(&app, node_of(&app, DRAWER)), Display::Hidden);
         assert_eq!(display(&app, node_of(&app, NOTIFICATIONS)), Display::Hidden);
         assert_eq!(display(&app, node_of(&app, HOME)), Display::Flex);
+    }
+
+    /// Counts the `Shown` and `Hidden` its root node hears.
+    #[derive(Clone, Default)]
+    struct Heard {
+        shown: Rc<Cell<u32>>,
+        hidden: Rc<Cell<u32>>,
+    }
+
+    impl Heard {
+        fn take(&self) -> (u32, u32) {
+            (self.shown.replace(0), self.hidden.replace(0))
+        }
+    }
+
+    struct Listener(Heard);
+
+    impl Build for Listener {
+        type Widget = Listener;
+    }
+
+    impl Widget for Listener {
+        type Builder = Listener;
+
+        fn build(b: Self, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
+            let shown = b.0.shown.clone();
+            s.on::<Shown>(me, move |_, _| shown.set(shown.get() + 1));
+            let hidden = b.0.hidden.clone();
+            s.on::<Hidden>(me, move |_, _| hidden.set(hidden.get() + 1));
+            b
+        }
+    }
+
+    impl Screen for Heard {
+        fn build(&self, app: &mut App, parent: NodeId) -> NodeId {
+            app.spawn(parent, Listener(self.clone())).id()
+        }
+    }
+
+    /// A full swipe on the home window, with `dy` its travel.
+    fn swipe_home(app: &mut App, dy: f32) {
+        let t0 = Instant::now();
+        let size = Size::new(600.0, 1000.0);
+        let mut nav = app.resource_mut::<Nav>();
+        nav.stack.handle(Input::Down {
+            contact: 1,
+            area: HOME_AREA,
+            area_size: size,
+            pos: Point { x: 300.0, y: 500.0 },
+            t: t0,
+        });
+        for i in 1..=10u32 {
+            nav.stack.handle(Input::Move {
+                contact: 1,
+                pos: Point {
+                    x: 300.0,
+                    y: 500.0 + dy * i as f32 / 10.0,
+                },
+                t: t0 + Duration::from_millis(16 * i as u64),
+            });
+        }
+        nav.stack.handle(Input::Up {
+            contact: 1,
+            t: t0 + Duration::from_millis(160),
+        });
+    }
+
+    #[test]
+    fn screens_hear_shown_and_hidden() {
+        let heard = Heard::default();
+        let home = container(HOME, Label("Home")).initially_open().child(
+            container(DRAWER, heard.clone())
+                .open_close(swipe(HOME_AREA, Direction::Up, Timing::Any), INSTANT),
+        );
+        let mut app = app_with(module_with(home));
+        // Closed at startup: one Hidden, no Shown.
+        assert_eq!(heard.take(), (0, 1));
+
+        swipe_home(&mut app, -200.0);
+        apply(&mut app);
+        app.flush();
+        assert_eq!(display(&app, node_of(&app, DRAWER)), Display::Flex);
+        assert_eq!(heard.take(), (1, 0));
+
+        apply(&mut app);
+        app.flush();
+        assert_eq!(heard.take(), (0, 0), "no change, no event");
+
+        swipe_home(&mut app, 200.0);
+        apply(&mut app);
+        app.flush();
+        assert_eq!(display(&app, node_of(&app, DRAWER)), Display::Hidden);
+        assert_eq!(heard.take(), (0, 1));
+    }
+
+    #[derive(Default)]
+    struct Signalled(Vec<ContainerShown>);
+    impl Resource for Signalled {}
+
+    #[test]
+    fn containers_signal_shown_and_hidden_by_id() {
+        let home = container(HOME, Label("Home")).initially_open().child(
+            container(DRAWER, Label("Drawer"))
+                .open_close(swipe(HOME_AREA, Direction::Up, Timing::Any), INSTANT),
+        );
+        let mut app = app_with(module_with(home));
+        app.init_resource::<Signalled>()
+            .system(|app: &mut App, s: &ContainerShown| app.resource_mut::<Signalled>().0.push(*s));
+
+        swipe_home(&mut app, -200.0);
+        apply(&mut app);
+        app.flush();
+        swipe_home(&mut app, 200.0);
+        apply(&mut app);
+        app.flush();
+        let shown = |id, shown| ContainerShown { id, shown };
+        assert_eq!(
+            app.resource::<Signalled>().0,
+            [shown(DRAWER, true), shown(DRAWER, false)]
+        );
+    }
+
+    #[test]
+    fn app_launched_closes_home() {
+        let home = home_spec(true).close(OnExternal(ExternalEvent::AppLaunched), INSTANT);
+        let mut app = app_with(module_with(home));
+        assert_eq!(display(&app, node_of(&app, HOME)), Display::Flex);
+        app.signal(AppLaunched);
+        app.flush();
+        assert_eq!(display(&app, node_of(&app, HOME)), Display::Hidden);
+    }
+
+    #[test]
+    fn app_launched_hides_child_screen() {
+        let heard = Heard::default();
+        let home = container(HOME, Label("Home"))
+            .initially_open()
+            .close(OnExternal(ExternalEvent::AppLaunched), INSTANT)
+            .child(
+                container(DRAWER, heard.clone())
+                    .initially_open()
+                    .open_close(swipe(HOME_AREA, Direction::Up, Timing::Any), INSTANT),
+            );
+        let mut app = app_with(module_with(home));
+        assert_eq!(display(&app, node_of(&app, DRAWER)), Display::Flex);
+        heard.take();
+        app.signal(AppLaunched);
+        app.flush();
+        assert_eq!(display(&app, node_of(&app, HOME)), Display::Hidden);
+        assert_eq!(display(&app, node_of(&app, DRAWER)), Display::Hidden);
+        assert_eq!(heard.take(), (0, 1));
     }
 
     #[test]

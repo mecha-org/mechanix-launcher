@@ -68,6 +68,7 @@ mod tests {
                 contact: ContactId::Touch(0),
                 phase,
                 position: Point::new(300.0, y),
+                time: 0,
             });
             app.flush();
         }
@@ -100,6 +101,7 @@ mod tests {
                 contact: ContactId::Touch(0),
                 phase,
                 position: Point::new(300.0, y),
+                time: 0,
             });
             app.flush();
         }
@@ -136,6 +138,7 @@ mod tests {
                 contact: ContactId::Touch(0),
                 phase,
                 position: Point::new(300.0, y),
+                time: 0,
             });
             app.flush();
         }
@@ -155,6 +158,7 @@ mod tests {
                 contact: ContactId::Touch(1),
                 phase,
                 position: Point::new(300.0, y),
+                time: 0,
             });
             app.flush();
         }

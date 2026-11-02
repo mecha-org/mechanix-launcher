@@ -11,6 +11,7 @@
 use mecha_wayland::prelude::*;
 
 use crate::visibility::KeyboardVisibilityExt;
+use crate::zone::ExclusiveZone;
 
 /// The text-input context the compositor reports for the focused field.
 ///
@@ -45,6 +46,10 @@ pub struct InputMethodState {
     pub current: InputMethodContext,
     /// The pending inbound context — what events are filling this batch.
     pending: InputMethodContext,
+    /// Whether this batch carries an `activate`. A text input re-enabled
+    /// while already active (a field tapped again) sends one, and that should
+    /// bring back a keyboard the user hid.
+    pending_activate: bool,
 
     /// Number of `done` events received. This is the serial echoed back in
     /// `commit(serial)`.
@@ -155,6 +160,7 @@ fn on_input_method_event(app: &mut App, event: &ZwpInputMethodV2Event) {
                     active: true,
                     ..Default::default()
                 };
+                st.pending_activate = true;
                 tracing::info!("input-method: activate (pending)");
                 None
             }
@@ -171,6 +177,7 @@ fn on_input_method_event(app: &mut App, event: &ZwpInputMethodV2Event) {
             }
             ZwpInputMethodV2Event::Done { .. } => {
                 let next = st.pending.clone();
+                let activated = std::mem::take(&mut st.pending_activate);
                 let prev = std::mem::replace(&mut st.current, next);
                 st.serial = st.serial.wrapping_add(1);
                 let now = &st.current;
@@ -180,15 +187,20 @@ fn on_input_method_event(app: &mut App, event: &ZwpInputMethodV2Event) {
                     "input-method: state applied"
                 );
 
-                if now.active && (!prev.active || prev.purpose != now.purpose) {
+                if now.active && (activated || !prev.active || prev.purpose != now.purpose) {
                     focused = Some(TextInputFocused {
                         purpose: now.purpose,
                     });
                 }
                 // Only an activate/deactivate moves the surface, so other
                 // `done`s (e.g. surrounding-text updates) don't undo a manual
-                // show or hide.
-                (prev.active != now.active).then_some(now.active)
+                // show or hide. An activate shows it even when already
+                // active: the field was tapped again.
+                if now.active && activated {
+                    Some(true)
+                } else {
+                    (prev.active != now.active).then_some(now.active)
+                }
             }
             ZwpInputMethodV2Event::Unavailable { .. } => {
                 st.inert = true;
@@ -197,10 +209,96 @@ fn on_input_method_event(app: &mut App, event: &ZwpInputMethodV2Event) {
             }
         }
     };
+    // Under the host's own screens, an activation shows the keyboard only
+    // for the host's field: an app beneath that gets keyboard focus back
+    // re-enables its text input too, and must not bring the keyboard up.
+    if apply_visible == Some(true) && !may_show(app) {
+        return;
+    }
     if let Some(focused) = focused {
         app.signal(focused);
     }
     if let Some(visible) = apply_visible {
         app.set_keyboard_visibility(visible);
+    }
+}
+
+/// Whether an activation may show the keyboard: always over apps; while
+/// [`suspend_keyboard_zone`](crate::suspend_keyboard_zone) holds (the host's
+/// screens cover the apps), only when the host's own text field has focus.
+fn may_show(app: &App) -> bool {
+    let covered = app.has_resource::<ExclusiveZone>() && app.resource::<ExclusiveZone>().suspended;
+    !covered || (app.has_resource::<TextInput>() && app.resource::<TextInput>().focused().is_some())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::visibility::KeyboardVisibility;
+
+    fn app() -> App {
+        let mut app = App::new();
+        app.insert_resource(KeyboardVisibility::default());
+        app.insert_resource(InputMethodState::default());
+        app
+    }
+
+    fn send(app: &mut App, events: &[fn(ZwpInputMethodV2) -> ZwpInputMethodV2Event]) {
+        let im = ZwpInputMethodV2(ObjectId(1));
+        for e in events {
+            on_input_method_event(app, &e(im));
+        }
+    }
+
+    fn activate(input_method: ZwpInputMethodV2) -> ZwpInputMethodV2Event {
+        ZwpInputMethodV2Event::Activate { input_method }
+    }
+    fn deactivate(input_method: ZwpInputMethodV2) -> ZwpInputMethodV2Event {
+        ZwpInputMethodV2Event::Deactivate { input_method }
+    }
+    fn done(input_method: ZwpInputMethodV2) -> ZwpInputMethodV2Event {
+        ZwpInputMethodV2Event::Done { input_method }
+    }
+
+    #[test]
+    fn activate_shows_and_deactivate_hides() {
+        let mut app = app();
+        send(&mut app, &[activate, done]);
+        assert!(app.keyboard_visible());
+        send(&mut app, &[deactivate, done]);
+        assert!(!app.keyboard_visible());
+    }
+
+    #[test]
+    fn tapping_the_field_again_brings_back_a_hidden_keyboard() {
+        let mut app = app();
+        send(&mut app, &[activate, done]);
+        app.set_keyboard_visibility(false);
+        send(&mut app, &[activate, done]);
+        assert!(app.keyboard_visible());
+    }
+
+    #[test]
+    fn an_app_under_the_hosts_screens_cannot_bring_it_up() {
+        let mut app = app();
+        app.insert_resource(ExclusiveZone {
+            suspended: true,
+            ..Default::default()
+        });
+        send(&mut app, &[activate, done]);
+        assert!(!app.keyboard_visible());
+
+        app.resource_mut::<ExclusiveZone>().suspended = false;
+        send(&mut app, &[activate, done]);
+        assert!(app.keyboard_visible());
+    }
+
+    #[test]
+    fn a_done_without_activate_keeps_a_manual_hide() {
+        let mut app = app();
+        send(&mut app, &[activate, done]);
+        app.set_keyboard_visibility(false);
+        send(&mut app, &[done]);
+        assert!(!app.keyboard_visible());
     }
 }
