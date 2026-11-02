@@ -1,5 +1,7 @@
 use app_drawer::{AppDrawer, GEIST_MONO, GEIST_MONO_LIGHT};
 use apps::RegistryModule;
+use control_center::app_screens::AppScreen;
+use control_center::{ControlCenterScreen, select_screen};
 use home::Home;
 use keyboard::{KeyboardModule, hide_keyboard, show_keyboard, suspend_keyboard_zone};
 use mecha_wayland::mechanix_widgets::prelude::FontBook;
@@ -9,8 +11,8 @@ use nav::core::{
     OnExternal, Span, TOP_EDGE, Timing, container, gated, swipe,
 };
 use nav::shell::{ContainerShown, NavModule, nav_window};
-use notifications::{Notifications, NotificationsModule};
-use quick_settings::{QuickSettingsModule, QuickSettingsScreen};
+use notifications::NotificationsModule;
+use quick_settings::QuickSettingsModule;
 use running_apps::{RunningApps, RunningAppsModule};
 use status_bar::{
     DEFAULT_BAR_HEIGHT, DEFAULT_ICON_SIZE, StatusBarModule, StatusBarScreen, StatusIcons,
@@ -24,14 +26,13 @@ const STATUS_BAR: AreaId = AreaId("status-bar");
 const HOME_ID: ContainerId = ContainerId("home");
 const DRAWER: ContainerId = ContainerId("drawer");
 const RUNNING: ContainerId = ContainerId("running");
-const NOTIFICATIONS: ContainerId = ContainerId("notifications");
-const QUICK_SETTINGS: ContainerId = ContainerId("quick_settings");
+const CONTROL_CENTER: ContainerId = ContainerId("control_center");
 const STATUS: ContainerId = ContainerId("status");
 
 /// The launcher screens that cover apps. While any is open the keyboard
 /// reserves no space, so they and the apps under them keep their full
 /// size; opening one hides the keyboard.
-const COVERS: [ContainerId; 4] = [HOME_ID, RUNNING, NOTIFICATIONS, QUICK_SETTINGS];
+const COVERS: [ContainerId; 3] = [HOME_ID, RUNNING, CONTROL_CENTER];
 
 /// The [`COVERS`] open now.
 struct OpenCovers(Vec<ContainerId>);
@@ -82,7 +83,7 @@ fn bottom_corner(span: Span) -> nav::core::Swipe {
     swipe(BOTTOM_EDGE, Direction::Up, Timing::Any).span(span)
 }
 
-/// A panel that pulls down from its half of the top edge and closes on an up swipe.
+/// A panel that pulls down from its span of the top edge and closes on an up swipe.
 fn panel(id: ContainerId, screen: impl screen::Screen, span: Span) -> nav::core::ContainerSpec {
     container(id, screen)
         .open(
@@ -90,6 +91,10 @@ fn panel(id: ContainerId, screen: impl screen::Screen, span: Span) -> nav::core:
             INSTANT,
         )
         .close(swipe(PANEL, Direction::Up, Timing::Any), INSTANT)
+}
+
+fn top_half(span: Span) -> nav::core::Swipe {
+    swipe(TOP_EDGE, Direction::Down, Timing::Any).span(span)
 }
 
 /// Opaque space under the keyboard's keys; the bottom swipe strip sits inside it.
@@ -127,6 +132,12 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
     NavModule::new(cfg)
         .action(bottom_corner(Span::LeftCorner), show_keyboard)
         .action(bottom_corner(Span::RightCorner), show_keyboard)
+        .action(top_half(Span::LeftHalf), |app| {
+            select_screen(app, AppScreen::NotificationsScreen)
+        })
+        .action(top_half(Span::RightHalf), |app| {
+            select_screen(app, AppScreen::QuickSettingsScreen)
+        })
         .window(
             nav_window(
                 HOME,
@@ -160,8 +171,7 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
                 role(Layer::Top, ALL_SIDES, 0, "panel"),
                 LayoutStyle::default(),
             )
-            .container(panel(NOTIFICATIONS, Notifications, Span::LeftHalf))
-            .container(panel(QUICK_SETTINGS, QuickSettingsScreen, Span::RightHalf)),
+            .container(panel(CONTROL_CENTER, ControlCenterScreen, Span::Whole)),
         )
         .window(
             nav_window(
