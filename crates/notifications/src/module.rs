@@ -4,7 +4,6 @@ pub struct NotificationsModule;
 use crate::{
     dbus::{NotificationServer, on_call},
     dbus_spec::register_notifications_interface,
-    expiry_timeout::{ExpiryTimers, notification_time_expired},
     notification_store::NotificationStore,
     notify_signal::notify_signal,
 };
@@ -23,7 +22,5 @@ impl Module for NotificationsModule {
         app.system(on_call);
 
         app.init_resource::<NotificationStore>();
-        app.init_resource::<ExpiryTimers>();
-        app.system(notification_time_expired);
     }
 }

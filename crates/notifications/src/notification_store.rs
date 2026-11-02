@@ -1,7 +1,7 @@
 use mecha_wayland::prelude::*;
 use std::time::SystemTime;
 
-use crate::notify::Notification;
+use crate::{control::Control, notify::Notification};
 
 #[derive(Default)]
 pub struct NotificationStore {
@@ -14,7 +14,7 @@ pub struct Entry {
     pub id: u32,
     pub received_time: SystemTime,
     pub notification: Notification,
-    pub expiry_timeout: Option<Token>,
+    pub control: Option<Control>,
 }
 
 impl Resource for NotificationStore {}
