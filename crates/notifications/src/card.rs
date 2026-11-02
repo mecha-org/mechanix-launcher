@@ -1,14 +1,17 @@
+use crate::dbus_spec::{NOTIFICATIONS_EXPIRY, NOTIFIFICATION_DISMISSED};
+use crate::millis::Millis;
+use crate::notification_store::Entry;
+use crate::notifications_control_center::NotificationsControlListBuilder;
+use crate::notify_signal::NotificationSignal::RemoveNotification;
+use crate::rich_text::RichTextBuilder;
 use crate::rich_text::RichTextExt;
+use crate::style::{color, shape, size, space, text};
+use crate::toggle::Toggle;
 use mecha_wayland::mechanix_widgets::prelude::TextContextExt;
 use mecha_wayland::mechanix_widgets::{self as mw, button};
 use mecha_wayland::prelude::*;
+use std::time::Duration;
 use std::time::SystemTime;
-
-use crate::dbus_spec::NOTIFIFICATION_DISMISSED;
-use crate::notification_store::Entry;
-use crate::notify_signal::NotificationSignal::RemoveNotification;
-use crate::rich_text::RichTextBuilder;
-use crate::style::{color, shape, size, space, text};
 
 pub struct CardBuilder {
     pub entry: Entry,
@@ -20,6 +23,9 @@ pub struct Card {
 
 pub struct UpdateCard(pub Entry);
 impl Event for UpdateCard {}
+
+pub struct SnoozeCard(pub Millis);
+impl Event for SnoozeCard {}
 
 impl Build for CardBuilder {
     type Widget = Card;
@@ -54,6 +60,17 @@ impl Widget for Card {
                     .shrink(0.0),
             ),
         );
+
+        let on_expire = move |ctx: &mut Context<'_, Card>, _: &Timeout| {
+            ctx.signal(RemoveNotification(b.entry.id, NOTIFICATIONS_EXPIRY));
+        };
+
+        let expiry = match b.entry.notification.expire_timeout {
+            Some(expiry_timeout) => s.set_timeout(expiry_timeout.duration(), on_expire),
+            // we need to handle the timeout in order to trigger it
+            // this is passive
+            _ => s.add_timeout(Duration::MAX, on_expire),
+        };
 
         let column = s.spawn(
             me,
@@ -106,6 +123,18 @@ impl Widget for Card {
             },
         );
 
+        let controls = s.spawn(
+            column,
+            NotificationsControlListBuilder {
+                notification_id: b.entry.id,
+            },
+        );
+
+        let toggle_btn = s.spawn(me, button().label("..."));
+        s.on::<Clicked>(toggle_btn, move |ctx, _| {
+            ctx.emit(Toggle, controls);
+        });
+
         s.on::<UpdateCard>(me, move |ctx, e| {
             let entry = &e.0;
             ctx.at(summary)
@@ -117,8 +146,29 @@ impl Widget for Card {
                 .set_run(entry.notification.body.clone().into_runs());
             // TODO: update the body's runs
             ctx.at(time).unwrap().set_text(ago(entry.received_time));
+
+            // whenever a replacement occurs, the expiry timer would start again,
+            match entry.notification.expire_timeout {
+                Some(expiry_timeout) => ctx.start_timer_for(expiry, expiry_timeout.duration()),
+                // the replacement never expires
+                _ => ctx.cancel_timer(expiry),
+            };
         });
 
+        let snooze = s.add_timeout(Duration::MAX, |ctx, _| {
+            ctx.component_mut::<LayoutStyle>().unwrap().display = Display::Flex;
+        });
+
+        s.on::<SnoozeCard>(me, move |ctx, e| {
+            ctx.component_mut::<LayoutStyle>().unwrap().display = Display::Hidden;
+            ctx.start_timer_for(snooze, e.0.duration());
+            // close the controls too
+            ctx.at(controls)
+                .unwrap()
+                .component_mut::<LayoutStyle>()
+                .unwrap()
+                .display = Display::Hidden;
+        });
         Card {
             notification_id: b.entry.id,
         }

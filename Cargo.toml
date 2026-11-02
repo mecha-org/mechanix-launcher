@@ -34,6 +34,7 @@ members = [
     "crates/keyboard",
     "crates/services",
     "crates/assets",
+    "crates/pulseaudio",
 ]
 resolver = "3"
 

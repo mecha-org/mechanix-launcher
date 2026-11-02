@@ -54,9 +54,7 @@ fn main() {
 
     let font = app
         .resource_mut::<Atlas>()
-        .add_font(include_bytes!(
-            "../../mecha-wayland/crates/atlas/tests/fixtures/Inter-Regular.ttf"
-        ))
+        .add_font(assets::fonts::GEIST_MONO)
         .expect("example font loads");
     app.insert_resource(FontBook::new(font));
 
