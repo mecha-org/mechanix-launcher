@@ -4,7 +4,8 @@
 //! `ZwpVirtualKeyboardManagerV1` global conditionally from `Globals` and creates
 //! the `ZwpVirtualKeyboardV1` object once a seat is available. It also handles
 //! keymap compilation, keysym→keystroke indexing and memfd keymap file
-//! creation. Keycode emission goes through [`emit_keysym`].
+//! creation. Keycode emission goes through [`emit_keysym`] (tap) or
+//! [`press_keysym`]/[`release_held`] (hold, so the client's key repeat runs).
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -19,6 +20,7 @@ use xkbcommon::xkb::{
 };
 
 use crate::layout::Modifier;
+use crate::visibility::{KeyboardVisibility, KeyboardVisibilityChanged};
 
 use mecha_wayland::prelude::*;
 
@@ -45,6 +47,9 @@ pub struct VirtualKeyboardState {
     /// Latchable modifier → its serialized mask, derived from the keymap
     /// (e.g. `Control` → the Control mask, `Alt` → Mod1).
     pub mod_masks: HashMap<Modifier, u32>,
+    /// The key currently held down by [`press_keysym`], with the modifier
+    /// mask sent alongside it; cleared by [`release_held`].
+    pub held: Option<Keystroke>,
 }
 
 impl Default for VirtualKeyboardState {
@@ -54,6 +59,7 @@ impl Default for VirtualKeyboardState {
             start_time: Instant::now(),
             keycodes: HashMap::new(),
             mod_masks: HashMap::new(),
+            held: None,
         }
     }
 }
@@ -65,41 +71,89 @@ impl Resource for VirtualKeyboardState {}
 /// clearing them after. No-ops (with a warning) if the VK object or the keysym
 /// isn't indexed yet.
 pub(crate) fn emit_keysym(
-    state: &VirtualKeyboardState,
+    state: &mut VirtualKeyboardState,
     wl: &mut Wayland,
     ks: Keysym,
     latched_mask: u32,
 ) {
+    if press_keysym(state, wl, ks, latched_mask) {
+        release_held(state, wl);
+    }
+}
+
+/// Press one keysym's keycode and leave it down, holding `latched_mask` (plus
+/// the keystroke's own modifiers) until [`release_held`]. While it's down the
+/// focused client repeats it per the seat's `repeat_info`, like a hardware key.
+/// Any key already held is released first. Returns `false` (with a warning) if
+/// the VK object or the keysym isn't indexed yet.
+pub(crate) fn press_keysym(
+    state: &mut VirtualKeyboardState,
+    wl: &mut Wayland,
+    ks: Keysym,
+    latched_mask: u32,
+) -> bool {
     let name = xkbcommon::xkb::keysym_get_name(ks);
     let Some(vkbd) = state.virtual_keyboard else {
         tracing::warn!(keysym = %name, "virtual keyboard not ready; key dropped");
-        return;
+        return false;
     };
     let Some(stroke) = state.keycodes.get(&ks).copied() else {
         tracing::warn!(keysym = %name, "keysym absent from keymap; not typed");
-        return;
+        return false;
     };
+    release_held(state, wl);
     let mods = stroke.mods | latched_mask;
-    let time = (Instant::now() - state.start_time).as_millis() as u32;
     if mods != 0 {
         vkbd.modifiers(&mut *wl, mods, 0, 0, 0);
     }
     vkbd.key(
         &mut *wl,
-        time,
+        timestamp(state),
         stroke.code,
         u32::from(WlKeyboardKeyState::Pressed),
     );
+    state.held = Some(Keystroke {
+        code: stroke.code,
+        mods,
+    });
+    tracing::info!(keysym = %name, code = stroke.code, mods, "typed");
+    true
+}
+
+/// Release the key [`press_keysym`] left down and clear its modifiers. No-op
+/// when nothing is held, so it's safe to call from every release path.
+pub(crate) fn release_held(state: &mut VirtualKeyboardState, wl: &mut Wayland) {
+    let Some(stroke) = state.held.take() else {
+        return;
+    };
+    let Some(vkbd) = state.virtual_keyboard else {
+        return;
+    };
     vkbd.key(
         &mut *wl,
-        time,
+        timestamp(state),
         stroke.code,
         u32::from(WlKeyboardKeyState::Released),
     );
-    if mods != 0 {
+    if stroke.mods != 0 {
         vkbd.modifiers(&mut *wl, 0, 0, 0, 0);
     }
-    tracing::info!(keysym = %name, code = stroke.code, mods, "typed");
+    tracing::debug!(code = stroke.code, "released");
+}
+
+/// Milliseconds since the VK was set up, for `key` event timestamps.
+fn timestamp(state: &VirtualKeyboardState) -> u32 {
+    (Instant::now() - state.start_time).as_millis() as u32
+}
+
+/// Release any held key when the keyboard surface hides, so a hold can't
+/// outlive the surface that would deliver its `Release`.
+fn on_keyboard_visibility_changed(app: &mut App, _: &KeyboardVisibilityChanged) {
+    if app.resource::<KeyboardVisibility>().visible {
+        return;
+    }
+    let (mut vk, mut wl) = app.query::<(ResMut<VirtualKeyboardState>, ResMut<Wayland>)>();
+    release_held(&mut vk, &mut wl);
 }
 
 /// Module that binds the virtual-keyboard manager global and creates the VK
@@ -111,6 +165,7 @@ impl Module for VirtualKeyboardModule {
     fn install(self, app: &mut App) {
         app.insert_resource(VirtualKeyboardState::default());
         init(app);
+        app.system(on_keyboard_visibility_changed);
     }
 }
 

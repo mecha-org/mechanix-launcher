@@ -1,7 +1,8 @@
 //! Routes a tapped key's [`KeyAction`]: view switches and modifier latches go
 //! to the view/latch controllers; every other action is a keystroke emitted
 //! through the input method (preferred) or the virtual keyboard (fallback),
-//! consuming any latched modifier.
+//! consuming any latched modifier. Control keys ([`repeats`]) are held down
+//! for as long as the finger is, so the client's key repeat runs.
 
 use mecha_wayland::prelude::*;
 use xkbcommon::xkb::Keysym;
@@ -73,6 +74,31 @@ pub(crate) fn dispatch(ctx: &mut Context<'_, Keyboard>, action: &KeyAction) {
     }
 }
 
+/// Whether a key with this action is held down while pressed (so the focused
+/// client repeats it) rather than tapped on click: non-printable keysyms such
+/// as BackSpace, Delete and the arrows. Printable keys stay tap-only.
+pub(crate) fn repeats(action: &KeyAction) -> bool {
+    matches!(action, KeyAction::EmitKeysym(ks) if virtual_keyboard::keysym_text(*ks).is_none())
+}
+
+/// Press a [`repeats`] key's keysym through the virtual keyboard and leave it
+/// down until [`release`], consuming any latched modifier. The latch is
+/// cleared now but its mask stays applied until the key is released.
+pub(crate) fn hold(ctx: &mut Context<'_, Keyboard>, ks: Keysym) {
+    let latched_mask = latched_mask(ctx);
+    {
+        let (mut vk, mut wl) = ctx.fetch::<(ResMut<VirtualKeyboardState>, ResMut<Wayland>)>();
+        virtual_keyboard::press_keysym(&mut vk, &mut wl, ks, latched_mask);
+    }
+    consume_latch(ctx);
+}
+
+/// Release the key [`hold`] pressed, if any.
+pub(crate) fn release(ctx: &mut Context<'_, Keyboard>) {
+    let (mut vk, mut wl) = ctx.fetch::<(ResMut<VirtualKeyboardState>, ResMut<Wayland>)>();
+    virtual_keyboard::release_held(&mut vk, &mut wl);
+}
+
 /// The combined modifier mask of every currently-latched modifier, to OR into
 /// a keystroke. Reads from the [`LatchedState`] resource.
 fn latched_mask(ctx: &Context<'_, Keyboard>) -> u32 {
@@ -93,6 +119,6 @@ fn im_commit_text(ctx: &mut Context<'_, Keyboard>, text: &str) -> bool {
 
 /// Send one keysym as a keycode down+up through the virtual keyboard.
 fn vk_emit_keysym(ctx: &mut Context<'_, Keyboard>, ks: Keysym, latched_mask: u32) {
-    let (vk, mut wl) = ctx.fetch::<(Res<VirtualKeyboardState>, ResMut<Wayland>)>();
-    virtual_keyboard::emit_keysym(vk, &mut wl, ks, latched_mask)
+    let (mut vk, mut wl) = ctx.fetch::<(ResMut<VirtualKeyboardState>, ResMut<Wayland>)>();
+    virtual_keyboard::emit_keysym(&mut vk, &mut wl, ks, latched_mask)
 }
