@@ -6,4 +6,7 @@ edition = "2024"
 [dependencies]
 libc = "0.2"
 libpulse-sys = "1.23"
-mecha-wayland = { path = "../mecha-wayland" }
+mecha-wayland.workspace = true
+
+[dev-dependencies]
+assets.workspace = true
