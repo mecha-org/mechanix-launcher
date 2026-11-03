@@ -19,8 +19,9 @@ use status_bar::{
 const HOME: AreaId = AreaId("home");
 const RUNNING_APPS: AreaId = AreaId("running-apps");
 const PANEL: AreaId = AreaId("panel");
-/// Extra space under the keyboard's keys, logical px, on top of the bottom
-/// strip's height.
+/// Extra height of the bottom swipe strip, logical px, over the nav default.
+/// The keyboard leaves the strip's height free under its keys, so this also
+/// lifts the keyboard, and the whole area under the keys stays swipeable.
 const KEYBOARD_LIFT: f32 = 24.0;
 const STATUS_BAR: AreaId = AreaId("status-bar");
 
@@ -244,9 +245,12 @@ fn main() {
             budget: Budget::default(),
         });
 
-    let cfg = NavConfig::default();
-    // Lift the keys above the bottom strip so they sit higher on screen.
-    let bottom_gap = cfg.bottom_strip_height + KEYBOARD_LIFT;
+    let defaults = NavConfig::default();
+    let cfg = NavConfig {
+        bottom_strip_height: defaults.bottom_strip_height + KEYBOARD_LIFT,
+        ..defaults
+    };
+    let bottom_gap = cfg.bottom_strip_height;
     app.add_module(navigation(cfg, AppDrawer::new()))
         .add_module(StatusBarModule)
         .add_module(NotificationsModule)
