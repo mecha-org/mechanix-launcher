@@ -32,7 +32,7 @@ impl Default for NavConfig {
             velocity_stale: Duration::from_millis(80),
             velocity_min_span: Duration::from_millis(8),
             fade: Duration::from_millis(160),
-            bottom_strip_height: 20.0,
+            bottom_strip_height: 5.0,
             corner_fraction: 0.25,
         }
     }

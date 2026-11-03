@@ -10,6 +10,9 @@ use super::style::KeyStyleSpec;
 pub(crate) struct Layout {
     #[serde(default)]
     pub(crate) keyboard: KeyboardSpec,
+    /// Predictive-touch settings.
+    #[serde(default)]
+    pub(crate) prediction: PredictionSpec,
     /// Named key colour styles; a button picks one with `key_style:`.
     #[serde(default)]
     pub(crate) key_styles: HashMap<String, KeyStyleSpec>,
@@ -34,6 +37,15 @@ pub(crate) struct KeyboardSpec {
     pub(crate) font: Option<String>,
     #[serde(rename = "font-size")]
     pub(crate) font_size: Option<u16>,
+}
+
+/// The raw `prediction:` block; every field is optional.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct PredictionSpec {
+    pub(crate) enabled: Option<bool>,
+    pub(crate) strength: Option<f32>,
+    pub(crate) dictionary: Option<String>,
+    pub(crate) popup: Option<bool>,
 }
 
 /// A button's size. Only the width is used — it sets the key's flex-grow weight

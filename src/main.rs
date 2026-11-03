@@ -92,6 +92,9 @@ fn panel(id: ContainerId, screen: impl screen::Screen, span: Span) -> nav::core:
         .close(swipe(PANEL, Direction::Up, Timing::Any), INSTANT)
 }
 
+/// Opaque space under the keyboard's keys; the bottom swipe strip sits inside it.
+const KEYBOARD_BOTTOM_GAP: f32 = 20.0;
+
 fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
     let strip = LayoutStyle::default().height(px(cfg.bottom_strip_height));
     let bar = LayoutStyle::default().height(px(DEFAULT_BAR_HEIGHT));
@@ -242,7 +245,7 @@ fn main() {
         });
 
     let cfg = NavConfig::default();
-    let bottom_gap = cfg.bottom_strip_height;
+    let bottom_gap = KEYBOARD_BOTTOM_GAP;
     app.add_module(navigation(cfg, AppDrawer::new()))
         .add_module(StatusBarModule)
         .add_module(NotificationsModule)
@@ -326,7 +329,7 @@ mod tests {
         // PresentationModule registers Role; it needs a live compositor.
         app.register_component::<Role>();
         app.add_module(navigation(NavConfig::default(), fixture_drawer()));
-        keyboard::spawn_ui(&mut app, NavConfig::default().bottom_strip_height);
+        keyboard::spawn_ui(&mut app, KEYBOARD_BOTTOM_GAP);
         app.tick();
         app
     }

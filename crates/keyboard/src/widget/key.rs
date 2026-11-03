@@ -1,6 +1,7 @@
 //! The themed key button: a `div` with a `Paint::Quad` background resolved
 //! from a [`ColorRole`] pair, a centred text or icon label, and handlers that
-//! re-resolve both colours on theme flip, press and release.
+//! re-resolve both colours on theme flip and on the input layer's
+//! [`KeyFeedback`]. Keys take no input themselves.
 
 use mecha_wayland::prelude::*;
 
@@ -8,6 +9,7 @@ use crate::latch::LatchedState;
 use crate::layout::icons::Icons;
 use crate::layout::style::{KeyLook, KeyState};
 use crate::layout::{KeyAction, KeyFace};
+use crate::touch::{KeyFeedback, popup_text};
 use crate::zone::ExclusiveZone;
 
 /// What a key looks like — determines the [`ColorRole`] pair it draws with.
@@ -88,14 +90,14 @@ impl Build for KeyBuilder {
     type Widget = Key;
 }
 
-/// A themed key button.
-///
-/// The key's `Clicked` handler is wired by the parent [`Keyboard`](crate::widget::keyboard::Keyboard)
-/// widget and dispatches its `KeyAction` through the virtual keyboard / input
-/// method / view-switch logic.
+/// A themed key button. Draw-only: the input layer resolves touches to keys
+/// and tells the key when it is pressed and released.
 pub(crate) struct Key {
     pub(crate) label: Label,
     pub(crate) look: KeyLook,
+    /// What the pop-up shows while this key is pressed; `None` for keys that
+    /// don't type a visible character.
+    pub(crate) popup_text: Option<String>,
 }
 
 impl Widget for Key {
@@ -150,22 +152,23 @@ impl Widget for Key {
         });
 
         if !is_latch {
-            s.on::<Press>(me, move |ctx, _| {
+            s.on::<KeyFeedback>(me, move |ctx, e| {
                 let bg = ctx.color(bg_role);
                 let fg = ctx.color(fg_role);
-
-                set_label_color(ctx, label, bg);
-                ctx.set_paint(Paint::Quad(Quad::new(fg).radius(radius)));
-            });
-            s.on::<Release>(me, move |ctx, _| {
-                let bg = ctx.color(bg_role);
-                let fg = ctx.color(fg_role);
-
-                set_label_color(ctx, label, fg);
-                ctx.set_paint(Paint::Quad(Quad::new(bg).radius(radius)));
+                // Pressed swaps the colours; released restores them.
+                let (fill, ink) = match e {
+                    KeyFeedback::Pressed { .. } => (fg, bg),
+                    KeyFeedback::Released { .. } => (bg, fg),
+                };
+                set_label_color(ctx, label, ink);
+                ctx.set_paint(Paint::Quad(Quad::new(fill).radius(radius)));
             });
         }
 
-        Key { label, look }
+        Key {
+            label,
+            look,
+            popup_text: popup_text(&b.key),
+        }
     }
 }

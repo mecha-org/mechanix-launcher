@@ -11,6 +11,13 @@ keyboard:
   font: geist
   font-size: 20
 
+# Predictive touch: letter keys' touch areas lean toward likely next letters.
+prediction:
+  enabled: true      # false = plain geometry for every key
+  strength: 0.25     # 0 = no bias; higher = stronger lean
+  dictionary: en     # bundled list name, or a path to a word<TAB>count file
+  popup: true        # pop-up of the pressed character key
+
 key_styles:
     normal:   { background: surface-container-high,    foreground: on-surface }
     number:   { background: surface-container-high,    foreground: on-surface,           font: geist-mono }
