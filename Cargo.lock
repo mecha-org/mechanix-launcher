@@ -140,6 +140,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
+name = "control-center"
+version = "0.1.0"
+dependencies = [
+ "mecha-wayland",
+ "notifications",
+ "quick-settings",
+ "screen",
+]
+
+[[package]]
 name = "core_maths"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -453,6 +463,7 @@ version = "0.1.0"
 dependencies = [
  "app-drawer",
  "apps",
+ "control-center",
  "home",
  "keyboard",
  "mecha-wayland",
@@ -791,9 +802,12 @@ name = "quick-settings"
 version = "0.1.0"
 dependencies = [
  "assets",
+ "mecha-pulseaudio",
  "mecha-wayland",
  "screen",
  "services",
+ "tracing",
+ "wayland",
 ]
 
 [[package]]

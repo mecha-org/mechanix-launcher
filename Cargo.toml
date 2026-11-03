@@ -14,6 +14,7 @@ apps.workspace = true
 running-apps.workspace = true
 notifications.workspace = true
 quick-settings.workspace = true
+control-center.workspace = true
 nav.workspace = true
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -34,7 +35,7 @@ members = [
     "crates/keyboard",
     "crates/services",
     "crates/assets",
-    "crates/pulseaudio",
+    "crates/pulseaudio", "crates/control-center",
 ]
 resolver = "3"
 
@@ -49,6 +50,7 @@ apps = { path = "crates/apps" }
 running-apps = { path = "crates/running-apps" }
 notifications = { path = "crates/notifications" }
 quick-settings = { path = "crates/quick-settings" }
+control-center = { path = "crates/control-center" }
 nav = { path = "crates/nav" }
 keyboard = { path = "crates/keyboard" }
 services = { path = "crates/services" }

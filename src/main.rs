@@ -11,8 +11,9 @@ use nav::core::{
     OnExternal, Span, TOP_EDGE, Timing, container, gated, swipe,
 };
 use nav::shell::{ContainerShown, NavModule, nav_window};
-use notifications::{Notifications, NotificationsModule};
-use quick_settings::{QuickSettingsModule, QuickSettingsScreen};
+use control_center::ControlCenterScreen;
+use notifications::NotificationsModule;
+use quick_settings::QuickSettingsModule;
 use running_apps::{RunningApps, RunningAppsModule};
 use gesture_bar::{GESTURE_HEIGHT, GestureBarScreen, NAV_BAR_HEIGHT};
 use status_bar::{
@@ -28,15 +29,14 @@ const NAV_BAR: AreaId = AreaId("nav-bar");
 const HOME_ID: ContainerId = ContainerId("home");
 const DRAWER: ContainerId = ContainerId("drawer");
 const RUNNING: ContainerId = ContainerId("running");
-const NOTIFICATIONS: ContainerId = ContainerId("notifications");
-const QUICK_SETTINGS: ContainerId = ContainerId("quick_settings");
+const CONTROL_CENTER: ContainerId = ContainerId("control_center");
 const STATUS: ContainerId = ContainerId("status");
 const NAV_PILL: ContainerId = ContainerId("nav-pill");
 
 /// The launcher screens that cover apps. While any is open the keyboard
 /// reserves no space, so they and the apps under them keep their full
 /// size; opening one hides the keyboard.
-const COVERS: [ContainerId; 4] = [HOME_ID, RUNNING, NOTIFICATIONS, QUICK_SETTINGS];
+const COVERS: [ContainerId; 3] = [HOME_ID, RUNNING, CONTROL_CENTER];
 
 /// The [`COVERS`] open now.
 struct OpenCovers(Vec<ContainerId>);
@@ -87,7 +87,7 @@ fn bottom_corner(span: Span) -> nav::core::Swipe {
     swipe(BOTTOM_EDGE, Direction::Up, Timing::Any).span(span)
 }
 
-/// A panel that pulls down from its half of the top edge and closes on an up swipe.
+/// A panel that pulls down from its span of the top edge and closes on an up swipe.
 fn panel(id: ContainerId, screen: impl screen::Screen, span: Span) -> nav::core::ContainerSpec {
     container(id, screen)
         .open(
@@ -182,8 +182,7 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
                 role(Layer::Top, ALL_SIDES, 0, "panel"),
                 LayoutStyle::default(),
             )
-            .container(panel(NOTIFICATIONS, Notifications, Span::LeftHalf))
-            .container(panel(QUICK_SETTINGS, QuickSettingsScreen, Span::RightHalf)),
+            .container(panel(CONTROL_CENTER, ControlCenterScreen, Span::Whole)),
         )
         .window(
             nav_window(
