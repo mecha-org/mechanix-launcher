@@ -1,0 +1,12 @@
+English word frequency list for the keyboard's next-letter predictor.
+
+Source: https://github.com/brekker23/English-word-frequencies (word_count.txt,
+commit 815665f95ddab30520dff6df260ed3b6244b9638, 2024-02-22), by brekker23.
+Word counts from public-domain books. Licensed under the Apache License 2.0,
+per the repository's LICENSE file ("Apache License Version 2.0, January 2004").
+Full text: https://www.apache.org/licenses/LICENSE-2.0.txt
+
+Conversion note: the file was changed from the original. Words were lowercased,
+entries not matching [a-z'] were dropped, single-letter entries other than
+"a" and "i" were dropped, the top 40000 remaining entries by count were kept,
+and the format was changed to "word<TAB>count".

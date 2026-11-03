@@ -13,6 +13,7 @@ mod input;
 mod latch;
 mod layout;
 mod module;
+mod predict;
 mod protocol;
 mod view;
 mod visibility;
