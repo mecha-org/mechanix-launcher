@@ -29,7 +29,7 @@ pub struct Keymap {
 }
 
 /// Default predictive-touch bias strength.
-pub const DEFAULT_STRENGTH: f32 = 1.0;
+pub const DEFAULT_STRENGTH: f32 = 0.25;
 
 /// Resolved `prediction:` settings.
 #[derive(Debug, Clone, PartialEq)]

@@ -3,3 +3,6 @@
 
 mod resolve;
 mod tracker;
+
+#[cfg(test)]
+mod sim;

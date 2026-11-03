@@ -12,7 +12,7 @@ use crate::predict::LetterPrior;
 /// hits that key regardless of the prior.
 pub(crate) const CORE: f32 = 0.5;
 /// Gaussian sigma as a fraction of the median letter key width.
-pub(crate) const SIGMA_RATIO: f32 = 0.3;
+pub(crate) const SIGMA_RATIO: f32 = 0.2;
 /// Farthest a touch may be pulled to another key, as a fraction of the median
 /// letter key width.
 pub(crate) const MAX_SHIFT_RATIO: f32 = 0.5;
