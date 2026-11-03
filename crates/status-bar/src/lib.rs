@@ -15,27 +15,21 @@ pub use assets::fonts::GEIST_MONO as GEIST_MONO_BYTES;
 /// Default icon dimension in pixels (matches 20x20 design specification).
 pub const DEFAULT_ICON_SIZE: u32 = 20;
 
-/// Logical px per mm on the Nothing Phone (4a) panel: 1224x2720 px over
-/// 71x157 mm, shown at output scale 3.
+/// Logical px per mm across the Nothing Phone (4a) panel: 1224 px over
+/// 71 mm, shown at output scale 3.
 const PX_PER_MM_X: f32 = 1224.0 / 71.0 / 3.0;
-const PX_PER_MM_Y: f32 = 2720.0 / 157.0 / 3.0;
 
-/// The band the bar's icons are centred in, mm below the top of the screen.
-/// It ends at the bar's bottom, [`DEFAULT_BAR_HEIGHT`] (7mm).
-const BAND_TOP_MM: f32 = 3.0;
 /// How far the clusters sit in from the sides, mm.
 const SIDE_INSET_MM: f32 = 3.0;
 
 /// Horizontal inset of the bar's clusters, logical px.
 pub const SIDE_INSET: f32 = SIDE_INSET_MM * PX_PER_MM_X;
 
-/// Top padding of the bar, logical px: the icon band starts here.
-pub const BAND_TOP: f32 = BAND_TOP_MM * PX_PER_MM_Y;
-
-/// Status bar height, logical px: 7mm (40.4px) rounded to a whole pixel.
-/// Layer surfaces are sized in whole pixels and the exclusive zone must
-/// match, or a 1px line shows between the bar and what is under it.
-pub const DEFAULT_BAR_HEIGHT: f32 = 40.0;
+/// Status bar height, logical px: the stock firmware's `status_bar_height`
+/// (162 px, Nothing's frogger framework overlay) at scale 3. Its middle,
+/// where the icons are centred, is the camera hole's centre (81.6 px).
+/// A whole pixel, so the layer and its exclusive zone match exactly.
+pub const DEFAULT_BAR_HEIGHT: f32 = 54.0;
 
 /// Pre-rasterized sprite handles for all status bar icons in the Atlas.
 #[derive(Debug, Clone, Copy)]

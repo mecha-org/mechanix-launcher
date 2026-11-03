@@ -1,3 +1,5 @@
+mod gesture_bar;
+
 use app_drawer::{AppDrawer, GEIST_MONO, GEIST_MONO_LIGHT};
 use apps::RegistryModule;
 use home::Home;
@@ -12,6 +14,7 @@ use nav::shell::{ContainerShown, NavModule, nav_window};
 use notifications::{Notifications, NotificationsModule};
 use quick_settings::{QuickSettingsModule, QuickSettingsScreen};
 use running_apps::{RunningApps, RunningAppsModule};
+use gesture_bar::{GESTURE_HEIGHT, GestureBarScreen, NAV_BAR_HEIGHT};
 use status_bar::{
     DEFAULT_BAR_HEIGHT, DEFAULT_ICON_SIZE, StatusBarModule, StatusBarScreen, StatusIcons,
 };
@@ -19,11 +22,8 @@ use status_bar::{
 const HOME: AreaId = AreaId("home");
 const RUNNING_APPS: AreaId = AreaId("running-apps");
 const PANEL: AreaId = AreaId("panel");
-/// Extra gap under the keyboard's keys, logical px, over [`KEYBOARD_BOTTOM_GAP`].
-/// It lifts the keyboard; the bottom swipe strip is as tall as the whole gap,
-/// so the area under the keys stays swipeable.
-const KEYBOARD_LIFT: f32 = 24.0;
 const STATUS_BAR: AreaId = AreaId("status-bar");
+const NAV_BAR: AreaId = AreaId("nav-bar");
 
 const HOME_ID: ContainerId = ContainerId("home");
 const DRAWER: ContainerId = ContainerId("drawer");
@@ -31,6 +31,7 @@ const RUNNING: ContainerId = ContainerId("running");
 const NOTIFICATIONS: ContainerId = ContainerId("notifications");
 const QUICK_SETTINGS: ContainerId = ContainerId("quick_settings");
 const STATUS: ContainerId = ContainerId("status");
+const NAV_PILL: ContainerId = ContainerId("nav-pill");
 
 /// The launcher screens that cover apps. While any is open the keyboard
 /// reserves no space, so they and the apps under them keep their full
@@ -96,8 +97,10 @@ fn panel(id: ContainerId, screen: impl screen::Screen, span: Span) -> nav::core:
         .close(swipe(PANEL, Direction::Up, Timing::Any), INSTANT)
 }
 
-/// Opaque space under the keyboard's keys; the bottom swipe strip sits inside it.
-const KEYBOARD_BOTTOM_GAP: f32 = 20.0;
+/// Opaque space under the keyboard's keys. The keyboard sits on the gesture
+/// bar's zone; the bottom swipe area is taller than the bar by this much, so
+/// it ends under the keys rather than over the bottom row.
+const KEYBOARD_BOTTOM_GAP: f32 = GESTURE_HEIGHT - NAV_BAR_HEIGHT;
 
 fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
     let strip = LayoutStyle::default().height(px(cfg.bottom_strip_height));
@@ -149,10 +152,25 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
         )
         .window(
             nav_window(
+                NAV_BAR,
+                // Black, reserving its height under apps and the keyboard,
+                // like Android's gesture navigation bar.
+                role(
+                    Layer::Overlay,
+                    Anchor::BOTTOM | sides,
+                    NAV_BAR_HEIGHT as i32,
+                    "nav-bar",
+                ),
+                LayoutStyle::default().height(px(NAV_BAR_HEIGHT)),
+            )
+            .container(container(NAV_PILL, GestureBarScreen).initially_open())
+            .no_input(),
+        )
+        .window(
+            nav_window(
                 BOTTOM_EDGE,
-                // Above the keyboard, in the gap it leaves under its keys;
-                // zone -1 keeps it on the edge rather than above the
-                // keyboard's zone.
+                // Over the gesture bar and the gap under the keyboard's keys;
+                // zone -1 keeps it on the edge rather than above the zones.
                 role(Layer::Overlay, Anchor::BOTTOM | sides, -1, "bottom-edge"),
                 strip,
             )
@@ -248,10 +266,9 @@ fn main() {
             budget: Budget::default(),
         });
 
-    // The whole gap under the keys is the bottom swipe strip.
-    let bottom_gap = KEYBOARD_BOTTOM_GAP + KEYBOARD_LIFT;
+    let bottom_gap = KEYBOARD_BOTTOM_GAP;
     let cfg = NavConfig {
-        bottom_strip_height: bottom_gap,
+        bottom_strip_height: GESTURE_HEIGHT,
         ..NavConfig::default()
     };
     app.add_module(navigation(cfg, AppDrawer::new()))
