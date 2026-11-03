@@ -1,10 +1,13 @@
 //! Next-letter prediction: given the text typed so far in the current word,
 //! estimate how likely each letter is to come next. Used to bias touch targets.
 
+mod context;
 mod dictionary;
 
 #[allow(unused_imports)]
 pub(crate) use dictionary::{Dictionary, SMOOTHING};
+#[allow(unused_imports)]
+pub(crate) use context::{HOLD_CLEAR_MS, TypingContext};
 
 /// Probability of each letter a-z being typed next; index `c as u8 - b'a'`.
 /// Every value is > 0 and the values sum to 1.
