@@ -2,7 +2,7 @@ use ::services::{APUpdate, BatteryPercentageChanged, BluetoothStateChanged, Stat
 use mecha_wayland::prelude::*;
 
 use crate::indicators::*;
-use crate::{DEFAULT_BAR_HEIGHT, SIDE_INSET, StatusIcons};
+use crate::{BAND_TOP, DEFAULT_BAR_HEIGHT, SIDE_INSET, StatusIcons};
 
 #[derive(Debug, Clone, Copy)]
 pub struct StatusBar {
@@ -28,15 +28,20 @@ impl Widget for StatusBar {
     type Builder = StatusBarBuilder;
 
     fn build(_b: StatusBarBuilder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
-        // Outer status bar: full width, 7mm tall with the clusters on its
-        // bottom edge and 7mm in from the sides; space-between left glyph &
-        // right cluster.
+        // Outer status bar: full width, 7mm tall, the clusters centred in
+        // the band 3-7mm below the top and 7mm in from the sides;
+        // space-between left glyph & right cluster.
         *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
             .row()
-            .align_items(Align::End)
+            .align_items(Align::Center)
             .width(percent(100.0))
             .height(px(DEFAULT_BAR_HEIGHT))
-            .padding(Insets::symmetric(px(SIDE_INSET), px(0.0)))
+            .padding(Insets::new(
+                px(BAND_TOP),
+                px(SIDE_INSET),
+                px(0.0),
+                px(SIDE_INSET),
+            ))
             .justify(Justify::SpaceBetween);
 
         // Pitch black background
