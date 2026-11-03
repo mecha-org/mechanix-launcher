@@ -83,28 +83,35 @@ pub fn suspend_keyboard_zone(app: &mut App, suspended: bool) {
     tracing::info!(suspended, "keyboard exclusive zone suspended");
 }
 
-/// Map or unmap the keyboard surface for `visible`, with its zone and input
-/// region. The zone
-/// is cleared while the surface is still mapped, so that commit reaches the
+/// Map or unmap the keyboard surface for `visible`, with its zone. The zone is
+/// cleared while the surface is still mapped, so that commit reaches the
 /// compositor (which keeps an unmapped layer's zone) and the apps above grow
 /// back. On a show it is sent after the map: a surface that has never drawn
-/// is not re-sent its stored zone when it maps.
+/// is not re-sent its stored zone when it maps. The input region (taps in the
+/// headroom strip go to the app below) is also set on a show if the window
+/// exists yet (returning whether it did); otherwise `ensure_input_region`
+/// sets it once it does.
 pub(crate) fn apply_visibility(
     zone: ExclusiveZone,
     visible: bool,
     surface: KeyboardSurface,
     s: &mut Surfaces,
     wl: &mut Wayland,
-) {
+) -> bool {
     if !visible {
         send_zone(zone, false, surface, s, wl);
     }
     s.set_mapped(surface.window, visible, wl);
-    if visible {
-        // Taps in the headroom strip go to the app below.
-        s.set_input_region(surface.window, Some(&[surface.input_rect()]), wl);
-        send_zone(zone, true, surface, s, wl);
+    if !visible {
+        return false;
     }
+    send_zone(zone, true, surface, s, wl);
+    // Taps in the headroom strip go to the app below.
+    let exists = s.is_mapped(surface.window);
+    if exists {
+        s.set_input_region(surface.window, Some(&[surface.input_rect()]), wl);
+    }
+    exists
 }
 
 /// Flip the zone, send it to the surface and repaint every zone key.

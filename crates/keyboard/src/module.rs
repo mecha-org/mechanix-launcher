@@ -9,7 +9,9 @@ use crate::layout::tokens::Fonts;
 use crate::protocol::input_method::InputMethodModule;
 use crate::protocol::virtual_keyboard::VirtualKeyboardModule;
 use crate::view::on_text_input_focused;
-use crate::widget::surface::{KeyboardUI, KeyboardUIBuilder};
+use crate::widget::surface::{
+    InputRegion, KeyboardUI, KeyboardUIBuilder, ensure_input_region,
+};
 use crate::zone::ExclusiveZone;
 
 /// Installs the on-screen keyboard: binds `zwp_virtual_keyboard_v1` and
@@ -88,6 +90,8 @@ pub fn spawn_ui(app: &mut App, bottom_gap: f32) {
         .1
         .surface;
     app.insert_resource(surface);
+    app.insert_resource(InputRegion::default());
+    app.system(ensure_input_region);
 
     // Starts hidden: the surface is created unmapped.
     if app.has_resource::<Surfaces>() {

@@ -43,6 +43,34 @@ impl KeyboardSurface {
 }
 impl Resource for KeyboardSurface {}
 
+/// Whether the surface's input region has reached the compositor since the
+/// last show. `set_input_region` does nothing while the window's entry does
+/// not exist yet (a show in the spawn tick), so [`ensure_input_region`]
+/// retries each tick until it takes.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct InputRegion {
+    pub(crate) applied: bool,
+}
+impl Resource for InputRegion {}
+
+/// Set the surface's input region (everything below the headroom strip) if a
+/// show left it unset and the window now exists.
+pub(crate) fn ensure_input_region(app: &mut App, _: &PostTick) {
+    if !app.has_resource::<Surfaces>() || !app.has_resource::<KeyboardSurface>() {
+        return;
+    }
+    if app.resource::<InputRegion>().applied || !app.keyboard_visible() {
+        return;
+    }
+    let surface = *app.resource::<KeyboardSurface>();
+    let (mut surfaces, mut wl) = app.query::<(ResMut<Surfaces>, ResMut<Wayland>)>();
+    if surfaces.is_mapped(surface.window) {
+        surfaces.set_input_region(surface.window, Some(&[surface.input_rect()]), &mut wl);
+        drop((surfaces, wl));
+        app.resource_mut::<InputRegion>().applied = true;
+    }
+}
+
 /// Width of the input region when the surface spans the whole output: wider
 /// than any output, clipped to the surface by the compositor.
 const INPUT_SPAN: f32 = 16384.0;
@@ -59,12 +87,14 @@ pub(crate) fn popup_headroom(style: &KeyboardStyle) -> f32 {
 /// When no fixed width is configured it is stretched full-width (left + right
 /// anchors); otherwise it is anchored to the bottom only at the configured
 /// width, `bottom_gap` taller than the keys so the host's bottom-edge swipe
-/// strip has room under them. The exclusive zone follows [`ExclusiveZone`]:
-/// `-1` (overlap other content without reserving space) while off or
-/// suspended, the keyboard part of the surface (its height minus the headroom strip) while on (the default), and `-1`
-/// whenever hidden. `KeyboardInteractivity::None`
-/// keeps the OSK from stealing keyboard focus from the focused app; pointer
-/// taps on the layer surface are still delivered.
+/// strip has room under them. The surface also has a transparent headroom
+/// strip above the keys for pop-ups; the gap under the keys is opaque black.
+/// The exclusive zone follows [`ExclusiveZone`]: `-1` (overlap other content
+/// without reserving space) while off or suspended, the keyboard part of the
+/// surface (its height minus the headroom strip) while on (the default), and
+/// `-1` whenever hidden. `KeyboardInteractivity::None` keeps the OSK from
+/// stealing keyboard focus from the focused app; pointer taps on the layer
+/// surface are still delivered.
 pub(crate) struct KeyboardUI {
     pub(crate) surface: KeyboardSurface,
 }
@@ -124,6 +154,18 @@ impl Widget for KeyboardUI {
             },
         );
 
+        // The gap under the keys is opaque: the window itself clears
+        // transparent, for the headroom strip only.
+        s.spawn(
+            win,
+            div().background(Color::BLACK).style(
+                LayoutStyle::default()
+                    .absolute()
+                    .size(percent(100.0), px(b.bottom_gap))
+                    .inset(Insets::new(auto(), px(0.0), px(0.0), px(0.0))),
+            ),
+        );
+
         // Map the surface while shown, unmap it while hidden, zone and all.
         let surface = KeyboardSurface {
             window,
@@ -134,8 +176,11 @@ impl Widget for KeyboardUI {
         s.on::<ApplyKeyboardVisibility>(me, move |ctx, _| {
             let visible = ctx.keyboard_visible();
             let zone = *ctx.resource::<ExclusiveZone>();
-            let (mut surfaces, mut wl) = ctx.fetch::<(ResMut<Surfaces>, ResMut<Wayland>)>();
-            apply_visibility(zone, visible, surface, &mut surfaces, &mut wl);
+            let applied = {
+                let (mut surfaces, mut wl) = ctx.fetch::<(ResMut<Surfaces>, ResMut<Wayland>)>();
+                apply_visibility(zone, visible, surface, &mut surfaces, &mut wl)
+            };
+            ctx.resource_mut::<InputRegion>().applied = applied;
         });
 
         KeyboardUI { surface }
@@ -146,6 +191,28 @@ impl Widget for KeyboardUI {
 mod tests {
     use super::*;
     use crate::layout::KeyboardStyle;
+
+    fn surface(width: Option<f32>) -> KeyboardSurface {
+        KeyboardSurface {
+            window: App::new().root(),
+            height: 352.0,
+            headroom: 100.0,
+            width,
+        }
+    }
+
+    #[test]
+    fn input_rect_skips_the_headroom() {
+        let r = surface(Some(800.0)).input_rect();
+        assert_eq!((r.origin.x, r.origin.y), (0.0, 100.0));
+        assert_eq!((r.size.width, r.size.height), (800.0, 252.0));
+        assert_eq!(r.bottom(), 352.0);
+    }
+
+    #[test]
+    fn input_rect_spans_the_output_without_a_fixed_width() {
+        assert_eq!(surface(None).input_rect().size.width, INPUT_SPAN);
+    }
 
     #[test]
     fn popup_headroom_fits_a_top_row_bubble() {
