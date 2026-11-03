@@ -4,6 +4,7 @@
 
 use mecha_wayland::prelude::*;
 
+use crate::input::end_word;
 use crate::protocol::input_method::TextInputFocused;
 use crate::widget::keyboard::Keyboard;
 
@@ -32,6 +33,8 @@ impl Event for SwitchView {}
 
 /// Switch the current view to `target`, hiding the old and showing the new via
 /// `Display::Hidden` / `Display::Flex`. Unknown targets are logged and ignored.
+/// A view without letters finishes the word being typed; switching between
+/// letter views (Shift) keeps it.
 pub(crate) fn switch_view(ctx: &mut Context<'_, Keyboard>, target: &str) {
     let Some(idx) = ctx.me().index_of(target) else {
         tracing::warn!(view = %target, "view switch to unknown view; ignored");
@@ -48,6 +51,9 @@ pub(crate) fn switch_view(ctx: &mut Context<'_, Keyboard>, target: &str) {
     ctx.at(old).unwrap().set_display(Display::Hidden);
     ctx.at(new).unwrap().set_display(Display::Flex);
     ctx.me().current_view = idx;
+    if !ctx.me().letter_views[idx] {
+        end_word(ctx);
+    }
     tracing::info!(view = %target, "switched view");
 }
 

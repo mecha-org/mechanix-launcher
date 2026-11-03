@@ -5,12 +5,9 @@ mod context;
 mod dictionary;
 mod profile;
 
-#[allow(unused_imports)]
-pub(crate) use context::{HOLD_CLEAR_MS, TypingContext};
-#[allow(unused_imports)]
-pub(crate) use dictionary::{Dictionary, SMOOTHING};
-#[allow(unused_imports)]
-pub(crate) use profile::{NoopRecorder, Prediction, Profile, Profiles, WordRecorder};
+pub(crate) use context::TypingContext;
+pub(crate) use dictionary::Dictionary;
+pub(crate) use profile::Prediction;
 
 /// Probability of each letter a-z being typed next; index `c as u8 - b'a'`.
 /// Every value is > 0 and the values sum to 1.

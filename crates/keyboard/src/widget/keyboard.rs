@@ -1,15 +1,14 @@
 //! The keyboard widget: spawns one subtree per keymap view (only the current
-//! view is shown), wires each key's `Clicked` to [`dispatch`](crate::input::dispatch)
-//! (or, for repeating control keys, `Press`/`Release` to
-//! [`hold`](crate::input::hold)/[`release`](crate::input::release)), and handles [`SwitchView`](crate::view::SwitchView) to toggle which view is
-//! visible.
+//! view is shown), hands every touch on it to the input layer
+//! ([`touch::attach`](crate::touch::attach)), and handles
+//! [`SwitchView`](crate::view::SwitchView) to toggle which view is visible.
 
 use mecha_wayland::prelude::*;
 
-use crate::input::{dispatch, hold, release, repeats};
 use crate::layout::style::KeyState;
 use crate::layout::tokens::Fonts;
 use crate::layout::{KeyAction, Keymap, Modifier};
+use crate::touch::{self, KeyEntry, TouchTracker, letter_views};
 use crate::view::{BASE_VIEW, SwitchView, switch_view};
 use crate::widget::key::{Key, KeyBuilder};
 
@@ -34,6 +33,13 @@ pub(crate) struct Keyboard {
     pub(crate) zone_keys: Vec<Handle<Key>>,
     /// Key corner radius, for repainting latch keys.
     pub(crate) radius: f32,
+    /// Every key, per view, in keymap order: what the input layer resolves
+    /// touches against.
+    pub(crate) keys: Vec<Vec<KeyEntry>>,
+    /// Per view: whether any key types a letter.
+    pub(crate) letter_views: Vec<bool>,
+    /// The contact being tracked across press, slide and release.
+    pub(crate) tracker: TouchTracker,
 }
 
 impl Keyboard {
@@ -87,6 +93,7 @@ impl Widget for Keyboard {
         let mut views = Vec::with_capacity(b.keymap.views.len());
         let mut latch_keys = Vec::new();
         let mut zone_keys = Vec::new();
+        let mut keys = Vec::with_capacity(b.keymap.views.len());
 
         for (vi, view) in b.keymap.views.iter().enumerate() {
             let view_style = LayoutStyle::default()
@@ -103,6 +110,7 @@ impl Widget for Keyboard {
                 name: view.name.clone(),
                 node: view_div,
             });
+            let mut view_keys = Vec::new();
 
             for row in &view.rows {
                 let row_div = s.spawn(
@@ -129,28 +137,13 @@ impl Widget for Keyboard {
                         _ => {}
                     }
 
-                    // Control keys stay down while pressed so the client
-                    // repeats them; `Exit` also releases, covering a cancelled
-                    // touch (which never sends `Release`) and sliding off.
-                    if let KeyAction::EmitKeysym(ks) = key.action
-                        && repeats(&key.action)
-                    {
-                        s.on::<Press>(key_handle, move |ctx, _| hold(ctx, ks));
-                        s.on::<Release>(key_handle, |ctx, _| release(ctx));
-                        s.on::<Exit>(key_handle, |ctx, _| release(ctx));
-                        continue;
-                    }
-
-                    // Each other key gets its own handler that dispatches its
-                    // action through the Keyboard's action logic.
-                    let action = key.action.clone();
-                    s.on::<Clicked>(key_handle, move |ctx, _| {
-                        dispatch(ctx, &action);
-                    });
+                    view_keys.push(KeyEntry::new(key_handle, key.action.clone()));
                 }
             }
+            keys.push(view_keys);
         }
 
+        touch::attach(s, me);
         s.on::<SwitchView>(me, |ctx, event| {
             switch_view(ctx, event.view);
         });
@@ -161,6 +154,9 @@ impl Widget for Keyboard {
             latch_keys,
             zone_keys,
             radius: style.radius,
+            letter_views: letter_views(&b.keymap),
+            keys,
+            tracker: TouchTracker::default(),
         }
     }
 }
