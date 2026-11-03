@@ -12,7 +12,7 @@ use std::{env, fs};
 use tracing::{info, warn};
 use xkbcommon::xkb::{self, Keysym};
 
-use spec::{ActionSpec, Button, KeyboardSpec, Layout, Outline};
+use spec::{ActionSpec, Button, KeyboardSpec, Layout, Outline, PredictionSpec};
 use style::{KeyLook, KeyStyle};
 use tokens::Font;
 
@@ -25,6 +25,56 @@ const FALLBACK_OUTLINE: Outline = Outline { width: 50.0 };
 pub struct Keymap {
     pub views: Vec<View>,
     pub keyboard: KeyboardStyle,
+    pub prediction: PredictionConfig,
+}
+
+/// Default predictive-touch bias strength.
+pub const DEFAULT_STRENGTH: f32 = 1.0;
+
+/// Resolved `prediction:` settings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PredictionConfig {
+    /// `false` = plain geometry for every key.
+    pub enabled: bool,
+    /// 0 = no bias; higher = stronger lean toward likely next letters.
+    pub strength: f32,
+    /// Bundled list name, or a path to a `word<TAB>count` file.
+    pub dictionary: String,
+    /// Show a pop-up of the pressed character key.
+    pub popup: bool,
+}
+
+impl Default for PredictionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            strength: DEFAULT_STRENGTH,
+            dictionary: "en".to_string(),
+            popup: true,
+        }
+    }
+}
+
+impl PredictionConfig {
+    /// Resolve the raw `prediction:` block; a negative or non-finite strength
+    /// warns and keeps the default.
+    fn resolve(spec: &PredictionSpec) -> Self {
+        let default = Self::default();
+        let strength = match spec.strength {
+            None => default.strength,
+            Some(s) if s.is_finite() && s >= 0.0 => s,
+            Some(s) => {
+                warn!("prediction strength {s} is not a non-negative number; using the default");
+                default.strength
+            }
+        };
+        Self {
+            enabled: spec.enabled.unwrap_or(default.enabled),
+            strength,
+            dictionary: spec.dictionary.clone().unwrap_or(default.dictionary),
+            popup: spec.popup.unwrap_or(default.popup),
+        }
+    }
 }
 
 /// Style applied to the keyboard container.
@@ -287,7 +337,12 @@ impl Keymap {
             .map(|(name, rows)| View::resolve(layout, &styles, name, rows))
             .collect();
         let keyboard = KeyboardStyle::resolve(&layout.keyboard);
-        Keymap { views, keyboard }
+        let prediction = PredictionConfig::resolve(&layout.prediction);
+        Keymap {
+            views,
+            keyboard,
+            prediction,
+        }
     }
 
     #[cfg(test)]
@@ -645,5 +700,40 @@ mod tests {
             typeable >= 30,
             "base view should have many typeable keys, got {typeable}"
         );
+    }
+
+    const MINIMAL_YAML: &str =
+        "outlines:\n  default: { width: 50 }\nviews:\n  base:\n    - \"a\"\n";
+
+    #[test]
+    fn prediction_block_defaults_when_missing() {
+        let km = Keymap::from_layout(&yaml_serde::from_str::<Layout>(MINIMAL_YAML).unwrap());
+        assert!(km.prediction.enabled && km.prediction.popup);
+        assert_eq!(km.prediction.strength, DEFAULT_STRENGTH);
+        assert_eq!(km.prediction.dictionary, "en");
+    }
+
+    #[test]
+    fn prediction_block_parses_and_rejects_negative_strength() {
+        let yaml = format!(
+            "{MINIMAL_YAML}prediction:\n  enabled: false\n  strength: -2\n  dictionary: /tmp/x.tsv\n  popup: false\n"
+        );
+        let km = Keymap::from_layout(&yaml_serde::from_str::<Layout>(&yaml).unwrap());
+        assert!(!km.prediction.enabled);
+        assert_eq!(km.prediction.strength, DEFAULT_STRENGTH);
+        assert_eq!(km.prediction.dictionary, "/tmp/x.tsv");
+        assert!(!km.prediction.popup);
+    }
+
+    #[test]
+    fn prediction_block_keeps_valid_strength() {
+        let yaml = format!("{MINIMAL_YAML}prediction:\n  strength: 0\n");
+        let km = Keymap::from_layout(&yaml_serde::from_str::<Layout>(&yaml).unwrap());
+        assert_eq!(km.prediction.strength, 0.0);
+    }
+
+    #[test]
+    fn bundled_layout_has_prediction_block() {
+        assert!(load_keymap().prediction.enabled);
     }
 }
