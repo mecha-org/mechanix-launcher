@@ -125,16 +125,24 @@ pub(crate) struct Stepper {
 impl Stepper {
     /// The volume after stepping by `delta` at `at` (the event's ms
     /// timestamp, wrapping), 0..=100. The base is the pending target if
-    /// the previous step was at most [`PENDING_WINDOW_MS`] earlier, else
-    /// the reported volume clamped to 100; `None` with neither.
+    /// the previous step was at most [`PENDING_WINDOW_MS`] away (either
+    /// way, as timestamps can arrive slightly out of order), else the
+    /// reported volume clamped to 100; `None` with neither. A raise never
+    /// lowers: from a reported volume above 100 it gives `None`.
     pub(crate) fn step(&mut self, state: VolumeState, delta: i32, at: u32) -> Option<u32> {
         let pending = self
             .target
-            .filter(|&(_, last)| at.wrapping_sub(last) <= PENDING_WINDOW_MS)
+            .filter(|&(_, last)| (at.wrapping_sub(last) as i32).unsigned_abs() <= PENDING_WINDOW_MS)
             .map(|(v, _)| v);
         let base = match (pending, state) {
             (Some(t), _) => t,
-            (None, VolumeState::Ready { volume_percent, .. }) => volume_percent.min(100),
+            (None, VolumeState::Ready { volume_percent, .. }) => {
+                if delta > 0 && volume_percent > 100 {
+                    // Clamping to 100 would lower a volume set above it.
+                    return None;
+                }
+                volume_percent.min(100)
+            }
             (None, _) => return None,
         };
         let v = (base as i32 + delta).clamp(0, 100) as u32;
