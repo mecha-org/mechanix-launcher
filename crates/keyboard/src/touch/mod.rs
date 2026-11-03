@@ -3,6 +3,7 @@
 //! widgets), tracked through press, slide and release (`tracker`), and turned
 //! into keystrokes and [`KeyFeedback`] for the key widgets, which only draw.
 
+mod defer;
 mod glue;
 mod resolve;
 mod tracker;
