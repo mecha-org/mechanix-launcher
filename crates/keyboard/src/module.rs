@@ -9,7 +9,7 @@ use crate::layout::tokens::Fonts;
 use crate::protocol::input_method::InputMethodModule;
 use crate::protocol::virtual_keyboard::VirtualKeyboardModule;
 use crate::view::on_text_input_focused;
-use crate::widget::surface::{KeyboardUI, KeyboardUIBuilder};
+use crate::widget::surface::{InputRegion, KeyboardUI, KeyboardUIBuilder, ensure_input_region};
 use crate::zone::ExclusiveZone;
 
 /// Installs the on-screen keyboard: binds `zwp_virtual_keyboard_v1` and
@@ -55,6 +55,8 @@ pub fn spawn_ui(app: &mut App, bottom_gap: f32) {
     let keymap = layout::load_keymap();
 
     app.insert_resource(LatchedState::default());
+    app.insert_resource(crate::predict::TypingContext::default());
+    app.insert_resource(crate::predict::Prediction::from_config(&keymap.prediction));
     app.insert_resource(ExclusiveZone::default());
     // Keyboard surface visibility — starts hidden; IM2 `activate`, a
     // corner swipe and the hide key flip it through `KeyboardVisibilityExt`.
@@ -86,6 +88,8 @@ pub fn spawn_ui(app: &mut App, bottom_gap: f32) {
         .1
         .surface;
     app.insert_resource(surface);
+    app.insert_resource(InputRegion::default());
+    app.system(ensure_input_region);
 
     // Starts hidden: the surface is created unmapped.
     if app.has_resource::<Surfaces>() {

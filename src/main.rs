@@ -19,9 +19,9 @@ use status_bar::{
 const HOME: AreaId = AreaId("home");
 const RUNNING_APPS: AreaId = AreaId("running-apps");
 const PANEL: AreaId = AreaId("panel");
-/// Extra height of the bottom swipe strip, logical px, over the nav default.
-/// The keyboard leaves the strip's height free under its keys, so this also
-/// lifts the keyboard, and the whole area under the keys stays swipeable.
+/// Extra gap under the keyboard's keys, logical px, over [`KEYBOARD_BOTTOM_GAP`].
+/// It lifts the keyboard; the bottom swipe strip is as tall as the whole gap,
+/// so the area under the keys stays swipeable.
 const KEYBOARD_LIFT: f32 = 24.0;
 const STATUS_BAR: AreaId = AreaId("status-bar");
 
@@ -95,6 +95,9 @@ fn panel(id: ContainerId, screen: impl screen::Screen, span: Span) -> nav::core:
         )
         .close(swipe(PANEL, Direction::Up, Timing::Any), INSTANT)
 }
+
+/// Opaque space under the keyboard's keys; the bottom swipe strip sits inside it.
+const KEYBOARD_BOTTOM_GAP: f32 = 20.0;
 
 fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
     let strip = LayoutStyle::default().height(px(cfg.bottom_strip_height));
@@ -245,12 +248,12 @@ fn main() {
             budget: Budget::default(),
         });
 
-    let defaults = NavConfig::default();
+    // The whole gap under the keys is the bottom swipe strip.
+    let bottom_gap = KEYBOARD_BOTTOM_GAP + KEYBOARD_LIFT;
     let cfg = NavConfig {
-        bottom_strip_height: defaults.bottom_strip_height + KEYBOARD_LIFT,
-        ..defaults
+        bottom_strip_height: bottom_gap,
+        ..NavConfig::default()
     };
-    let bottom_gap = cfg.bottom_strip_height;
     app.add_module(navigation(cfg, AppDrawer::new()))
         .add_module(StatusBarModule)
         .add_module(NotificationsModule)
@@ -334,7 +337,7 @@ mod tests {
         // PresentationModule registers Role; it needs a live compositor.
         app.register_component::<Role>();
         app.add_module(navigation(NavConfig::default(), fixture_drawer()));
-        keyboard::spawn_ui(&mut app, NavConfig::default().bottom_strip_height);
+        keyboard::spawn_ui(&mut app, KEYBOARD_BOTTOM_GAP);
         app.tick();
         app
     }

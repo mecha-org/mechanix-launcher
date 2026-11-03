@@ -5,11 +5,13 @@
 //! `ZwpInputMethodV2` object, and handles `ZwpInputMethodV2Event`.
 //!
 //! Inbound state is double-buffered: `activate`/`deactivate`/`content_type`
-//! events fill a pending context applied on `done`. Surrounding text and change
-//! cause are not tracked yet. Outbound text commits go through [`commit_text`].
+//! events fill a pending context applied on `done`. Surrounding text feeds the
+//! typing context on `done`; change cause is not tracked. Outbound text
+//! commits go through [`commit_text`].
 
 use mecha_wayland::prelude::*;
 
+use crate::predict::TypingContext;
 use crate::visibility::KeyboardVisibilityExt;
 use crate::zone::ExclusiveZone;
 
@@ -24,6 +26,8 @@ pub struct InputMethodContext {
     pub active: bool,
     /// The focused field's content purpose; picks the view shown on activate.
     pub purpose: ZwpTextInputV3ContentPurpose,
+    /// The focused field's content hints (completion, spellcheck, ...).
+    pub hint: ZwpTextInputV3ContentHint,
 }
 
 impl Default for InputMethodContext {
@@ -31,6 +35,7 @@ impl Default for InputMethodContext {
         Self {
             active: false,
             purpose: ZwpTextInputV3ContentPurpose::Normal,
+            hint: ZwpTextInputV3ContentHint::NONE,
         }
     }
 }
@@ -50,6 +55,9 @@ pub struct InputMethodState {
     /// while already active (a field tapped again) sends one, and that should
     /// bring back a keyboard the user hid.
     pending_activate: bool,
+    /// Surrounding text and cursor received in this batch; cleared by
+    /// `activate`, applied to the typing context on `done`.
+    pending_surrounding: Option<(String, u32)>,
 
     /// Number of `done` events received. This is the serial echoed back in
     /// `commit(serial)`.
@@ -148,6 +156,8 @@ fn on_input_method_event(app: &mut App, event: &ZwpInputMethodV2Event) {
     // Both are computed inside the `InputMethodState` borrow and acted on
     // after the guard drops, since signalling needs `&mut App`.
     let mut focused: Option<TextInputFocused> = None;
+    let mut surrounding: Option<(String, u32)> = None;
+    let mut reset_context = false;
     let apply_visible: Option<bool> = {
         let st = &mut app.resource_mut::<InputMethodState>();
         if st.inert {
@@ -161,6 +171,7 @@ fn on_input_method_event(app: &mut App, event: &ZwpInputMethodV2Event) {
                     ..Default::default()
                 };
                 st.pending_activate = true;
+                st.pending_surrounding = None;
                 tracing::info!("input-method: activate (pending)");
                 None
             }
@@ -169,16 +180,26 @@ fn on_input_method_event(app: &mut App, event: &ZwpInputMethodV2Event) {
                 tracing::info!("input-method: deactivate (pending)");
                 None
             }
-            ZwpInputMethodV2Event::SurroundingText { .. }
-            | ZwpInputMethodV2Event::TextChangeCause { .. } => None,
-            ZwpInputMethodV2Event::ContentType { purpose, .. } => {
+            ZwpInputMethodV2Event::SurroundingText { text, cursor, .. } => {
+                st.pending_surrounding = Some((text.clone(), *cursor));
+                None
+            }
+            ZwpInputMethodV2Event::TextChangeCause { .. } => None,
+            ZwpInputMethodV2Event::ContentType { purpose, hint, .. } => {
                 st.pending.purpose = *purpose;
+                st.pending.hint = *hint;
                 None
             }
             ZwpInputMethodV2Event::Done { .. } => {
                 let next = st.pending.clone();
                 let activated = std::mem::take(&mut st.pending_activate);
+                surrounding = st.pending_surrounding.take();
                 let prev = std::mem::replace(&mut st.current, next);
+                // A new field (activate, or a purpose change) or none at all
+                // (deactivate): the word being tracked no longer applies.
+                reset_context = activated
+                    || (prev.active && !st.current.active)
+                    || prev.purpose != st.current.purpose;
                 st.serial = st.serial.wrapping_add(1);
                 let now = &st.current;
                 tracing::info!(
@@ -209,6 +230,15 @@ fn on_input_method_event(app: &mut App, event: &ZwpInputMethodV2Event) {
             }
         }
     };
+    if app.has_resource::<TypingContext>() {
+        let mut ctx = app.resource_mut::<TypingContext>();
+        if reset_context {
+            ctx.reset();
+        }
+        if let Some((text, cursor)) = surrounding {
+            ctx.set_surrounding(&text, cursor);
+        }
+    }
     // Under the host's own screens, an activation shows the keyboard only
     // for the host's field: an app beneath that gets keyboard focus back
     // re-enables its text input too, and must not bring the keyboard up.
@@ -240,7 +270,24 @@ mod tests {
         let mut app = App::new();
         app.insert_resource(KeyboardVisibility::default());
         app.insert_resource(InputMethodState::default());
+        app.insert_resource(TypingContext::default());
         app
+    }
+
+    fn surrounding(input_method: ZwpInputMethodV2) -> ZwpInputMethodV2Event {
+        ZwpInputMethodV2Event::SurroundingText {
+            input_method,
+            text: "hi th".into(),
+            cursor: 5,
+            anchor: 5,
+        }
+    }
+    fn content_type(input_method: ZwpInputMethodV2) -> ZwpInputMethodV2Event {
+        ZwpInputMethodV2Event::ContentType {
+            input_method,
+            hint: ZwpTextInputV3ContentHint::from_bits_truncate(0x40),
+            purpose: ZwpTextInputV3ContentPurpose::Email,
+        }
     }
 
     fn send(app: &mut App, events: &[fn(ZwpInputMethodV2) -> ZwpInputMethodV2Event]) {
@@ -300,5 +347,56 @@ mod tests {
         app.set_keyboard_visibility(false);
         send(&mut app, &[done]);
         assert!(!app.keyboard_visible());
+    }
+
+    #[test]
+    fn surrounding_text_applies_on_done() {
+        let mut app = app();
+        send(&mut app, &[activate, surrounding, done]);
+        assert_eq!(app.resource::<TypingContext>().prefix(), "th");
+    }
+
+    #[test]
+    fn surrounding_before_done_is_not_applied() {
+        let mut app = app();
+        send(&mut app, &[surrounding]);
+        assert_eq!(app.resource::<TypingContext>().prefix(), "");
+    }
+
+    #[test]
+    fn activate_resets_context() {
+        let mut app = app();
+        send(&mut app, &[activate, surrounding, done]);
+        send(&mut app, &[activate, done]);
+        assert_eq!(app.resource::<TypingContext>().prefix(), "");
+    }
+
+    #[test]
+    fn deactivate_resets_context() {
+        let mut app = app();
+        send(&mut app, &[activate, surrounding, done]);
+        send(&mut app, &[deactivate, done]);
+        assert_eq!(app.resource::<TypingContext>().prefix(), "");
+    }
+
+    #[test]
+    fn purpose_change_resets_context() {
+        let mut app = app();
+        send(&mut app, &[activate, surrounding, done]);
+        assert_eq!(app.resource::<TypingContext>().prefix(), "th");
+        send(&mut app, &[content_type, done]);
+        assert_eq!(app.resource::<TypingContext>().prefix(), "");
+    }
+
+    #[test]
+    fn content_type_stores_hint() {
+        let mut app = app();
+        send(&mut app, &[activate, content_type, done]);
+        let cur = &app.resource::<InputMethodState>().current;
+        assert_eq!(
+            cur.hint,
+            ZwpTextInputV3ContentHint::from_bits_truncate(0x40)
+        );
+        assert_eq!(cur.purpose, ZwpTextInputV3ContentPurpose::Email);
     }
 }

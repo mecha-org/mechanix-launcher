@@ -1,17 +1,19 @@
 //! The keyboard widget: spawns one subtree per keymap view (only the current
-//! view is shown), wires each key's `Clicked` to [`dispatch`](crate::input::dispatch)
-//! (or, for repeating control keys, `Press`/`Release` to
-//! [`hold`](crate::input::hold)/[`release`](crate::input::release)), and handles [`SwitchView`](crate::view::SwitchView) to toggle which view is
-//! visible.
+//! view is shown), hands every touch on it to the input layer
+//! ([`touch::attach`](crate::touch::attach)), and handles
+//! [`SwitchView`](crate::view::SwitchView) to toggle which view is visible.
 
 use mecha_wayland::prelude::*;
 
-use crate::input::{dispatch, hold, release, repeats};
 use crate::layout::style::KeyState;
 use crate::layout::tokens::Fonts;
 use crate::layout::{KeyAction, Keymap, Modifier};
+use crate::predict::TypingContext;
+use crate::touch::{self, KeyEntry, TouchState, TouchTracker, letter_views};
 use crate::view::{BASE_VIEW, SwitchView, switch_view};
 use crate::widget::key::{Key, KeyBuilder};
+use crate::widget::popup::{KeyPopup, KeyPopupBuilder};
+use crate::widget::surface::popup_headroom;
 
 /// One spawned view: its keymap name and the node toggled
 /// `Display::Hidden`/`Flex` on switch.
@@ -34,6 +36,17 @@ pub(crate) struct Keyboard {
     pub(crate) zone_keys: Vec<Handle<Key>>,
     /// Key corner radius, for repainting latch keys.
     pub(crate) radius: f32,
+    /// Every key, per view, in keymap order: what the input layer resolves
+    /// touches against.
+    pub(crate) keys: Vec<Vec<KeyEntry>>,
+    /// Per view: whether any key types a letter.
+    pub(crate) letter_views: Vec<bool>,
+    /// The contact being tracked across press, slide and release.
+    pub(crate) tracker: TouchTracker,
+    /// The input layer's other per-contact bookkeeping.
+    pub(crate) touch: TouchState,
+    /// The pressed key's bubble, painted above the keys.
+    pub(crate) popup: Handle<KeyPopup>,
 }
 
 impl Keyboard {
@@ -51,8 +64,6 @@ impl Keyboard {
 pub(crate) struct KeyboardBuilder {
     pub(crate) fonts: Fonts,
     pub(crate) keymap: Keymap,
-    /// Empty space under the keys, painted with the keyboard background.
-    pub(crate) bottom_gap: f32,
 }
 
 impl Build for KeyboardBuilder {
@@ -63,15 +74,13 @@ impl Widget for Keyboard {
     type Builder = KeyboardBuilder;
     fn build(b: KeyboardBuilder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
         // Keyboard container: column filling the window, surface background.
-        // Its gap only separates views, and just one view is ever shown. The
-        // bottom gap is padding, so the background fills it too.
+        // Its gap only separates views, and just one view is ever shown.
         let style = b.keymap.keyboard;
-        let pad = px(style.padding);
         *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
             .column()
             .fill()
             .gap(px(style.row_gap))
-            .padding(Insets::new(pad, pad, px(style.padding + b.bottom_gap), pad));
+            .padding_all(px(style.padding));
         let bg_role = b.keymap.keyboard.background_color;
         *s.component_mut::<Paint>(me).unwrap() = Paint::Quad(Quad::new(s.color(bg_role)));
 
@@ -91,6 +100,7 @@ impl Widget for Keyboard {
         let mut views = Vec::with_capacity(b.keymap.views.len());
         let mut latch_keys = Vec::new();
         let mut zone_keys = Vec::new();
+        let mut keys = Vec::with_capacity(b.keymap.views.len());
 
         for (vi, view) in b.keymap.views.iter().enumerate() {
             let view_style = LayoutStyle::default()
@@ -107,6 +117,7 @@ impl Widget for Keyboard {
                 name: view.name.clone(),
                 node: view_div,
             });
+            let mut view_keys = Vec::new();
 
             for row in &view.rows {
                 let row_div = s.spawn(
@@ -133,30 +144,33 @@ impl Widget for Keyboard {
                         _ => {}
                     }
 
-                    // Control keys stay down while pressed so the client
-                    // repeats them; `Exit` also releases, covering a cancelled
-                    // touch (which never sends `Release`) and sliding off.
-                    if let KeyAction::EmitKeysym(ks) = key.action
-                        && repeats(&key.action)
-                    {
-                        s.on::<Press>(key_handle, move |ctx, _| hold(ctx, ks));
-                        s.on::<Release>(key_handle, |ctx, _| release(ctx));
-                        s.on::<Exit>(key_handle, |ctx, _| release(ctx));
-                        continue;
-                    }
-
-                    // Each other key gets its own handler that dispatches its
-                    // action through the Keyboard's action logic.
-                    let action = key.action.clone();
-                    s.on::<Clicked>(key_handle, move |ctx, _| {
-                        dispatch(ctx, &action);
-                    });
+                    view_keys.push(KeyEntry::new(key_handle, key.action.clone()));
                 }
             }
+            keys.push(view_keys);
         }
 
+        // Last child, so it paints above every key.
+        let popup = s.spawn(
+            me,
+            KeyPopupBuilder {
+                keyboard: me,
+                font: b.fonts.id(style.font),
+                font_size: style.font_size,
+                radius: style.radius,
+                headroom: popup_headroom(&style),
+            },
+        );
+
+        touch::attach(s, me);
+        // A focused field asked for this view: the word typed belonged to
+        // the previous field, so drop it rather than finish (and record) it,
+        // and cancel any touch whose key the switch hid.
         s.on::<SwitchView>(me, |ctx, event| {
+            ctx.resource_mut::<TypingContext>().clear();
+            let old = ctx.me().current_view;
             switch_view(ctx, event.view);
+            touch::view_switched(ctx, old);
         });
 
         Keyboard {
@@ -165,6 +179,11 @@ impl Widget for Keyboard {
             latch_keys,
             zone_keys,
             radius: style.radius,
+            letter_views: letter_views(&b.keymap),
+            keys,
+            tracker: TouchTracker::default(),
+            touch: TouchState::default(),
+            popup,
         }
     }
 }

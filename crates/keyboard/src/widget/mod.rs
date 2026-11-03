@@ -3,4 +3,5 @@
 
 pub(crate) mod key;
 pub(crate) mod keyboard;
+pub(crate) mod popup;
 pub(crate) mod surface;
