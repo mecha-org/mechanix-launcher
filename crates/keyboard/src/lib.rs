@@ -15,6 +15,7 @@ mod layout;
 mod module;
 mod predict;
 mod protocol;
+mod touch;
 mod view;
 mod visibility;
 mod widget;
