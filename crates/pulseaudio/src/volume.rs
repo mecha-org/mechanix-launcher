@@ -54,6 +54,8 @@ impl Signal for SetMuted {}
 /// The server scales its existing channels, preserving their balance. Values
 /// above 100 are clamped. Since [`VolumeState`] displays the channel average,
 /// an unbalanced sink may report a different percentage after the refresh.
+/// A request made while a refresh is in flight is held and sent once the
+/// refresh finishes; a later request replaces a held one (last wins).
 pub struct SetVolume(pub u32);
 impl Signal for SetVolume {}
 
@@ -92,6 +94,13 @@ struct VolumeBackend {
     loading: bool,
     dirty: bool,
     snapshot: Option<VolumeState>,
+    /// The latest `SetVolume` that arrived while a refresh was in flight,
+    /// sent once the refresh finishes. A newer request replaces it.
+    pending_volume: Option<u32>,
+    /// Volumes handed to libpulse, so tests can observe sends without a
+    /// live context.
+    #[cfg(test)]
+    sent: Vec<u32>,
 }
 impl Resource for VolumeBackend {}
 
@@ -118,6 +127,7 @@ fn on_connection(app: &mut App, event: &PulseAudioContextConnectionStateChanged)
                 backend.loading = false;
                 backend.dirty = false;
                 backend.snapshot = None;
+                backend.pending_volume = None;
             }
             app.resource_mut::<VolumeState>()
                 .set_if_neq(VolumeState::Unavailable);
@@ -182,7 +192,10 @@ fn request_sink(app: &mut App) {
         )
     };
     if !release(operation, "get default output volume") {
-        app.resource_mut::<VolumeBackend>().loading = false;
+        let mut backend = app.resource_mut::<VolumeBackend>();
+        backend.loading = false;
+        backend.pending_volume = None;
+        drop(backend);
         app.resource_mut::<VolumeState>()
             .set_if_neq(VolumeState::Unavailable);
     }
@@ -221,11 +234,47 @@ fn on_set_muted(app: &mut App, request: &SetMuted) {
     release(operation, "set default output mute");
 }
 
+/// Whether a refresh of the observed state is in flight or about to be
+/// requested, so a volume request should wait for its result.
+fn refreshing(app: &App) -> bool {
+    let backend = app.resource::<VolumeBackend>();
+    backend.started
+        && (backend.loading || backend.dirty)
+        && matches!(
+            app.resource::<PulseAudio>().connection_state(),
+            ConnectionState::Ready
+        )
+}
+
 fn on_set_volume(app: &mut App, request: &SetVolume) {
-    if !ready_to_set(app) {
-        return;
+    if ready_to_set(app) {
+        send_volume(app, request.0);
+    } else if refreshing(app) {
+        // Each request triggers libpulse round trips; dropping requests
+        // made meanwhile could lose the last step of a burst.
+        app.resource_mut::<VolumeBackend>().pending_volume = Some(request.0);
     }
-    let volume = cvolume_for_percent(request.0);
+}
+
+/// The held volume request to send now: once no refresh is in flight the
+/// held request is taken, and returned if the output can be set; a request
+/// that cannot be set (the output went away) is dropped.
+fn take_pending_volume(app: &mut App) -> Option<u32> {
+    {
+        let backend = app.resource::<VolumeBackend>();
+        if backend.pending_volume.is_none() || backend.loading || backend.dirty {
+            return None;
+        }
+    }
+    let ready = ready_to_set(app);
+    let pending = app.resource_mut::<VolumeBackend>().pending_volume.take();
+    pending.filter(|_| ready)
+}
+
+fn send_volume(app: &mut App, percent: u32) {
+    #[cfg(test)]
+    app.resource_mut::<VolumeBackend>().sent.push(percent);
+    let volume = cvolume_for_percent(percent);
     let Some((context, userdata)) = context_and_queue(app) else {
         return;
     };
@@ -328,6 +377,9 @@ fn on_tick(app: &mut App, _: &Tick) {
     {
         app.resource_mut::<VolumeBackend>().dirty = false;
         request_sink(app);
+    }
+    if let Some(percent) = take_pending_volume(app) {
+        send_volume(app, percent);
     }
 }
 
