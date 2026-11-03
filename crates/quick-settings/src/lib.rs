@@ -8,20 +8,24 @@ mod quick_settings;
 mod sliders;
 mod tiles;
 mod util;
+mod volume_keys;
 
 use bottom_bar::BottomBarBuilder;
 use header::HeaderBuilder;
+use mecha_pulseaudio::{PulseAudioModule, VolumeControlModule};
 use power_overlay::PowerOverlayBuilder;
 use quick_settings::QuickSettingsBuilder;
 use services::{BluetoothModule, DisplayModule, NetworkManagerModule, PowerModule, UpowerModule};
 use sliders::SlidersBuilder;
+use volume_keys::VolumeKeysModule;
 
 /// Installs the quick settings' services (UPower, Bluetooth, display
-/// brightness and logind power). It spawns no window; place the panel with
-/// [`QuickSettingsScreen`].
+/// brightness and logind power), PulseAudio volume, and the volume keys.
+/// It spawns no window; place the panel with [`QuickSettingsScreen`].
 ///
-/// Expects the host to have installed `RingModule` and
-/// `DBusModule::new().system()`, and to have inserted the [`Atlas`] and
+/// Expects the host to have installed `RingModule` (before this module, for
+/// PulseAudio), `WaylandModule` (before this module, for the volume keys)
+/// and `DBusModule::new().system()`, and to have inserted the [`Atlas`] and
 /// `FontBook`.
 pub struct QuickSettingsModule;
 
@@ -31,7 +35,10 @@ impl Module for QuickSettingsModule {
             .add_module(NetworkManagerModule)
             .add_module(BluetoothModule)
             .add_module(DisplayModule)
-            .add_module(PowerModule);
+            .add_module(PowerModule)
+            .add_module(PulseAudioModule)
+            .add_module(VolumeControlModule)
+            .add_module(VolumeKeysModule);
     }
 }
 
