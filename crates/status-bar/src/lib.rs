@@ -16,9 +16,9 @@ pub use assets::fonts::GEIST_MONO as GEIST_MONO_BYTES;
 pub const DEFAULT_ICON_SIZE: u32 = 20;
 
 /// Logical px per mm on the Nothing Phone (4a) panel: 1224x2720 px over
-/// 71x157 mm, shown at output scale 2.25.
-const PX_PER_MM_X: f32 = 1224.0 / 71.0 / 2.25;
-const PX_PER_MM_Y: f32 = 2720.0 / 157.0 / 2.25;
+/// 71x157 mm, shown at output scale 3.
+const PX_PER_MM_X: f32 = 1224.0 / 71.0 / 3.0;
+const PX_PER_MM_Y: f32 = 2720.0 / 157.0 / 3.0;
 
 /// The band the bar's icons are centred in, mm below the top of the screen.
 /// It ends at the bar's bottom, [`DEFAULT_BAR_HEIGHT`] (7mm).
@@ -32,10 +32,10 @@ pub const SIDE_INSET: f32 = SIDE_INSET_MM * PX_PER_MM_X;
 /// Top padding of the bar, logical px: the icon band starts here.
 pub const BAND_TOP: f32 = BAND_TOP_MM * PX_PER_MM_Y;
 
-/// Status bar height, logical px: 7mm (53.9px) rounded to a whole pixel.
+/// Status bar height, logical px: 7mm (40.4px) rounded to a whole pixel.
 /// Layer surfaces are sized in whole pixels and the exclusive zone must
 /// match, or a 1px line shows between the bar and what is under it.
-pub const DEFAULT_BAR_HEIGHT: f32 = 54.0;
+pub const DEFAULT_BAR_HEIGHT: f32 = 40.0;
 
 /// Pre-rasterized sprite handles for all status bar icons in the Atlas.
 #[derive(Debug, Clone, Copy)]
