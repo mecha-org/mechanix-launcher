@@ -32,6 +32,8 @@ pub(crate) struct TouchState {
     prior: LetterPrior,
     /// The active profile's prediction strength, taken with `prior`.
     strength: f32,
+    /// Whether the active profile shows the key pop-up, taken with `prior`.
+    popup: bool,
 }
 
 impl Default for TouchState {
@@ -41,6 +43,7 @@ impl Default for TouchState {
             held: None,
             prior: FLAT,
             strength: 0.0,
+            popup: false,
         }
     }
 }
@@ -51,10 +54,11 @@ impl Default for TouchState {
 pub(crate) fn attach(s: &mut Spawner<'_, Keyboard>, me: Handle<Keyboard>) {
     s.on::<Press>(me, |ctx, e| {
         ctx.me().touch.last_time.insert(e.contact, e.time);
-        let (prior, strength) = predict(ctx);
+        let (prior, strength, popup) = predict(ctx);
         let touch = &mut ctx.me().touch;
         touch.prior = prior;
         touch.strength = strength;
+        touch.popup = popup;
         let key = key_at(ctx, e.position);
         let out = ctx.me().tracker.press(e.contact, key, e.time);
         run(ctx, out, e.time);
@@ -92,13 +96,13 @@ pub(crate) fn view_switched(ctx: &mut Context<'_, Keyboard>, old: usize) {
     settle(ctx, old, time);
 }
 
-/// The prior over the next letter and the prediction strength, for the
-/// focused field and the word typed so far.
-fn predict(ctx: &Context<'_, Keyboard>) -> (LetterPrior, f32) {
+/// The prior over the next letter, the prediction strength and whether the
+/// pop-up is on, for the focused field and the word typed so far.
+fn predict(ctx: &Context<'_, Keyboard>) -> (LetterPrior, f32, bool) {
     let (purpose, hint) = field_kind(ctx);
     let (profile, predictor) = ctx.resource::<Prediction>().active(purpose, hint);
     let prior = predictor.prior(&ctx.resource::<TypingContext>().prefix());
-    (prior, profile.strength)
+    (prior, profile.strength, profile.popup)
 }
 
 /// The key of the current view a touch at `p` means, if any, using the
@@ -185,8 +189,8 @@ fn entry_action(ctx: &mut Context<'_, Keyboard>, view: usize, i: usize) -> Optio
     ctx.me().keys[view].get(i).map(|k| k.action.clone())
 }
 
-/// Tell the UI about key `i` of `view`. To reach another widget (the pop-up),
-/// add its node to the targets.
+/// Tell the UI about key `i` of `view`: the key itself and, while the
+/// contact's profile has the pop-up on, the pop-up.
 fn feedback(
     ctx: &mut Context<'_, Keyboard>,
     view: usize,
@@ -196,7 +200,13 @@ fn feedback(
     let Some(node) = ctx.me().keys[view].get(i).map(|k| k.node.id()) else {
         return;
     };
-    ctx.emit(make(node), [node]);
+    let me = ctx.me();
+    if me.touch.popup {
+        let popup = me.popup.id();
+        ctx.emit(make(node), [node, popup]);
+    } else {
+        ctx.emit(make(node), [node]);
+    }
 }
 
 #[cfg(test)]

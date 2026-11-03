@@ -12,6 +12,7 @@ use crate::predict::TypingContext;
 use crate::touch::{self, KeyEntry, TouchState, TouchTracker, letter_views};
 use crate::view::{BASE_VIEW, SwitchView, switch_view};
 use crate::widget::key::{Key, KeyBuilder};
+use crate::widget::popup::{KeyPopup, KeyPopupBuilder};
 
 /// One spawned view: its keymap name and the node toggled
 /// `Display::Hidden`/`Flex` on switch.
@@ -43,6 +44,8 @@ pub(crate) struct Keyboard {
     pub(crate) tracker: TouchTracker,
     /// The input layer's other per-contact bookkeeping.
     pub(crate) touch: TouchState,
+    /// The pressed key's bubble, painted above the keys.
+    pub(crate) popup: Handle<KeyPopup>,
 }
 
 impl Keyboard {
@@ -146,6 +149,17 @@ impl Widget for Keyboard {
             keys.push(view_keys);
         }
 
+        // Last child, so it paints above every key.
+        let popup = s.spawn(
+            me,
+            KeyPopupBuilder {
+                keyboard: me,
+                font: b.fonts.id(style.font),
+                font_size: style.font_size,
+                radius: style.radius,
+            },
+        );
+
         touch::attach(s, me);
         // A focused field asked for this view: the word typed belonged to
         // the previous field, so drop it rather than finish (and record) it,
@@ -167,6 +181,7 @@ impl Widget for Keyboard {
             keys,
             tracker: TouchTracker::default(),
             touch: TouchState::default(),
+            popup,
         }
     }
 }
