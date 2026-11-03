@@ -9,21 +9,50 @@
 
 use mecha_wayland::prelude::*;
 
-use crate::layout::Keymap;
+use crate::layout::{KeyboardStyle, Keymap};
 use crate::layout::tokens::Fonts;
 use crate::visibility::{ApplyKeyboardVisibility, KeyboardVisibilityExt};
 use crate::widget::keyboard::KeyboardBuilder;
 use crate::zone::{ExclusiveZone, apply_visibility};
 
-/// The keyboard's window and height, for the controls that change its
-/// surface (visibility, exclusive zone). The height counts the gap under the
-/// keys.
+/// The keyboard's window and size, for the controls that change its surface
+/// (visibility, exclusive zone). The height counts the transparent headroom
+/// strip above the keys and the gap under them.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct KeyboardSurface {
     pub(crate) window: NodeId,
     pub(crate) height: f32,
+    /// Height of the transparent strip on top, where key pop-ups may rise.
+    pub(crate) headroom: f32,
+    /// The surface's width when the layout fixes it, else `None` (full output
+    /// width, which an input rect covers with a huge span).
+    pub(crate) width: Option<f32>,
+}
+
+impl KeyboardSurface {
+    /// The part of the surface that takes input: everything below the
+    /// headroom strip.
+    pub(crate) fn input_rect(self) -> Rect {
+        Rect::new(
+            0.0,
+            self.headroom,
+            self.width.unwrap_or(INPUT_SPAN),
+            self.height - self.headroom,
+        )
+    }
 }
 impl Resource for KeyboardSurface {}
+
+/// Width of the input region when the surface spans the whole output: wider
+/// than any output, clipped to the surface by the compositor.
+const INPUT_SPAN: f32 = 16384.0;
+
+/// Height of the transparent strip above the keys: room for a pop-up over the
+/// top row (1.3 key heights, as `popup.rs` draws it, plus its 4 px gap).
+pub(crate) fn popup_headroom(style: &KeyboardStyle) -> f32 {
+    let row = (style.height - 2.0 * style.padding - 3.0 * style.row_gap) / 4.0;
+    (1.3 * row + 4.0).ceil()
+}
 
 /// Spawns a `zwlr_layer_surface` anchored to the bottom edge of the output.
 ///
@@ -32,7 +61,7 @@ impl Resource for KeyboardSurface {}
 /// width, `bottom_gap` taller than the keys so the host's bottom-edge swipe
 /// strip has room under them. The exclusive zone follows [`ExclusiveZone`]:
 /// `-1` (overlap other content without reserving space) while off or
-/// suspended, the whole surface height while on (the default), and `-1`
+/// suspended, the keyboard part of the surface (its height minus the headroom strip) while on (the default), and `-1`
 /// whenever hidden. `KeyboardInteractivity::None`
 /// keeps the OSK from stealing keyboard focus from the focused app; pointer
 /// taps on the layer surface are still delivered.
@@ -55,7 +84,8 @@ impl Widget for KeyboardUI {
     type Builder = KeyboardUIBuilder;
     fn build(b: KeyboardUIBuilder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
         let style = b.keymap.keyboard;
-        let height = style.height + b.bottom_gap;
+        let headroom = popup_headroom(&style);
+        let height = headroom + style.height + b.bottom_gap;
         let (anchor, width) = match style.width {
             Some(w) => (Anchor::BOTTOM, px(w)),
             _ => (Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT, auto()),
@@ -77,8 +107,11 @@ impl Widget for KeyboardUI {
                     .column()
                     .justify(Justify::Start)
                     .size(width, px(height))
-                    .padding(Insets::new(px(0.0), px(0.0), px(b.bottom_gap), px(0.0))),
-            ),
+                    .padding(Insets::new(px(headroom), px(0.0), px(b.bottom_gap), px(0.0))),
+            )
+            // Transparent, so only the keys' container shows; the strip
+            // above it is see-through and click-through.
+            .clear(Color::TRANSPARENT),
             (role,),
         );
         let window = win.id();
@@ -92,7 +125,12 @@ impl Widget for KeyboardUI {
         );
 
         // Map the surface while shown, unmap it while hidden, zone and all.
-        let surface = KeyboardSurface { window, height };
+        let surface = KeyboardSurface {
+            window,
+            height,
+            headroom,
+            width: style.width,
+        };
         s.on::<ApplyKeyboardVisibility>(me, move |ctx, _| {
             let visible = ctx.keyboard_visible();
             let zone = *ctx.resource::<ExclusiveZone>();
@@ -101,5 +139,20 @@ impl Widget for KeyboardUI {
         });
 
         KeyboardUI { surface }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout::KeyboardStyle;
+
+    #[test]
+    fn popup_headroom_fits_a_top_row_bubble() {
+        let style = KeyboardStyle::default();
+        let row = (style.height - 2.0 * style.padding - 3.0 * style.row_gap) / 4.0;
+        let h = popup_headroom(&style);
+        assert!(h >= 1.3 * row + 4.0, "{h} vs row {row}");
+        assert!(h < 1.3 * row + 5.0);
     }
 }

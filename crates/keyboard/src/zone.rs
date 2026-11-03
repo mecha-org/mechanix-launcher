@@ -42,6 +42,12 @@ impl ExclusiveZone {
     }
 }
 
+/// The part of a `height`-tall surface that is keyboard: the surface minus its
+/// transparent `headroom` strip. Only this much is ever reserved.
+pub(crate) fn reserved_height(height: f32, headroom: f32) -> f32 {
+    height - headroom
+}
+
 /// Send the zone the surface should have now: [`ExclusiveZone::zone`] while
 /// shown, none while hidden. Sends nothing if it has not changed.
 fn send_zone(
@@ -52,7 +58,7 @@ fn send_zone(
     wl: &mut Wayland,
 ) {
     let zone = if visible {
-        zone.zone(surface.height)
+        zone.zone(reserved_height(surface.height, surface.headroom))
     } else {
         -1
     };
@@ -77,7 +83,8 @@ pub fn suspend_keyboard_zone(app: &mut App, suspended: bool) {
     tracing::info!(suspended, "keyboard exclusive zone suspended");
 }
 
-/// Map or unmap the keyboard surface for `visible`, with its zone. The zone
+/// Map or unmap the keyboard surface for `visible`, with its zone and input
+/// region. The zone
 /// is cleared while the surface is still mapped, so that commit reaches the
 /// compositor (which keeps an unmapped layer's zone) and the apps above grow
 /// back. On a show it is sent after the map: a surface that has never drawn
@@ -94,6 +101,8 @@ pub(crate) fn apply_visibility(
     }
     s.set_mapped(surface.window, visible, wl);
     if visible {
+        // Taps in the headroom strip go to the app below.
+        s.set_input_region(surface.window, Some(&[surface.input_rect()]), wl);
         send_zone(zone, true, surface, s, wl);
     }
 }
@@ -140,5 +149,11 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(zone.zone(252.0), -1);
+    }
+
+    #[test]
+    fn zone_excludes_headroom() {
+        let on = ExclusiveZone::default();
+        assert_eq!(on.zone(reserved_height(352.0, 100.0)), 252);
     }
 }

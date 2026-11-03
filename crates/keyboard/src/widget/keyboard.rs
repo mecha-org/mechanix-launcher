@@ -13,6 +13,7 @@ use crate::touch::{self, KeyEntry, TouchState, TouchTracker, letter_views};
 use crate::view::{BASE_VIEW, SwitchView, switch_view};
 use crate::widget::key::{Key, KeyBuilder};
 use crate::widget::popup::{KeyPopup, KeyPopupBuilder};
+use crate::widget::surface::popup_headroom;
 
 /// One spawned view: its keymap name and the node toggled
 /// `Display::Hidden`/`Flex` on switch.
@@ -157,6 +158,7 @@ impl Widget for Keyboard {
                 font: b.fonts.id(style.font),
                 font_size: style.font_size,
                 radius: style.radius,
+                headroom: popup_headroom(&style),
             },
         );
 

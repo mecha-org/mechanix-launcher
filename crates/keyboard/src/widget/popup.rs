@@ -18,25 +18,28 @@ const HEIGHT_SCALE: f32 = 1.3;
 const GAP: f32 = 4.0;
 
 /// Where the bubble for `key` goes: centred over it, its bottom edge `GAP`
-/// above the key, then pushed inside `container` (all in window coordinates).
-/// A top-row key's bubble ends up overlapping the key itself.
-pub(crate) fn popup_rect(key: Rect, container: Rect) -> Rect {
+/// above the key, then pushed inside `bounds` (all in window coordinates):
+/// the keyboard container plus the transparent headroom strip above it, so a
+/// top-row key's bubble rises into the strip.
+pub(crate) fn popup_rect(key: Rect, bounds: Rect) -> Rect {
     let w = key.size.width * WIDTH_SCALE;
     let h = key.size.height * HEIGHT_SCALE;
     let x = key.origin.x + (key.size.width - w) / 2.0;
     let y = key.origin.y - GAP - h;
-    let x = x.min(container.right() - w).max(container.origin.x);
-    let y = y.min(container.bottom() - h).max(container.origin.y);
+    let x = x.min(bounds.right() - w).max(bounds.origin.x);
+    let y = y.min(bounds.bottom() - h).max(bounds.origin.y);
     Rect::new(x, y, w, h)
 }
 
 /// Build args for the [`KeyPopup`]: the keyboard it floats over, the font,
-/// the key label size (the bubble draws at twice it) and the corner radius.
+/// the key label size (the bubble draws at twice it), the corner radius and
+/// the headroom strip above the keyboard it may rise into.
 pub(crate) struct KeyPopupBuilder {
     pub(crate) keyboard: Handle<Keyboard>,
     pub(crate) font: FontId,
     pub(crate) font_size: u16,
     pub(crate) radius: f32,
+    pub(crate) headroom: f32,
 }
 
 impl Build for KeyPopupBuilder {
@@ -55,9 +58,9 @@ impl Widget for KeyPopup {
         let label = s.spawn(me, text(b.font, "").size(b.font_size * 2));
 
         let keyboard = b.keyboard;
-        let radius = b.radius;
+        let (radius, headroom) = (b.radius, b.headroom);
         s.on::<KeyFeedback>(me, move |ctx, e| match *e {
-            KeyFeedback::Pressed { key } => show(ctx, keyboard, key, radius),
+            KeyFeedback::Pressed { key } => show(ctx, keyboard, key, radius, headroom),
             KeyFeedback::Released { .. } => {
                 ctx.set_display(Display::Hidden);
             }
@@ -67,7 +70,13 @@ impl Widget for KeyPopup {
 }
 
 /// Show the bubble over `key`, or hide it if the key has no character.
-fn show(ctx: &mut Context<'_, KeyPopup>, keyboard: Handle<Keyboard>, key: NodeId, radius: f32) {
+fn show(
+    ctx: &mut Context<'_, KeyPopup>,
+    keyboard: Handle<Keyboard>,
+    key: NodeId,
+    radius: f32,
+    headroom: f32,
+) {
     let Some((string, look)) = ctx
         .widget::<Key>(key)
         .and_then(|k| k.popup_text.clone().map(|t| (t, k.look)))
@@ -86,7 +95,15 @@ fn show(ctx: &mut Context<'_, KeyPopup>, keyboard: Handle<Keyboard>, key: NodeId
         return;
     };
 
-    let r = popup_rect(key_rect, container);
+    // The bubble may rise into the headroom above the container, which makes
+    // its top inset negative (taffy takes any length for an absolute inset).
+    let bounds = Rect::new(
+        container.origin.x,
+        container.origin.y - headroom,
+        container.size.width,
+        container.size.height + headroom,
+    );
+    let r = popup_rect(key_rect, bounds);
     let (x, y) = (r.origin.x - container.origin.x, r.origin.y - container.origin.y);
     ctx.set_style(
         LayoutStyle::default()
@@ -133,11 +150,13 @@ mod tests {
     }
 
     #[test]
-    fn top_row_popup_clamped_inside() {
-        let key = Rect::new(200.0, 10.0, 100.0, 50.0);
-        let p = popup_rect(key, CONTAINER);
-        assert_eq!(p.origin.y, 0.0);
-        assert!(p.bottom() > key.origin.y);
+    fn top_row_popup_goes_into_headroom() {
+        // Container at y = 100 under an 80 px headroom strip.
+        let bounds = Rect::new(0.0, 20.0, 1000.0, 480.0);
+        let key = Rect::new(200.0, 110.0, 100.0, 50.0);
+        let p = popup_rect(key, bounds);
+        assert_eq!(p.bottom(), key.origin.y - 4.0);
+        assert!(p.origin.y >= bounds.origin.y);
     }
 
     #[test]
