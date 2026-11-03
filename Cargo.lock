@@ -802,9 +802,12 @@ name = "quick-settings"
 version = "0.1.0"
 dependencies = [
  "assets",
+ "mecha-pulseaudio",
  "mecha-wayland",
  "screen",
  "services",
+ "tracing",
+ "wayland",
 ]
 
 [[package]]

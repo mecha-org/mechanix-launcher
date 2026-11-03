@@ -8,3 +8,8 @@ mecha-wayland.workspace = true
 screen.workspace = true
 services.workspace = true
 assets.workspace = true
+mecha-pulseaudio = { path = "../pulseaudio" }
+tracing = "0.1"
+
+[dev-dependencies]
+wayland = { git = "https://github.com/mecha-org/mecha-wayland", branch = "dev", features = ["fake"] }
