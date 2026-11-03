@@ -60,7 +60,12 @@ impl TouchTracker {
                 held = true;
             }
         }
-        self.active = Some(Active { contact: c, key: key.map(|k| k.index), held, press_time: time });
+        self.active = Some(Active {
+            contact: c,
+            key: key.map(|k| k.index),
+            held,
+            press_time: time,
+        });
         out
     }
 
@@ -76,7 +81,9 @@ impl TouchTracker {
         }
         if let Some(old) = active.key {
             if active.held {
-                out.push(TouchOut::StopHold { held_ms: time.wrapping_sub(active.press_time) });
+                out.push(TouchOut::StopHold {
+                    held_ms: time.wrapping_sub(active.press_time),
+                });
                 active.held = false;
             }
             out.push(TouchOut::Unpressed(old));
@@ -108,6 +115,16 @@ impl TouchTracker {
         out
     }
 
+    /// Finish whichever contact is active at `time` as if it lifted (another
+    /// finger came down); a tap commits.
+    pub(crate) fn finish_active(&mut self, time: u32) -> Vec<TouchOut> {
+        let mut out = Vec::new();
+        if let Some(active) = self.active.take() {
+            Self::finish(active, true, time, &mut out);
+        }
+        out
+    }
+
     /// The contact being tracked, if any.
     pub(crate) fn contact(&self) -> Option<ContactId> {
         self.active.as_ref().map(|a| a.contact)
@@ -126,7 +143,9 @@ impl TouchTracker {
     fn finish(active: Active, commit: bool, time: u32, out: &mut Vec<TouchOut>) {
         let Some(i) = active.key else { return };
         if active.held {
-            out.push(TouchOut::StopHold { held_ms: time.wrapping_sub(active.press_time) });
+            out.push(TouchOut::StopHold {
+                held_ms: time.wrapping_sub(active.press_time),
+            });
         } else if commit {
             out.push(TouchOut::Commit(i));
         }
@@ -142,17 +161,26 @@ mod tests {
     const B: ContactId = ContactId::Touch(2);
 
     fn key(index: usize) -> Option<KeyRef> {
-        Some(KeyRef { index, repeats: false })
+        Some(KeyRef {
+            index,
+            repeats: false,
+        })
     }
     fn rep(index: usize) -> Option<KeyRef> {
-        Some(KeyRef { index, repeats: true })
+        Some(KeyRef {
+            index,
+            repeats: true,
+        })
     }
 
     #[test]
     fn tap_commits_on_release() {
         let mut t = TouchTracker::default();
         assert_eq!(t.press(A, key(3), 0), vec![TouchOut::Pressed(3)]);
-        assert_eq!(t.release(A, 50), vec![TouchOut::Commit(3), TouchOut::Unpressed(3)]);
+        assert_eq!(
+            t.release(A, 50),
+            vec![TouchOut::Commit(3), TouchOut::Unpressed(3)]
+        );
     }
 
     #[test]
@@ -164,13 +192,19 @@ mod tests {
             t.moved(A, key(4), 20),
             vec![TouchOut::Unpressed(3), TouchOut::Pressed(4)]
         );
-        assert_eq!(t.release(A, 30), vec![TouchOut::Commit(4), TouchOut::Unpressed(4)]);
+        assert_eq!(
+            t.release(A, 30),
+            vec![TouchOut::Commit(4), TouchOut::Unpressed(4)]
+        );
     }
 
     #[test]
     fn repeat_key_holds_and_release_does_not_commit() {
         let mut t = TouchTracker::default();
-        assert_eq!(t.press(A, rep(7), 1000), vec![TouchOut::Pressed(7), TouchOut::Hold(7)]);
+        assert_eq!(
+            t.press(A, rep(7), 1000),
+            vec![TouchOut::Pressed(7), TouchOut::Hold(7)]
+        );
         assert_eq!(
             t.release(A, 1100),
             vec![TouchOut::StopHold { held_ms: 100 }, TouchOut::Unpressed(7)]
@@ -195,8 +229,14 @@ mod tests {
     fn slide_onto_repeat_key_does_not_hold_but_release_commits() {
         let mut t = TouchTracker::default();
         t.press(A, key(1), 0);
-        assert_eq!(t.moved(A, rep(7), 10), vec![TouchOut::Unpressed(1), TouchOut::Pressed(7)]);
-        assert_eq!(t.release(A, 20), vec![TouchOut::Commit(7), TouchOut::Unpressed(7)]);
+        assert_eq!(
+            t.moved(A, rep(7), 10),
+            vec![TouchOut::Unpressed(1), TouchOut::Pressed(7)]
+        );
+        assert_eq!(
+            t.release(A, 20),
+            vec![TouchOut::Commit(7), TouchOut::Unpressed(7)]
+        );
     }
 
     #[test]
@@ -217,9 +257,16 @@ mod tests {
         t.press(A, key(1), 0);
         assert_eq!(
             t.press(B, key(2), 10),
-            vec![TouchOut::Commit(1), TouchOut::Unpressed(1), TouchOut::Pressed(2)]
+            vec![
+                TouchOut::Commit(1),
+                TouchOut::Unpressed(1),
+                TouchOut::Pressed(2)
+            ]
         );
-        assert_eq!(t.release(B, 20), vec![TouchOut::Commit(2), TouchOut::Unpressed(2)]);
+        assert_eq!(
+            t.release(B, 20),
+            vec![TouchOut::Commit(2), TouchOut::Unpressed(2)]
+        );
     }
 
     #[test]
@@ -229,7 +276,10 @@ mod tests {
         assert_eq!(t.release(B, 5), vec![]);
         assert_eq!(t.moved(B, key(2), 6), vec![]);
         assert_eq!(t.cancel(B, 7), vec![]);
-        assert_eq!(t.release(A, 8), vec![TouchOut::Commit(1), TouchOut::Unpressed(1)]);
+        assert_eq!(
+            t.release(A, 8),
+            vec![TouchOut::Commit(1), TouchOut::Unpressed(1)]
+        );
     }
 
     #[test]
@@ -258,6 +308,23 @@ mod tests {
     }
 
     #[test]
+    fn finish_active_ends_like_release() {
+        let mut t = TouchTracker::default();
+        assert_eq!(t.finish_active(5), vec![]);
+        t.press(A, key(2), 0);
+        assert_eq!(
+            t.finish_active(10),
+            vec![TouchOut::Commit(2), TouchOut::Unpressed(2)]
+        );
+        assert_eq!(t.release(A, 20), vec![]);
+        t.press(B, rep(7), 100);
+        assert_eq!(
+            t.finish_active(250),
+            vec![TouchOut::StopHold { held_ms: 150 }, TouchOut::Unpressed(7)]
+        );
+    }
+
+    #[test]
     fn contact_reports_active_contact() {
         let mut t = TouchTracker::default();
         assert_eq!(t.contact(), None);
@@ -272,7 +339,10 @@ mod tests {
         let mut t = TouchTracker::default();
         assert_eq!(t.press(A, None, 0), vec![]);
         assert_eq!(t.moved(A, rep(5), 10), vec![TouchOut::Pressed(5)]);
-        assert_eq!(t.release(A, 20), vec![TouchOut::Commit(5), TouchOut::Unpressed(5)]);
+        assert_eq!(
+            t.release(A, 20),
+            vec![TouchOut::Commit(5), TouchOut::Unpressed(5)]
+        );
         t.press(A, None, 30);
         assert_eq!(t.release(A, 40), vec![]);
     }

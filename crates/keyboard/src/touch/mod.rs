@@ -4,6 +4,7 @@
 //! into keystrokes and [`KeyFeedback`] for the key widgets, which only draw.
 
 mod defer;
+mod flow;
 mod glue;
 mod resolve;
 mod tracker;
@@ -122,7 +123,7 @@ mod tests {
     }
 
     #[test]
-    fn key_geoms_lowercase_letters_only() {
+    fn letter_of_counts_a_to_z_lowercased() {
         let keymap = layout::load_keymap();
         assert_eq!(letter_of(&key(&keymap, "upper", "Q").action), Some('q'));
         assert_eq!(letter_of(&key(&keymap, "base", "q").action), Some('q'));

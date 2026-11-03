@@ -6,8 +6,9 @@
 //!
 //! The tracker's key indices always refer to the current view: when the view
 //! changes under an active contact, that contact is cancelled against the old
-//! view (its highlight and hold end; nothing is typed). A press that lands
-//! before its view is laid out waits in a [`Deferral`] until it is.
+//! view (its highlight and hold end; nothing is typed). The order of
+//! operations per event (deferral, finishing an earlier finger, resolving)
+//! lives in [`flow`]; this file binds it to the widgets.
 
 use std::collections::HashMap;
 
@@ -15,41 +16,52 @@ use mecha_wayland::prelude::*;
 use xkbcommon::xkb::Keysym;
 
 use super::KeyFeedback;
-use super::defer::{Contact, Deferral, PendingPress, laid_out};
-use super::resolve::{KeyGeom, ResolveParams, resolve};
-use super::tracker::{KeyRef, TouchOut, TouchTracker};
+use super::defer::PendingPress;
+use super::flow::{self, Board, Flow};
+use super::resolve::KeyGeom;
+use super::tracker::{TouchOut, TouchTracker};
 use crate::input::{dispatch, field_kind, hold, release, repeats};
 use crate::layout::KeyAction;
-use crate::predict::{FLAT, LetterPrior, Prediction, TypingContext};
+use crate::predict::{LetterPrior, Prediction, TypingContext};
 use crate::widget::keyboard::Keyboard;
 
 /// Bookkeeping the input layer keeps besides the tracker.
+#[derive(Default)]
 pub(crate) struct TouchState {
     /// Last event time per contact, for `PressCancelled` (which carries none).
     last_time: HashMap<ContactId, u32>,
     /// The keysym a running hold is pressing.
     held: Option<Keysym>,
-    /// The next-letter prior for the current contact, taken at its press:
-    /// the word can't change while a finger is down.
-    prior: LetterPrior,
-    /// The active profile's prediction strength, taken with `prior`.
-    strength: f32,
-    /// Whether the active profile shows the key pop-up, taken with `prior`.
+    /// Whether the active profile shows the key pop-up, taken at the press.
     popup: bool,
-    /// A press waiting for its view's layout.
-    deferral: Deferral,
+    /// Deferral and per-contact prior.
+    flow: Flow,
 }
 
-impl Default for TouchState {
-    fn default() -> Self {
-        Self {
-            last_time: HashMap::new(),
-            held: None,
-            prior: FLAT,
-            strength: 0.0,
-            popup: false,
-            deferral: Deferral::default(),
-        }
+/// The keyboard as the [`flow`] sees it.
+struct Kb<'c, 'a>(&'c mut Context<'a, Keyboard>);
+
+impl Board for Kb<'_, '_> {
+    fn geoms(&mut self) -> Vec<KeyGeom> {
+        key_geoms(self.0)
+    }
+    fn predict(&mut self) -> (LetterPrior, f32) {
+        let (prior, strength, popup) = predict(self.0);
+        self.0.me().touch.popup = popup;
+        (prior, strength)
+    }
+    fn repeats(&mut self, index: usize) -> bool {
+        let me = self.0.me();
+        repeats(&me.keys[me.current_view][index].action)
+    }
+    fn tracker(&mut self) -> &mut TouchTracker {
+        &mut self.0.me().tracker
+    }
+    fn flow(&mut self) -> &mut Flow {
+        &mut self.0.me().touch.flow
+    }
+    fn act(&mut self, out: Vec<TouchOut>, time: u32) {
+        run(self.0, out, time);
     }
 }
 
@@ -64,60 +76,25 @@ pub(crate) fn attach(s: &mut Spawner<'_, Keyboard>, me: Handle<Keyboard>) {
             position: e.position,
             time: e.time,
         };
-        if let Some(geoms) = gate(ctx, Contact::Press(p)) {
-            press(ctx, &geoms, p);
-        }
+        flow::press(&mut Kb(ctx), p);
     });
 
     s.on::<PressMoved>(me, |ctx, e| {
         ctx.me().touch.last_time.insert(e.contact, e.time);
-        if let Some(geoms) = gate(ctx, Contact::Moved(e.contact)) {
-            let key = key_at(ctx, &geoms, e.position);
-            let out = ctx.me().tracker.moved(e.contact, key, e.time);
-            run(ctx, out, e.time);
-        }
+        flow::moved(&mut Kb(ctx), e.contact, e.position, e.time);
     });
 
     s.on::<Release>(me, |ctx, e| {
         ctx.me().touch.last_time.remove(&e.contact);
-        if gate(ctx, Contact::Release(e.contact)).is_some() {
-            let out = ctx.me().tracker.release(e.contact, e.time);
-            run(ctx, out, e.time);
-        }
+        // Commits the last resolved (highlighted) key, not a fresh resolve
+        // at the release position: by design.
+        flow::release(&mut Kb(ctx), e.contact, e.time);
     });
 
     s.on::<PressCancelled>(me, |ctx, e| {
         let time = ctx.me().touch.last_time.remove(&e.contact).unwrap_or(0);
-        if gate(ctx, Contact::Cancel(e.contact)).is_some() {
-            let out = ctx.me().tracker.cancel(e.contact, time);
-            run(ctx, out, time);
-        }
+        flow::cancel(&mut Kb(ctx), e.contact, time);
     });
-}
-
-/// Pass `event` through the deferral: replays a press that was waiting for
-/// the layout, then returns the current view's key geometry if the event
-/// itself should be acted on.
-fn gate(ctx: &mut Context<'_, Keyboard>, event: Contact) -> Option<Vec<KeyGeom>> {
-    let geoms = key_geoms(ctx);
-    let ready = laid_out(&geoms);
-    let gate = ctx.me().touch.deferral.gate(event, ready);
-    if let Some(p) = gate.replay {
-        press(ctx, &geoms, p);
-    }
-    gate.forward.then_some(geoms)
-}
-
-/// A press the view is laid out for: take the prior, resolve and track it.
-fn press(ctx: &mut Context<'_, Keyboard>, geoms: &[KeyGeom], p: PendingPress) {
-    let (prior, strength, popup) = predict(ctx);
-    let touch = &mut ctx.me().touch;
-    touch.prior = prior;
-    touch.strength = strength;
-    touch.popup = popup;
-    let key = key_at(ctx, geoms, p.position);
-    let out = ctx.me().tracker.press(p.contact, key, p.time);
-    run(ctx, out, p.time);
 }
 
 /// The view changed from `old` outside a touch event (a focused field asked
@@ -157,17 +134,6 @@ fn key_geoms(ctx: &mut Context<'_, Keyboard>) -> Vec<KeyGeom> {
             KeyGeom { rect, letter }
         })
         .collect()
-}
-
-/// The key of the current view (whose keys are `geoms`) a touch at `p`
-/// means, if any, using the prior taken at the contact's press.
-fn key_at(ctx: &mut Context<'_, Keyboard>, geoms: &[KeyGeom], p: Point) -> Option<KeyRef> {
-    let view = ctx.me().current_view;
-    let touch = &ctx.me().touch;
-    let params = ResolveParams::for_keys(geoms, touch.strength);
-    let index = resolve(geoms, p, &touch.prior, &params)?;
-    let repeats = repeats(&ctx.me().keys[view][index].action);
-    Some(KeyRef { index, repeats })
 }
 
 /// Act on a batch of tracker outputs against the current view, then cancel
@@ -251,6 +217,7 @@ fn feedback(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::touch::tracker::KeyRef;
 
     const A: ContactId = ContactId::Touch(1);
 
