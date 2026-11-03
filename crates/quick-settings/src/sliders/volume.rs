@@ -1,4 +1,5 @@
-use mecha_wayland::mechanix_widgets::prelude::{SliderChange, slider};
+use mecha_pulseaudio::*;
+use mecha_wayland::mechanix_widgets::prelude::{SliderChange, SliderContextExt, slider};
 use mecha_wayland::prelude::*;
 
 use crate::util::load_icon;
@@ -56,11 +57,29 @@ impl Widget for VolumeSlider {
                 .tick_gap(4.0),
         );
 
-        s.on::<SliderChange>(slider_handle, |_ctx, e| {
+        s.on::<SliderChange>(slider_handle, |ctx, e| {
             println!(
                 "[volume] slider changed: value = {:.2}, step_index = {}",
                 e.value, e.step_index
             );
+
+            ctx.signal(SetVolume(if e.value > 100.0 {
+                100
+            } else if e.value < 0.0 {
+                0
+            } else {
+                e.value as u32
+            }));
+        });
+
+        s.on::<VolumeStateEvent>(slider_handle, move |ctx, e| {
+            if let VolumeState::Ready { volume_percent, .. } = e.0 {
+                println!("Volume changed to: {}", volume_percent);
+                let Some(mut slider) = ctx.at(slider_handle) else {
+                    return;
+                };
+                slider.set_value(volume_percent.min(100) as f32);
+            }
         });
 
         VolumeSlider
