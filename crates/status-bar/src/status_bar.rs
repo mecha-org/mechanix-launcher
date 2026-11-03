@@ -29,7 +29,7 @@ impl Widget for StatusBar {
 
     fn build(_b: StatusBarBuilder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
         // Outer status bar: full width, 7mm tall, the clusters centred in
-        // the band 3-7mm below the top and 7mm in from the sides;
+        // the band 3-7mm below the top and 3mm in from the sides;
         // space-between left glyph & right cluster.
         *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
             .row()

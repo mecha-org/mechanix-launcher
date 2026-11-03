@@ -21,10 +21,10 @@ const PX_PER_MM_X: f32 = 1224.0 / 71.0 / 2.25;
 const PX_PER_MM_Y: f32 = 2720.0 / 157.0 / 2.25;
 
 /// The band the bar's icons are centred in, mm below the top of the screen.
+/// It ends at the bar's bottom, [`DEFAULT_BAR_HEIGHT`] (7mm).
 const BAND_TOP_MM: f32 = 3.0;
-const BAND_BOTTOM_MM: f32 = 7.0;
 /// How far the clusters sit in from the sides, mm.
-const SIDE_INSET_MM: f32 = 7.0;
+const SIDE_INSET_MM: f32 = 3.0;
 
 /// Horizontal inset of the bar's clusters, logical px.
 pub const SIDE_INSET: f32 = SIDE_INSET_MM * PX_PER_MM_X;
@@ -32,8 +32,10 @@ pub const SIDE_INSET: f32 = SIDE_INSET_MM * PX_PER_MM_X;
 /// Top padding of the bar, logical px: the icon band starts here.
 pub const BAND_TOP: f32 = BAND_TOP_MM * PX_PER_MM_Y;
 
-/// Status bar height, logical px: it ends where the icon band does.
-pub const DEFAULT_BAR_HEIGHT: f32 = BAND_BOTTOM_MM * PX_PER_MM_Y;
+/// Status bar height, logical px: 7mm (53.9px) rounded to a whole pixel.
+/// Layer surfaces are sized in whole pixels and the exclusive zone must
+/// match, or a 1px line shows between the bar and what is under it.
+pub const DEFAULT_BAR_HEIGHT: f32 = 54.0;
 
 /// Pre-rasterized sprite handles for all status bar icons in the Atlas.
 #[derive(Debug, Clone, Copy)]
