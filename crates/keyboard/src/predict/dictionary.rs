@@ -21,9 +21,13 @@ impl Dictionary {
     pub(crate) fn parse(tsv: &str) -> Dictionary {
         let mut words: Vec<(Box<str>, u32)> = Vec::new();
         for line in tsv.lines() {
-            let Some((w, c)) = line.split_once('\t') else { continue };
+            let Some((w, c)) = line.split_once('\t') else {
+                continue;
+            };
             let w = w.trim().to_lowercase();
-            let Ok(c) = c.trim().parse::<u32>() else { continue };
+            let Ok(c) = c.trim().parse::<u32>() else {
+                continue;
+            };
             if w.is_empty() || !w.bytes().all(|b| b.is_ascii_lowercase() || b == b'\'') {
                 continue;
             }
@@ -38,7 +42,11 @@ impl Dictionary {
                 false
             }
         });
-        let mut dict = Dictionary { words, empty: FLAT, single: [FLAT; 26] };
+        let mut dict = Dictionary {
+            words,
+            empty: FLAT,
+            single: [FLAT; 26],
+        };
         dict.empty = dict.compute("");
         for i in 0..26 {
             let p = ((b'a' + i as u8) as char).to_string();
@@ -71,6 +79,7 @@ impl Dictionary {
     }
 
     /// Number of distinct words.
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.words.len()
     }
@@ -80,7 +89,9 @@ impl Dictionary {
         let start = self.words.partition_point(|(w, _)| &**w < prefix);
         let mut mass = [0f64; 26];
         for (w, c) in &self.words[start..] {
-            let Some(rest) = w.strip_prefix(prefix) else { break };
+            let Some(rest) = w.strip_prefix(prefix) else {
+                break;
+            };
             if let Some(&b) = rest.as_bytes().first()
                 && b.is_ascii_lowercase()
             {
@@ -200,6 +211,10 @@ mod tests {
                 std::hint::black_box(d.prior(p));
             }
         }
-        assert!(start.elapsed() < std::time::Duration::from_secs(1), "{:?}", start.elapsed());
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(1),
+            "{:?}",
+            start.elapsed()
+        );
     }
 }

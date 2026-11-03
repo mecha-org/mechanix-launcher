@@ -9,10 +9,11 @@
 
 use mecha_wayland::prelude::*;
 
-use crate::layout::{KeyboardStyle, Keymap};
 use crate::layout::tokens::Fonts;
+use crate::layout::{KeyboardStyle, Keymap};
 use crate::visibility::{ApplyKeyboardVisibility, KeyboardVisibilityExt};
 use crate::widget::keyboard::KeyboardBuilder;
+use crate::widget::popup::{GAP, HEIGHT_SCALE};
 use crate::zone::{ExclusiveZone, apply_visibility};
 
 /// The keyboard's window and size, for the controls that change its surface
@@ -76,10 +77,11 @@ pub(crate) fn ensure_input_region(app: &mut App, _: &PostTick) {
 const INPUT_SPAN: f32 = 16384.0;
 
 /// Height of the transparent strip above the keys: room for a pop-up over the
-/// top row (1.3 key heights, as `popup.rs` draws it, plus its 4 px gap).
+/// top row ([`HEIGHT_SCALE`] key heights, as `popup.rs` draws it, plus its
+/// [`GAP`]).
 pub(crate) fn popup_headroom(style: &KeyboardStyle) -> f32 {
     let row = (style.height - 2.0 * style.padding - 3.0 * style.row_gap) / 4.0;
-    (1.3 * row + 4.0).ceil()
+    (HEIGHT_SCALE * row + GAP).ceil()
 }
 
 /// Spawns a `zwlr_layer_surface` anchored to the bottom edge of the output.
@@ -132,16 +134,22 @@ impl Widget for KeyboardUI {
 
         let win = s.spawn_with(
             b.root,
-            window().layout(
-                LayoutStyle::default()
-                    .column()
-                    .justify(Justify::Start)
-                    .size(width, px(height))
-                    .padding(Insets::new(px(headroom), px(0.0), px(b.bottom_gap), px(0.0))),
-            )
-            // Transparent, so only the keys' container shows; the strip
-            // above it is see-through and click-through.
-            .clear(Color::TRANSPARENT),
+            window()
+                .layout(
+                    LayoutStyle::default()
+                        .column()
+                        .justify(Justify::Start)
+                        .size(width, px(height))
+                        .padding(Insets::new(
+                            px(headroom),
+                            px(0.0),
+                            px(b.bottom_gap),
+                            px(0.0),
+                        )),
+                )
+                // Transparent, so only the keys' container shows; the strip
+                // above it is see-through and click-through.
+                .clear(Color::TRANSPARENT),
             (role,),
         );
         let window = win.id();
@@ -190,7 +198,6 @@ impl Widget for KeyboardUI {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::KeyboardStyle;
 
     fn surface(width: Option<f32>) -> KeyboardSurface {
         KeyboardSurface {
@@ -216,10 +223,10 @@ mod tests {
 
     #[test]
     fn popup_headroom_fits_a_top_row_bubble() {
-        let style = KeyboardStyle::default();
+        let style = crate::layout::load_keymap().keyboard;
         let row = (style.height - 2.0 * style.padding - 3.0 * style.row_gap) / 4.0;
         let h = popup_headroom(&style);
-        assert!(h >= 1.3 * row + 4.0, "{h} vs row {row}");
-        assert!(h < 1.3 * row + 5.0);
+        assert!(h >= HEIGHT_SCALE * row + GAP, "{h} vs row {row}");
+        assert!(h < HEIGHT_SCALE * row + GAP + 1.0);
     }
 }

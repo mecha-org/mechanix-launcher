@@ -20,8 +20,6 @@ pub(crate) struct TypingContext {
     surrounding: String,
     /// Letters committed locally since the last surrounding update.
     local: String,
-    /// Whether the client has sent surrounding text since the last reset.
-    surrounding_mode: bool,
 }
 impl Resource for TypingContext {}
 
@@ -35,7 +33,6 @@ impl TypingContext {
     /// immediately before byte offset `cursor`. An invalid cursor gives an
     /// empty prefix. Drops the local part, which the client's text supersedes.
     pub(crate) fn set_surrounding(&mut self, text: &str, cursor: u32) {
-        self.surrounding_mode = true;
         self.local.clear();
         self.surrounding = match text.get(..cursor as usize) {
             Some(before) => {
@@ -84,16 +81,15 @@ impl TypingContext {
         (!word.is_empty()).then_some(word)
     }
 
-    /// Drop the word without returning it; keeps surrounding mode.
+    /// Drop the word without returning it.
     pub(crate) fn clear(&mut self) {
         self.surrounding.clear();
         self.local.clear();
     }
 
-    /// Forget everything and leave surrounding mode (a field was activated).
+    /// Forget everything (a field was activated, deactivated or changed).
     pub(crate) fn reset(&mut self) {
         self.clear();
-        self.surrounding_mode = false;
     }
 }
 
@@ -189,12 +185,12 @@ mod tests {
     }
 
     #[test]
-    fn reset_leaves_surrounding_mode() {
+    fn reset_forgets_surrounding_and_local() {
         let mut c = TypingContext::default();
         c.set_surrounding("hello wor", 9);
+        c.committed("l");
         c.reset();
         assert_eq!(c.prefix(), "");
-        assert!(!c.surrounding_mode);
     }
 
     #[test]

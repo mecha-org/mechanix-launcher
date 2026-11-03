@@ -88,15 +88,19 @@ impl Resource for Prediction {}
 
 impl Prediction {
     /// Build from the layout's prediction block: loads the dictionary once and
-    /// registers it under its spec string.
+    /// registers it under its spec string. With prediction off (strength 0)
+    /// nothing is loaded and the flat predictor stands in.
     pub(crate) fn from_config(cfg: &PredictionConfig) -> Prediction {
+        let profiles = Profiles::from_config(cfg);
         let mut predictors: HashMap<String, Box<dyn Predictor>> = HashMap::new();
-        predictors.insert(
-            cfg.dictionary.clone(),
-            Box::new(Dictionary::load(&cfg.dictionary)),
-        );
+        if profiles.default.strength > 0.0 {
+            predictors.insert(
+                cfg.dictionary.clone(),
+                Box::new(Dictionary::load(&cfg.dictionary)),
+            );
+        }
         Prediction {
-            profiles: Profiles::from_config(cfg),
+            profiles,
             predictors,
             recorder: Box::new(NoopRecorder),
         }
@@ -165,6 +169,15 @@ mod tests {
         ] {
             assert_eq!(*profiles.select(purpose, NONE), normal);
         }
+    }
+
+    #[test]
+    fn disabled_config_loads_no_dictionary() {
+        let prediction = Prediction::from_config(&cfg(false));
+        assert!(prediction.predictors.is_empty());
+        let (_, predictor) = prediction.active(ZwpTextInputV3ContentPurpose::Normal, NONE);
+        assert_eq!(predictor.prior("th"), FLAT);
+        assert!(!Prediction::from_config(&cfg(true)).predictors.is_empty());
     }
 
     #[test]

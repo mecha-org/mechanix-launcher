@@ -13,9 +13,9 @@ use crate::widget::keyboard::Keyboard;
 /// The bubble's width as a multiple of the key's.
 const WIDTH_SCALE: f32 = 1.4;
 /// The bubble's height as a multiple of the key's.
-const HEIGHT_SCALE: f32 = 1.3;
+pub(crate) const HEIGHT_SCALE: f32 = 1.3;
 /// Gap between the bubble's bottom edge and the key's top, in px.
-const GAP: f32 = 4.0;
+pub(crate) const GAP: f32 = 4.0;
 
 /// Where the bubble for `key` goes: centred over it, its bottom edge `GAP`
 /// above the key, then pushed inside `bounds` (all in window coordinates):
@@ -49,6 +49,8 @@ impl Build for KeyPopupBuilder {
 /// The pressed key's bubble. Hidden until a key with a character is pressed.
 pub(crate) struct KeyPopup {
     label: Handle<Text>,
+    /// The key the bubble is showing, if any.
+    shown: Option<NodeId>,
 }
 
 impl Widget for KeyPopup {
@@ -61,11 +63,15 @@ impl Widget for KeyPopup {
         let (radius, headroom) = (b.radius, b.headroom);
         s.on::<KeyFeedback>(me, move |ctx, e| match *e {
             KeyFeedback::Pressed { key } => show(ctx, keyboard, key, radius, headroom),
-            KeyFeedback::Released { .. } => {
-                ctx.set_display(Display::Hidden);
+            // Only the shown key's release hides the bubble.
+            KeyFeedback::Released { key } => {
+                if ctx.me().shown == Some(key) {
+                    ctx.me().shown = None;
+                    ctx.set_display(Display::Hidden);
+                }
             }
         });
-        KeyPopup { label }
+        KeyPopup { label, shown: None }
     }
 }
 
@@ -77,6 +83,7 @@ fn show(
     radius: f32,
     headroom: f32,
 ) {
+    ctx.me().shown = None;
     let Some((string, look)) = ctx
         .widget::<Key>(key)
         .and_then(|k| k.popup_text.clone().map(|t| (t, k.look)))
@@ -104,7 +111,10 @@ fn show(
         container.size.height + headroom,
     );
     let r = popup_rect(key_rect, bounds);
-    let (x, y) = (r.origin.x - container.origin.x, r.origin.y - container.origin.y);
+    let (x, y) = (
+        r.origin.x - container.origin.x,
+        r.origin.y - container.origin.y,
+    );
     ctx.set_style(
         LayoutStyle::default()
             .center()
@@ -122,6 +132,7 @@ fn show(
         t.set_text(string);
         t.set_color(ink);
     }
+    ctx.me().shown = Some(key);
 }
 
 /// The window-coordinate rectangle a widget's layout gave it.

@@ -9,9 +9,7 @@ use crate::layout::tokens::Fonts;
 use crate::protocol::input_method::InputMethodModule;
 use crate::protocol::virtual_keyboard::VirtualKeyboardModule;
 use crate::view::on_text_input_focused;
-use crate::widget::surface::{
-    InputRegion, KeyboardUI, KeyboardUIBuilder, ensure_input_region,
-};
+use crate::widget::surface::{InputRegion, KeyboardUI, KeyboardUIBuilder, ensure_input_region};
 use crate::zone::ExclusiveZone;
 
 /// Installs the on-screen keyboard: binds `zwp_virtual_keyboard_v1` and

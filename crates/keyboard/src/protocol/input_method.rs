@@ -6,7 +6,8 @@
 //!
 //! Inbound state is double-buffered: `activate`/`deactivate`/`content_type`
 //! events fill a pending context applied on `done`. Surrounding text feeds the
-//! typing context on `done`; change cause is not tracked. Outbound text commits go through [`commit_text`].
+//! typing context on `done`; change cause is not tracked. Outbound text
+//! commits go through [`commit_text`].
 
 use mecha_wayland::prelude::*;
 
