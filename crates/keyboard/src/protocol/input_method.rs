@@ -193,8 +193,12 @@ fn on_input_method_event(app: &mut App, event: &ZwpInputMethodV2Event) {
                 let next = st.pending.clone();
                 let activated = std::mem::take(&mut st.pending_activate);
                 surrounding = st.pending_surrounding.take();
-                reset_context = activated;
                 let prev = std::mem::replace(&mut st.current, next);
+                // A new field (activate, or a purpose change) or none at all
+                // (deactivate): the word being tracked no longer applies.
+                reset_context = activated
+                    || (prev.active && !st.current.active)
+                    || prev.purpose != st.current.purpose;
                 st.serial = st.serial.wrapping_add(1);
                 let now = &st.current;
                 tracing::info!(
@@ -363,6 +367,23 @@ mod tests {
         let mut app = app();
         send(&mut app, &[activate, surrounding, done]);
         send(&mut app, &[activate, done]);
+        assert_eq!(app.resource::<TypingContext>().prefix(), "");
+    }
+
+    #[test]
+    fn deactivate_resets_context() {
+        let mut app = app();
+        send(&mut app, &[activate, surrounding, done]);
+        send(&mut app, &[deactivate, done]);
+        assert_eq!(app.resource::<TypingContext>().prefix(), "");
+    }
+
+    #[test]
+    fn purpose_change_resets_context() {
+        let mut app = app();
+        send(&mut app, &[activate, surrounding, done]);
+        assert_eq!(app.resource::<TypingContext>().prefix(), "th");
+        send(&mut app, &[content_type, done]);
         assert_eq!(app.resource::<TypingContext>().prefix(), "");
     }
 

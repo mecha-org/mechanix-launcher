@@ -16,7 +16,7 @@ use crate::layout::{KeyAction, KeyFace, Keymap};
 use crate::protocol::virtual_keyboard::keysym_text;
 use crate::widget::key::Key;
 
-pub(crate) use glue::attach;
+pub(crate) use glue::{TouchState, attach, view_switched};
 pub(crate) use tracker::TouchTracker;
 
 /// The input layer's word to the UI: a key gained or lost the pressed state.

@@ -1,71 +1,108 @@
 //! Wires touches on the keyboard container to keys: each contact event is
 //! resolved against the current view's laid-out key rectangles (biased by the
-//! next-letter prior), run through the [`TouchTracker`](super::TouchTracker),
-//! and its outputs become keystrokes ([`dispatch`], [`hold`], [`release`]) and
+//! next-letter prior), run through the [`TouchTracker`], and its outputs
+//! become keystrokes ([`dispatch`], [`hold`], [`release`]) and
 //! [`KeyFeedback`] for the key widgets.
+//!
+//! The tracker's key indices always refer to the current view: when the view
+//! changes under an active contact, that contact is cancelled against the old
+//! view (its highlight and hold end; nothing is typed).
 
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use mecha_wayland::prelude::*;
 use xkbcommon::xkb::Keysym;
 
 use super::KeyFeedback;
 use super::resolve::{KeyGeom, ResolveParams, resolve};
-use super::tracker::{KeyRef, TouchOut};
+use super::tracker::{KeyRef, TouchOut, TouchTracker};
 use crate::input::{dispatch, field_kind, hold, release, repeats};
 use crate::layout::KeyAction;
-use crate::predict::{Prediction, TypingContext};
+use crate::predict::{FLAT, LetterPrior, Prediction, TypingContext};
 use crate::widget::keyboard::Keyboard;
 
-/// Bookkeeping the handlers share that the tracker doesn't keep.
-#[derive(Default)]
-struct Glue {
+/// Bookkeeping the input layer keeps besides the tracker.
+pub(crate) struct TouchState {
     /// Last event time per contact, for `PressCancelled` (which carries none).
     last_time: HashMap<ContactId, u32>,
     /// The keysym a running hold is pressing.
     held: Option<Keysym>,
+    /// The next-letter prior for the current contact, taken at its press:
+    /// the word can't change while a finger is down.
+    prior: LetterPrior,
+    /// The active profile's prediction strength, taken with `prior`.
+    strength: f32,
+}
+
+impl Default for TouchState {
+    fn default() -> Self {
+        Self {
+            last_time: HashMap::new(),
+            held: None,
+            prior: FLAT,
+            strength: 0.0,
+        }
+    }
 }
 
 /// Route every touch on the keyboard container `me` through the input layer.
 /// Registered on the container only: the window's `bottom_gap` strip below it
 /// gets no handler, so taps there stay dead.
 pub(crate) fn attach(s: &mut Spawner<'_, Keyboard>, me: Handle<Keyboard>) {
-    let glue = Rc::new(RefCell::new(Glue::default()));
-
-    let g = glue.clone();
-    s.on::<Press>(me, move |ctx, e| {
-        g.borrow_mut().last_time.insert(e.contact, e.time);
+    s.on::<Press>(me, |ctx, e| {
+        ctx.me().touch.last_time.insert(e.contact, e.time);
+        let (prior, strength) = predict(ctx);
+        let touch = &mut ctx.me().touch;
+        touch.prior = prior;
+        touch.strength = strength;
         let key = key_at(ctx, e.position);
         let out = ctx.me().tracker.press(e.contact, key, e.time);
-        apply(ctx, &g, out);
+        run(ctx, out, e.time);
     });
 
-    let g = glue.clone();
-    s.on::<PressMoved>(me, move |ctx, e| {
-        g.borrow_mut().last_time.insert(e.contact, e.time);
+    s.on::<PressMoved>(me, |ctx, e| {
+        ctx.me().touch.last_time.insert(e.contact, e.time);
         let key = key_at(ctx, e.position);
         let out = ctx.me().tracker.moved(e.contact, key, e.time);
-        apply(ctx, &g, out);
+        run(ctx, out, e.time);
     });
 
-    let g = glue.clone();
-    s.on::<Release>(me, move |ctx, e| {
-        g.borrow_mut().last_time.remove(&e.contact);
+    s.on::<Release>(me, |ctx, e| {
+        ctx.me().touch.last_time.remove(&e.contact);
         let out = ctx.me().tracker.release(e.contact, e.time);
-        apply(ctx, &g, out);
+        run(ctx, out, e.time);
     });
 
-    let g = glue;
-    s.on::<PressCancelled>(me, move |ctx, e| {
-        let time = g.borrow_mut().last_time.remove(&e.contact).unwrap_or(0);
+    s.on::<PressCancelled>(me, |ctx, e| {
+        let time = ctx.me().touch.last_time.remove(&e.contact).unwrap_or(0);
         let out = ctx.me().tracker.cancel(e.contact, time);
-        apply(ctx, &g, out);
+        run(ctx, out, time);
     });
 }
 
-/// The key of the current view a touch at `p` means, if any.
+/// The view changed from `old` outside a touch event (a focused field asked
+/// for another view): cancel any active contact against `old`.
+pub(crate) fn view_switched(ctx: &mut Context<'_, Keyboard>, old: usize) {
+    let me = ctx.me();
+    let time = me
+        .tracker
+        .contact()
+        .and_then(|c| me.touch.last_time.get(&c).copied())
+        .unwrap_or(0);
+    settle(ctx, old, time);
+}
+
+/// The prior over the next letter and the prediction strength, for the
+/// focused field and the word typed so far.
+fn predict(ctx: &Context<'_, Keyboard>) -> (LetterPrior, f32) {
+    let (purpose, hint) = field_kind(ctx);
+    let (profile, predictor) = ctx.resource::<Prediction>().active(purpose, hint);
+    let prior = predictor.prior(&ctx.resource::<TypingContext>().prefix());
+    (prior, profile.strength)
+}
+
+/// The key of the current view a touch at `p` means, if any, using the
+/// prior taken at the contact's press.
 fn key_at(ctx: &mut Context<'_, Keyboard>, p: Point) -> Option<KeyRef> {
     let view = ctx.me().current_view;
     let keys: Vec<(Handle<_>, Option<char>)> = ctx.me().keys[view]
@@ -83,19 +120,41 @@ fn key_at(ctx: &mut Context<'_, Keyboard>, p: Point) -> Option<KeyRef> {
         })
         .collect();
 
-    let (purpose, hint) = field_kind(ctx);
-    let (profile, predictor) = ctx.resource::<Prediction>().active(purpose, hint);
-    let prior = predictor.prior(&ctx.resource::<TypingContext>().prefix());
-    let params = ResolveParams::for_keys(&geoms, profile.strength);
-
-    let index = resolve(&geoms, p, &prior, &params)?;
+    let touch = &ctx.me().touch;
+    let params = ResolveParams::for_keys(&geoms, touch.strength);
+    let index = resolve(&geoms, p, &touch.prior, &params)?;
     let repeats = repeats(&ctx.me().keys[view][index].action);
     Some(KeyRef { index, repeats })
 }
 
-/// Act on the tracker's outputs, in order. Indices refer to the current view.
-fn apply(ctx: &mut Context<'_, Keyboard>, glue: &RefCell<Glue>, out: Vec<TouchOut>) {
+/// Act on a batch of tracker outputs against the current view, then cancel
+/// the active contact if acting switched the view.
+fn run(ctx: &mut Context<'_, Keyboard>, out: Vec<TouchOut>, time: u32) {
     let view = ctx.me().current_view;
+    apply(ctx, view, out);
+    settle(ctx, view, time);
+}
+
+/// If the view is no longer `view`, cancel the active contact, whose key
+/// indices refer to `view`.
+fn settle(ctx: &mut Context<'_, Keyboard>, view: usize, time: u32) {
+    let me = ctx.me();
+    let now = me.current_view;
+    let out = finish_stale(&mut me.tracker, view, now, time);
+    apply(ctx, view, out);
+}
+
+/// The outputs that end `tracker`'s active contact if its view `then` is no
+/// longer the current view `now`; none if the view is unchanged.
+fn finish_stale(tracker: &mut TouchTracker, then: usize, now: usize, time: u32) -> Vec<TouchOut> {
+    if then == now {
+        return Vec::new();
+    }
+    tracker.cancel_active(time)
+}
+
+/// Act on the tracker's outputs, in order; indices refer to `view`.
+fn apply(ctx: &mut Context<'_, Keyboard>, view: usize, out: Vec<TouchOut>) {
     for o in out {
         match o {
             TouchOut::Pressed(i) => feedback(ctx, view, i, |key| KeyFeedback::Pressed { key }),
@@ -107,13 +166,13 @@ fn apply(ctx: &mut Context<'_, Keyboard>, glue: &RefCell<Glue>, out: Vec<TouchOu
             }
             TouchOut::Hold(i) => {
                 if let Some(KeyAction::EmitKeysym(ks)) = entry_action(ctx, view, i) {
-                    glue.borrow_mut().held = Some(ks);
+                    ctx.me().touch.held = Some(ks);
                     hold(ctx, ks);
                 }
             }
             TouchOut::StopHold { held_ms } => {
                 release(ctx);
-                if glue.borrow_mut().held.take() == Some(Keysym::BackSpace) {
+                if ctx.me().touch.held.take() == Some(Keysym::BackSpace) {
                     ctx.resource_mut::<TypingContext>().backspace_held(held_ms);
                 }
             }
@@ -138,4 +197,33 @@ fn feedback(
         return;
     };
     ctx.emit(make(node), [node]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const A: ContactId = ContactId::Touch(1);
+
+    #[test]
+    fn view_change_cancels_active_contact() {
+        let mut t = TouchTracker::default();
+        t.press(
+            A,
+            Some(KeyRef {
+                index: 4,
+                repeats: false,
+            }),
+            0,
+        );
+        assert_eq!(finish_stale(&mut t, 0, 0, 10), vec![]);
+        assert_eq!(finish_stale(&mut t, 0, 1, 10), vec![TouchOut::Unpressed(4)]);
+        assert_eq!(t.release(A, 20), vec![]);
+    }
+
+    #[test]
+    fn view_change_without_contact_does_nothing() {
+        let mut t = TouchTracker::default();
+        assert_eq!(finish_stale(&mut t, 0, 1, 10), vec![]);
+    }
 }

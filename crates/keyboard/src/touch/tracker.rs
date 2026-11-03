@@ -98,6 +98,21 @@ impl TouchTracker {
         self.end(c, false, time)
     }
 
+    /// Cancel whichever contact is active at `time` (its key went away, e.g.
+    /// the view changed under it); nothing is typed.
+    pub(crate) fn cancel_active(&mut self, time: u32) -> Vec<TouchOut> {
+        let mut out = Vec::new();
+        if let Some(active) = self.active.take() {
+            Self::finish(active, false, time, &mut out);
+        }
+        out
+    }
+
+    /// The contact being tracked, if any.
+    pub(crate) fn contact(&self) -> Option<ContactId> {
+        self.active.as_ref().map(|a| a.contact)
+    }
+
     fn end(&mut self, c: ContactId, commit: bool, time: u32) -> Vec<TouchOut> {
         let mut out = Vec::new();
         if self.active.as_ref().is_some_and(|a| a.contact == c) {
@@ -225,6 +240,31 @@ mod tests {
             t.release(A, 1600),
             vec![TouchOut::StopHold { held_ms: 600 }, TouchOut::Unpressed(7)]
         );
+    }
+
+    #[test]
+    fn cancel_active_finishes_without_commit() {
+        let mut t = TouchTracker::default();
+        assert_eq!(t.cancel_active(5), vec![]);
+        t.press(A, key(2), 0);
+        assert_eq!(t.cancel_active(10), vec![TouchOut::Unpressed(2)]);
+        assert_eq!(t.release(A, 20), vec![]);
+        t.press(B, rep(7), 100);
+        assert_eq!(
+            t.cancel_active(250),
+            vec![TouchOut::StopHold { held_ms: 150 }, TouchOut::Unpressed(7)]
+        );
+        assert!(t.contact().is_none());
+    }
+
+    #[test]
+    fn contact_reports_active_contact() {
+        let mut t = TouchTracker::default();
+        assert_eq!(t.contact(), None);
+        t.press(A, None, 0);
+        assert_eq!(t.contact(), Some(A));
+        t.release(A, 1);
+        assert_eq!(t.contact(), None);
     }
 
     #[test]

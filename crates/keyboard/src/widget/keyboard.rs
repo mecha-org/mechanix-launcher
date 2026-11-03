@@ -8,7 +8,8 @@ use mecha_wayland::prelude::*;
 use crate::layout::style::KeyState;
 use crate::layout::tokens::Fonts;
 use crate::layout::{KeyAction, Keymap, Modifier};
-use crate::touch::{self, KeyEntry, TouchTracker, letter_views};
+use crate::predict::TypingContext;
+use crate::touch::{self, KeyEntry, TouchState, TouchTracker, letter_views};
 use crate::view::{BASE_VIEW, SwitchView, switch_view};
 use crate::widget::key::{Key, KeyBuilder};
 
@@ -40,6 +41,8 @@ pub(crate) struct Keyboard {
     pub(crate) letter_views: Vec<bool>,
     /// The contact being tracked across press, slide and release.
     pub(crate) tracker: TouchTracker,
+    /// The input layer's other per-contact bookkeeping.
+    pub(crate) touch: TouchState,
 }
 
 impl Keyboard {
@@ -144,8 +147,14 @@ impl Widget for Keyboard {
         }
 
         touch::attach(s, me);
+        // A focused field asked for this view: the word typed belonged to
+        // the previous field, so drop it rather than finish (and record) it,
+        // and cancel any touch whose key the switch hid.
         s.on::<SwitchView>(me, |ctx, event| {
+            ctx.resource_mut::<TypingContext>().clear();
+            let old = ctx.me().current_view;
             switch_view(ctx, event.view);
+            touch::view_switched(ctx, old);
         });
 
         Keyboard {
@@ -157,6 +166,7 @@ impl Widget for Keyboard {
             letter_views: letter_views(&b.keymap),
             keys,
             tracker: TouchTracker::default(),
+            touch: TouchState::default(),
         }
     }
 }
