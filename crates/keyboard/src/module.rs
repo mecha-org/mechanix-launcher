@@ -55,6 +55,8 @@ pub fn spawn_ui(app: &mut App, bottom_gap: f32) {
     let keymap = layout::load_keymap();
 
     app.insert_resource(LatchedState::default());
+    app.insert_resource(crate::predict::TypingContext::default());
+    app.insert_resource(crate::predict::Prediction::from_config(&keymap.prediction));
     app.insert_resource(ExclusiveZone::default());
     // Keyboard surface visibility — starts hidden; IM2 `activate`, a
     // corner swipe and the hide key flip it through `KeyboardVisibilityExt`.
