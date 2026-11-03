@@ -127,20 +127,23 @@ pub(crate) fn resolve(
     }
 
     let two_sigma_sq = 2.0 * params.sigma * params.sigma;
-    let mut best: Option<(usize, f32)> = None;
+    // (index, score, distance); ties and degenerate scores go to the nearer key.
+    let mut best: Option<(usize, f32, f32)> = None;
     for (i, k) in keys.iter().enumerate() {
         let Some(letter) = k.letter else { continue };
+        debug_assert!(letter.is_ascii_lowercase());
         let d = distance(k.rect, p);
         if d > params.max_shift {
             continue;
         }
         let score = (-d * d / two_sigma_sq).exp()
             * prior[(letter as u8 - b'a') as usize].powf(params.strength);
-        if best.is_none_or(|(_, s)| score > s) {
-            best = Some((i, score));
+        let score = if score.is_finite() { score } else { 0.0 };
+        if best.is_none_or(|(_, s, bd)| score > s || (score == s && d < bd)) {
+            best = Some((i, score, d));
         }
     }
-    Some(best.map_or(nearest, |(i, _)| i))
+    Some(best.map_or(nearest, |(i, _, _)| i))
 }
 
 #[cfg(test)]
@@ -265,6 +268,35 @@ mod tests {
         let got = resolve(&keys, p, &prior, &params(&keys));
         assert_ne!(got, Some(4));
         assert_eq!(got, Some(1));
+    }
+
+    #[test]
+    fn shift_bound_holds_with_flat_gaussian() {
+        let keys = row();
+        let mut prior = [1e-6; 26];
+        prior[letter_index('t')] = 0.99;
+        let params = ResolveParams {
+            sigma: 1e6,
+            ..params(&keys)
+        };
+        let p = Point::new(W + GAP + 1.0, H / 2.0);
+        let got = resolve(&keys, p, &prior, &params);
+        assert_ne!(got, Some(4));
+        assert_eq!(got, Some(1));
+    }
+
+    #[test]
+    fn degenerate_scores_fall_back_to_nearest() {
+        let keys = row();
+        // Gap point 2 px from r, 6 px from e.
+        let p = Point::new(3.0 * (W + GAP) - 2.0, H / 2.0);
+        let zero = [0.0; 26];
+        assert_eq!(resolve(&keys, p, &zero, &params(&keys)), Some(3));
+        let sigma0 = ResolveParams {
+            sigma: 0.0,
+            ..params(&keys)
+        };
+        assert_eq!(resolve(&keys, p, &FLAT, &sigma0), Some(3));
     }
 
     #[test]
