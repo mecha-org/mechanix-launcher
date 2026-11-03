@@ -76,8 +76,7 @@ impl Widget for KeyboardUI {
                 LayoutStyle::default()
                     .column()
                     .justify(Justify::Start)
-                    .size(width, px(height))
-                    .padding(Insets::new(px(0.0), px(0.0), px(b.bottom_gap), px(0.0))),
+                    .size(width, px(height)),
             ),
             (role,),
         );
@@ -88,6 +87,7 @@ impl Widget for KeyboardUI {
             KeyboardBuilder {
                 fonts: b.fonts,
                 keymap: b.keymap,
+                bottom_gap: b.bottom_gap,
             },
         );
 

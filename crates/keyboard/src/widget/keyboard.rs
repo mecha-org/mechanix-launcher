@@ -51,6 +51,8 @@ impl Keyboard {
 pub(crate) struct KeyboardBuilder {
     pub(crate) fonts: Fonts,
     pub(crate) keymap: Keymap,
+    /// Empty space under the keys, painted with the keyboard background.
+    pub(crate) bottom_gap: f32,
 }
 
 impl Build for KeyboardBuilder {
@@ -61,13 +63,15 @@ impl Widget for Keyboard {
     type Builder = KeyboardBuilder;
     fn build(b: KeyboardBuilder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
         // Keyboard container: column filling the window, surface background.
-        // Its gap only separates views, and just one view is ever shown.
+        // Its gap only separates views, and just one view is ever shown. The
+        // bottom gap is padding, so the background fills it too.
         let style = b.keymap.keyboard;
+        let pad = px(style.padding);
         *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
             .column()
             .fill()
             .gap(px(style.row_gap))
-            .padding_all(px(style.padding));
+            .padding(Insets::new(pad, pad, px(style.padding + b.bottom_gap), pad));
         let bg_role = b.keymap.keyboard.background_color;
         *s.component_mut::<Paint>(me).unwrap() = Paint::Quad(Quad::new(s.color(bg_role)));
 

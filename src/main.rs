@@ -177,7 +177,7 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
                 role(
                     Layer::Overlay,
                     Anchor::TOP | sides,
-                    DEFAULT_BAR_HEIGHT as i32,
+                    DEFAULT_BAR_HEIGHT.ceil() as i32,
                     "status-bar",
                 ),
                 bar,
