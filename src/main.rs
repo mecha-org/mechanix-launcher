@@ -19,6 +19,9 @@ use status_bar::{
 const HOME: AreaId = AreaId("home");
 const RUNNING_APPS: AreaId = AreaId("running-apps");
 const PANEL: AreaId = AreaId("panel");
+/// Extra space under the keyboard's keys, logical px, on top of the bottom
+/// strip's height.
+const KEYBOARD_LIFT: f32 = 24.0;
 const STATUS_BAR: AreaId = AreaId("status-bar");
 
 const HOME_ID: ContainerId = ContainerId("home");
@@ -242,7 +245,8 @@ fn main() {
         });
 
     let cfg = NavConfig::default();
-    let bottom_gap = cfg.bottom_strip_height;
+    // Lift the keys above the bottom strip so they sit higher on screen.
+    let bottom_gap = cfg.bottom_strip_height + KEYBOARD_LIFT;
     app.add_module(navigation(cfg, AppDrawer::new()))
         .add_module(StatusBarModule)
         .add_module(NotificationsModule)

@@ -7,7 +7,7 @@ use crate::util::full_width;
 
 const TOP_HEIGHT: f32 = HEADER_HEIGHT + SLIDERS_HEIGHT;
 const SECTION_GAP: f32 = 31.0;
-const MAX_HEIGHT: f32 = 600.0;
+const MAX_HEIGHT: f32 = 300.0;
 
 pub struct QuickSettings;
 
