@@ -32,8 +32,38 @@ fn stepper_counts_rapid_presses() {
 fn stepper_clamps() {
     assert_eq!(Stepper::default().step(ready(98), 5, 0), Some(100));
     assert_eq!(Stepper::default().step(ready(3), -5, 0), Some(0));
-    assert_eq!(Stepper::default().step(ready(150), 5, 0), Some(100));
+    assert_eq!(Stepper::default().step(ready(100), 5, 0), Some(100));
+    // A raise never lowers a volume set above 100 by another tool.
+    assert_eq!(Stepper::default().step(ready(150), 5, 0), None);
     assert_eq!(Stepper::default().step(ready(150), -5, 0), Some(95));
+}
+
+#[test]
+fn stepper_raise_above_100_keeps_no_target() {
+    let mut s = Stepper::default();
+    assert_eq!(s.step(ready(150), 5, 0), None);
+    // No target was recorded: a lower step right after still starts from
+    // the report.
+    assert_eq!(s.step(ready(150), -5, 100), Some(95));
+}
+
+#[test]
+fn stepper_window_allows_slightly_older_timestamps() {
+    let mut s = Stepper::default();
+    assert_eq!(s.step(ready(50), 5, 1000), Some(55));
+    // A few ms earlier than the last step: still close, so still pending.
+    assert_eq!(s.step(ready(50), 5, 995), Some(60));
+    // Older than the window: the report is the base again.
+    let mut s = Stepper::default();
+    assert_eq!(s.step(ready(50), 5, 1000), Some(55));
+    assert_eq!(s.step(ready(50), 5, 1000 - PENDING_WINDOW_MS - 1), Some(55));
+}
+
+#[test]
+fn stepper_window_allows_slightly_older_timestamps_across_the_wrap() {
+    let mut s = Stepper::default();
+    assert_eq!(s.step(ready(50), 5, 3), Some(55));
+    assert_eq!(s.step(ready(50), 5, u32::MAX - 2), Some(60));
 }
 
 #[test]
