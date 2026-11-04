@@ -2,19 +2,22 @@
 //! core. Install it into a host app with [`KeyboardModule`].
 //!
 //! The keymap (parsed from `resources/layout.yaml`) drives which keys appear and
-//! what they do. View switching (Shift `locking`, `set_view`) and one-shot
-//! modifier latching (Ctrl, Alt) are supported. Text keys commit through
+//! what they do: page keys switch between the focused field family's views,
+//! Shift is state (tap, double tap or hold for caps lock), and Ctrl and Alt
+//! latch for one key. Text keys commit through
 //! `zwp_input_method_v2` when a text input is focused, falling back to
 //! `zwp_virtual_keyboard_v1` keysym transport.
 
 #![recursion_limit = "1024"]
 
+mod field;
 mod input;
-mod latch;
 mod layout;
+mod modifiers;
 mod module;
 mod predict;
 mod protocol;
+mod scale;
 mod touch;
 mod view;
 mod visibility;
