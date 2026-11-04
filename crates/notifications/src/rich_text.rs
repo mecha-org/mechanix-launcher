@@ -2,6 +2,7 @@ use mecha_wayland::mechanix_widgets::{self as mw, TextContextExt};
 use mecha_wayland::prelude::*;
 
 use crate::markup::Run;
+use crate::style::text;
 
 pub struct RichTextBuilder {
     pub runs: Vec<Run>,
@@ -31,7 +32,11 @@ impl Widget for RichText {
 }
 
 fn run_text(run: Run) -> mw::TextBuilder {
-    let words = mw::text(run.words);
+    let words = mw::text(run.words)
+        .variant(text::CARD_BODY.variant)
+        .color(text::CARD_BODY.color)
+        .max_lines(1)
+        .overflow(TextOverflow::Ellipsis);
     let Some(style) = run.style else {
         return words;
     };

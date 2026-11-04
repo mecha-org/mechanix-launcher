@@ -117,8 +117,6 @@ fn add_notification(app: &mut App, notify: &Notify) -> u32 {
         id,
         received_time: SystemTime::now(),
         notification: notify.notification.clone(),
-        // no controls applied yet
-        control: None,
     });
     id
 }
