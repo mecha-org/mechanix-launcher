@@ -20,6 +20,8 @@ pub(crate) struct ChoicesRow {
     pub rect: Rect,
     /// The long-pressed key, in window coordinates.
     pub key: Rect,
+    /// The keyboard's bottom edge (of the `bounds` it opened in).
+    pub bottom: f32,
     /// One cell's width.
     pub cell_w: f32,
     /// The choice a release would type, if any.
@@ -53,6 +55,7 @@ impl ChoicesRow {
             choices,
             rect: Rect::new(x, y, w, h),
             key,
+            bottom: bounds.bottom(),
             cell_w,
             highlighted: Some(0),
             mirrored,
@@ -61,10 +64,12 @@ impl ChoicesRow {
 
     /// The finger moved to `p`: the cell under it (clamped to the row's
     /// ends) is highlighted, or none once it is more than half a key height
-    /// below the long-pressed key (a release there cancels). Resting on the
-    /// key, or just under it, keeps a highlight.
+    /// below the long-pressed key, or below the keyboard for a bottom-row key
+    /// (a release there cancels). Resting on the key, or just under it,
+    /// keeps a highlight.
     pub(crate) fn track(&mut self, p: Point) {
-        if p.y > self.key.bottom() + self.key.size.height / 2.0 {
+        let cancel = (self.key.bottom() + self.key.size.height / 2.0).min(self.bottom);
+        if p.y > cancel {
             self.highlighted = None;
             return;
         }
@@ -167,5 +172,19 @@ mod tests {
         // Coming back up picks a cell again.
         row.track(Point::new(160.0, 170.0));
         assert_eq!(row.highlighted, Some(1));
+    }
+
+    #[test]
+    fn bottom_row_key_cancels_below_the_keyboard() {
+        // A bottom-row key 8 px above the keyboard's bottom edge (320): half
+        // a key under it (325) is past the edge, so the edge is the line.
+        let key = Rect::new(100.0, 262.0, 50.0, 50.0);
+        let mut row = ChoicesRow::open(key, BOUNDS, choices("3 é"));
+        for y in [270.0, 312.0, 320.0] {
+            row.track(Point::new(120.0, y));
+            assert_eq!(row.highlighted, Some(0), "y = {y}");
+        }
+        row.track(Point::new(120.0, 321.0));
+        assert_eq!(row.highlighted, None);
     }
 }
