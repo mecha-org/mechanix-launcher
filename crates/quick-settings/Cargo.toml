@@ -8,3 +8,4 @@ mecha-wayland.workspace = true
 screen.workspace = true
 services.workspace = true
 assets.workspace = true
+mecha-pulseaudio.workspace = true

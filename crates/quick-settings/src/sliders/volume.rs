@@ -1,15 +1,23 @@
-use mecha_wayland::mechanix_widgets::prelude::{SliderChange, slider};
+use mecha_pulseaudio::*;
+use mecha_wayland::mechanix_widgets::prelude::{
+    ButtonContextExt, ButtonVariant, SliderChange, SliderContextExt, button, slider,
+};
 use mecha_wayland::prelude::*;
 
 use crate::util::load_icon;
 
 mod svg {
     pub const HIGH: &[u8] = include_bytes!("../../assets/speaker/speaker-high.svg");
+    pub const LOW: &[u8] = include_bytes!("../../assets/speaker/speaker-low.svg");
+    pub const MUTE: &[u8] = include_bytes!("../../assets/speaker/speaker-mute.svg");
 }
 
-const LEVEL_PERCENT: f32 = 70.0;
+const LEVEL_PERCENT: f32 = 70.0; // initial value
 const PADDING_VERTICAL: f32 = 12.0;
 const PADDING_HORIZONTAL: f32 = 32.0;
+const SLIDER_BUTTON_DIMENSIONS: f32 = 48.0;
+
+const HIGH_LEVEL: u32 = 65; // after what value we use the high icon
 
 pub struct VolumeSlider;
 
@@ -23,7 +31,9 @@ impl Widget for VolumeSlider {
     type Builder = VolumeSliderBuilder;
 
     fn build(_: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
-        let icon_sprite = load_icon(&mut s.resource_mut::<Atlas>(), svg::HIGH);
+        let high = load_icon(&mut s.resource_mut::<Atlas>(), svg::HIGH);
+        let low = load_icon(&mut s.resource_mut::<Atlas>(), svg::LOW);
+        let mute = load_icon(&mut s.resource_mut::<Atlas>(), svg::MUTE);
 
         let row = s.spawn(
             me,
@@ -39,11 +49,20 @@ impl Widget for VolumeSlider {
             ),
         );
 
-        s.spawn(
+        let icon_handle = s.spawn(
             row,
-            icon(icon_sprite)
-                .style(LayoutStyle::default().shrink(0.0))
-                .color(s.color(ColorRole::OnSurface)),
+            button()
+                .variant(ButtonVariant::Text)
+                .icon(high)
+                .text_color(ColorRole::OnSurface)
+                .width(px(SLIDER_BUTTON_DIMENSIONS))
+                .height(px(SLIDER_BUTTON_DIMENSIONS))
+                .radius(Corners::all(SLIDER_BUTTON_DIMENSIONS / 2.0))
+                .hover_background(s.color(ColorRole::SecondaryContainer))
+                .pressed_background(s.color(ColorRole::OnSecondaryContainer))
+                // the artwork is a little too low and far too right within the
+                // button
+                .padding(Insets::new(px(0.0), px(12.0), px(12.0), px(0.0))),
         );
 
         let slider_handle = s.spawn(
@@ -56,11 +75,55 @@ impl Widget for VolumeSlider {
                 .tick_gap(4.0),
         );
 
-        s.on::<SliderChange>(slider_handle, |_ctx, e| {
+        s.on::<Clicked>(icon_handle, |ctx, _| {
+            if let VolumeState::Ready { muted, .. } = *ctx.resource::<VolumeState>() {
+                ctx.signal(SetMuted(!muted))
+            }
+        });
+
+        s.on::<SliderChange>(slider_handle, |ctx, e| {
             println!(
                 "[volume] slider changed: value = {:.2}, step_index = {}",
                 e.value, e.step_index
             );
+
+            ctx.signal(SetVolume(if e.value > 100.0 {
+                100
+            } else if e.value < 0.0 {
+                0
+            } else {
+                e.value as u32
+            }));
+        });
+
+        s.on::<VolumeStateEvent>(slider_handle, move |ctx, e| {
+            if let VolumeState::Ready {
+                volume_percent,
+                muted,
+            } = e.0
+            {
+                println!(
+                    "[volume] state changed to: {} muted: {}",
+                    volume_percent, muted
+                );
+
+                if let Some(mut slider) = ctx.at(slider_handle) {
+                    slider.set_value(volume_percent.min(100) as f32);
+                };
+
+                // TODO: check if we're already muted and if our icon is
+                // already set to high or low, saves resetting it
+                if let Some(mut button) = ctx.at(icon_handle) {
+                    let sprite = if muted {
+                        mute
+                    } else if volume_percent > HIGH_LEVEL {
+                        high
+                    } else {
+                        low
+                    };
+                    button.set_icon(sprite);
+                }
+            }
         });
 
         VolumeSlider

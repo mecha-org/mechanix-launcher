@@ -25,7 +25,7 @@ mod volume;
 
 // re-export
 pub use context::{ConnectionState, PulseAudioContextConnectionStateChanged};
-pub use volume::{SetMuted, SetVolume, VolumeControlModule, VolumeState};
+pub use volume::{SetMuted, SetVolume, VolumeControlModule, VolumeState, VolumeStateEvent};
 
 /// Connect to the local PulseAudio-compatible server through Ring.
 ///
