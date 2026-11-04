@@ -9,7 +9,7 @@
 use mecha_wayland::prelude::*;
 use xkbcommon::xkb::Keysym;
 
-use crate::field::purpose_hint;
+use crate::field::Field;
 use crate::latch::{LatchedState, consume_latch, toggle_latch};
 use crate::layout::{KeyAction, Modifier};
 use crate::predict::{Prediction, TypingContext};
@@ -154,9 +154,9 @@ fn note_control(ctx: &mut Context<'_, Keyboard>, ks: Keysym) {
 
 /// Hand finished words to the recorder, if the focused field's profile allows.
 fn record(ctx: &mut Context<'_, Keyboard>, words: impl IntoIterator<Item = String>) {
-    let (purpose, hint) = purpose_hint(ctx);
+    let field = Field::current(ctx);
     let mut prediction = ctx.resource_mut::<Prediction>();
-    if !prediction.active(purpose, hint).0.may_record {
+    if !prediction.active(field).0.may_record {
         return;
     }
     for word in words {

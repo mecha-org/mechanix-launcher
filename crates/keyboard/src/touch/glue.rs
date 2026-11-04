@@ -20,7 +20,7 @@ use super::defer::PendingPress;
 use super::flow::{self, Board, Flow};
 use super::resolve::KeyGeom;
 use super::tracker::{TouchOut, TouchTracker};
-use crate::field::purpose_hint;
+use crate::field::Field;
 use crate::input::{dispatch, hold, release, repeats};
 use crate::layout::KeyAction;
 use crate::predict::{LetterPrior, Prediction, TypingContext};
@@ -113,8 +113,8 @@ pub(crate) fn view_switched(ctx: &mut Context<'_, Keyboard>, old: usize) {
 /// The prior over the next letter, the prediction strength and whether the
 /// pop-up is on, for the focused field and the word typed so far.
 fn predict(ctx: &Context<'_, Keyboard>) -> (LetterPrior, f32, bool) {
-    let (purpose, hint) = purpose_hint(ctx);
-    let (profile, predictor) = ctx.resource::<Prediction>().active(purpose, hint);
+    let field = Field::current(ctx);
+    let (profile, predictor) = ctx.resource::<Prediction>().active(field);
     let prior = predictor.prior(&ctx.resource::<TypingContext>().prefix());
     (prior, profile.strength, profile.popup)
 }

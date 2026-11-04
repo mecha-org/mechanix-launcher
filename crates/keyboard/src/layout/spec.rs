@@ -75,6 +75,8 @@ pub(crate) struct PredictionSpec {
     pub(crate) enabled: Option<bool>,
     pub(crate) strength: Option<f32>,
     pub(crate) dictionary: Option<String>,
+    #[serde(rename = "terminal-dictionary")]
+    pub(crate) terminal_dictionary: Option<String>,
     pub(crate) popup: Option<bool>,
 }
 
