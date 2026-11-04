@@ -147,6 +147,17 @@ pub(crate) fn shiftable_letter(action: &KeyAction) -> Option<char> {
     }
 }
 
+/// `c` as typed under `state`, and whether it is a letter (`a`-`z`, either
+/// case, so a capital key also spends a one-shot shift). Only lowercase
+/// letters change case.
+pub(crate) fn shift_char(c: char, state: ShiftState) -> (char, bool) {
+    if c.is_ascii_lowercase() {
+        (cased(c, state), true)
+    } else {
+        (c, c.is_ascii_uppercase())
+    }
+}
+
 /// The letter `c` types in `state`.
 pub(crate) fn cased(c: char, state: ShiftState) -> char {
     if state == ShiftState::Off {
@@ -168,6 +179,8 @@ pub(crate) fn refresh(ctx: &mut Context<'_, Keyboard>) {
         .filter_map(|k| shiftable_letter(&k.action).map(|c| (k.node, c)))
         .collect();
     for (node, c) in letters {
+        // The pop-up shows what the key types now.
+        ctx.at(node).unwrap().me().popup_text = Some(cased(c, state).to_string());
         let label = ctx.at(node).unwrap().me().label;
         if let crate::widget::key::Label::Text(h) = label {
             ctx.at(h).unwrap().set_text(cased(c, state).to_string());

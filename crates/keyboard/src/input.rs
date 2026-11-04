@@ -41,7 +41,7 @@ pub(crate) fn dispatch(ctx: &mut Context<'_, Keyboard>, action: &KeyAction, time
             toggle_latch(ctx, *m);
         }
         KeyAction::EmitKeysym(ks) => {
-            let (ks, letter) = shifted_keysym(ctx, *ks);
+            let (ks, letter) = shifted_keysym(*ks, ctx.resource::<Shift>().state());
             let ks = &ks;
             let latched_mask = latched_mask(ctx);
             // Printable keysyms commit via IM2; control keysyms fall back to
@@ -68,7 +68,7 @@ pub(crate) fn dispatch(ctx: &mut Context<'_, Keyboard>, action: &KeyAction, time
             }
         }
         KeyAction::EmitText(text) => {
-            let (text, letter) = shifted_text(ctx, text);
+            let (text, letter) = shifted_text(text, ctx.resource::<Shift>().state());
             let text = &text;
             let latched_mask = latched_mask(ctx);
             if latched_mask == 0 && im_commit_text(ctx, text) {
@@ -111,36 +111,34 @@ pub(crate) fn dispatch(ctx: &mut Context<'_, Keyboard>, action: &KeyAction, time
     }
 }
 
-/// The keysym a tapped key types under the current shift state, and whether
-/// it is a letter. Only `a`-`z` are uppercased; digits and symbols stay.
-fn shifted_keysym(ctx: &Context<'_, Keyboard>, ks: Keysym) -> (Keysym, bool) {
-    let state = ctx.resource::<Shift>().state();
+/// The keysym a tapped key types under shift `state`, and whether it is a
+/// letter (so it spends a one-shot shift, capital keys included). Only `a`-`z`
+/// are uppercased; digits and symbols stay.
+fn shifted_keysym(ks: Keysym, state: ShiftState) -> (Keysym, bool) {
     match virtual_keyboard::keysym_text(ks).as_deref() {
-        Some(t) if t.len() == 1 && t.as_bytes()[0].is_ascii_alphabetic() => {
-            let c = t.chars().next().unwrap();
-            let shifted = if c.is_ascii_lowercase() {
-                shift::cased(c, state)
+        Some(t) if t.len() == 1 => {
+            let (c, letter) = shift::shift_char(t.chars().next().unwrap(), state);
+            if letter {
+                (Keysym::from_char(c), true)
             } else {
-                c
-            };
-            (Keysym::from_char(shifted), true)
+                (ks, false)
+            }
         }
         _ => (ks, false),
     }
 }
 
 /// [`shifted_keysym`] for single-character text.
-fn shifted_text(ctx: &Context<'_, Keyboard>, text: &str) -> (String, bool) {
+fn shifted_text(text: &str, state: ShiftState) -> (String, bool) {
     let mut chars = text.chars();
     match (chars.next(), chars.next()) {
-        (Some(c), None) if c.is_ascii_alphabetic() => {
-            let state: ShiftState = ctx.resource::<Shift>().state();
-            let shifted = if c.is_ascii_lowercase() {
-                shift::cased(c, state)
+        (Some(c), None) => {
+            let (c, letter) = shift::shift_char(c, state);
+            if letter {
+                (c.to_string(), true)
             } else {
-                c
-            };
-            (shifted.to_string(), true)
+                (text.to_string(), false)
+            }
         }
         _ => (text.to_string(), false),
     }
@@ -230,4 +228,60 @@ fn im_commit_text(ctx: &mut Context<'_, Keyboard>, text: &str) -> bool {
 fn vk_emit_keysym(ctx: &mut Context<'_, Keyboard>, ks: Keysym, latched_mask: u32) {
     let (mut vk, mut wl) = ctx.fetch::<(ResMut<VirtualKeyboardState>, ResMut<Wayland>)>();
     virtual_keyboard::emit_keysym(&mut vk, &mut wl, ks, latched_mask)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ALL: [ShiftState; 3] = [ShiftState::Off, ShiftState::OneShot, ShiftState::Locked];
+
+    #[test]
+    fn letters_are_uppercased_when_shifted() {
+        let q = Keysym::from_char('q');
+        assert_eq!(shifted_keysym(q, ShiftState::Off), (q, true));
+        for s in [ShiftState::OneShot, ShiftState::Locked] {
+            assert_eq!(shifted_keysym(q, s), (Keysym::from_char('Q'), true));
+            assert_eq!(shifted_text("q", s), ("Q".to_string(), true));
+        }
+        assert_eq!(shifted_text("q", ShiftState::Off), ("q".to_string(), true));
+    }
+
+    #[test]
+    fn digits_and_symbols_are_unchanged() {
+        for s in ALL {
+            for c in ['1', ',', '$'] {
+                let ks = Keysym::from_char(c);
+                assert_eq!(shifted_keysym(ks, s), (ks, false));
+                assert_eq!(shifted_text(&c.to_string(), s), (c.to_string(), false));
+            }
+            assert_eq!(shifted_text("ab", s), ("ab".to_string(), false));
+            assert_eq!(
+                shifted_keysym(Keysym::BackSpace, s),
+                (Keysym::BackSpace, false)
+            );
+        }
+    }
+
+    #[test]
+    fn capital_keys_stay_capital_but_still_count_as_letters() {
+        let q = Keysym::from_char('Q');
+        assert_eq!(shifted_keysym(q, ShiftState::Off), (q, true));
+        assert_eq!(
+            shifted_text("Q", ShiftState::OneShot),
+            ("Q".to_string(), true)
+        );
+    }
+
+    #[test]
+    fn typed_letter_spends_one_shot_only() {
+        let mut s = Shift::default();
+        s.tap(0);
+        let (_, letter) = shifted_keysym(Keysym::from_char('q'), s.state());
+        assert!(letter);
+        assert_eq!(s.typed_letter(), ShiftState::Off);
+        s.tap(1000);
+        s.tap(1100);
+        assert_eq!(s.typed_letter(), ShiftState::Locked);
+    }
 }
