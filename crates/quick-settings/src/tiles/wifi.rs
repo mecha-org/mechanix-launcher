@@ -1,7 +1,7 @@
 use mecha_wayland::mechanix_widgets::prelude::{Text, TextContextExt};
 use mecha_wayland::prelude::*;
 
-use super::{build_label, build_tile};
+use super::{GAP, build_label, build_tile};
 use crate::util::{load_icon, short_name};
 use services::{APUpdate, SetWifiEnabled, StateUpdate, WifiState};
 
@@ -61,7 +61,7 @@ impl Widget for Wifi {
         let icon_x = load_icon(&mut s.resource_mut::<Atlas>(), svg::X);
         let icon_airplane = load_icon(&mut s.resource_mut::<Atlas>(), svg::AIRPLANE);
 
-        let icon = build_tile(me, s, svg::X);
+        let icon = build_tile(me, s, svg::X, GAP);
         let name = build_label(me, s, "");
         let dot = s.spawn(
             me,

@@ -3,7 +3,7 @@ use mecha_wayland::mechanix_widgets::prelude::{
 };
 use mecha_wayland::prelude::*;
 
-use super::{build_tile, use_icon_label_gap};
+use super::{WIDE_GAP, build_tile};
 use crate::util::{load_icon, short_name};
 use services::{BluetoothState, BluetoothStateChanged, ToggleBluetooth};
 
@@ -33,8 +33,7 @@ impl Widget for Bluetooth {
         let icon_off = icon_on;
         let icon_connected = load_icon(&mut s.resource_mut::<Atlas>(), svg::CONNECTED);
 
-        let icon = build_tile(me, s, svg::DEFAULT);
-        use_icon_label_gap(me, s);
+        let icon = build_tile(me, s, svg::DEFAULT, WIDE_GAP);
 
         // Only shown while connected, so the icon sits centred otherwise.
         // `short_name` abbreviates device names; ellipsis overflow is a fallback for narrow tiles.

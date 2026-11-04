@@ -1,6 +1,7 @@
 use mecha_wayland::prelude::*;
 
 use crate::bottom_bar::BottomBarBuilder;
+use crate::drag_handle::DragHandleBuilder;
 use crate::header::HeaderBuilder;
 use crate::sliders::SlidersBuilder;
 
@@ -30,11 +31,23 @@ impl Widget for QuickSettings {
             .justify(Justify::SpaceBetween)
             .gap(px(SECTION_GAP));
 
-        // Header and bottom bar keep their fixed heights; the sliders grow
+        // Header and footer keep their fixed heights; the sliders grow
         // into the space between them and center themselves there.
         s.spawn(me, b.header);
         s.spawn(me, b.sliders);
-        s.spawn(me, b.bottom_bar);
+
+        // The drag handle sits flush under the tiles, outside the section gap.
+        let footer = s.spawn(
+            me,
+            div().style(
+                LayoutStyle::default()
+                    .width(percent(100.0))
+                    .column()
+                    .shrink(0.0),
+            ),
+        );
+        s.spawn(footer, b.bottom_bar);
+        s.spawn(footer, DragHandleBuilder);
 
         QuickSettings
     }

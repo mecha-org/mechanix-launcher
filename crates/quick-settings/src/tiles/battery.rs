@@ -5,7 +5,7 @@ use mecha_wayland::prelude::*;
 
 use services::BatteryPercentageChanged;
 
-use super::{build_tile, use_icon_label_gap};
+use super::{WIDE_GAP, build_tile};
 use crate::util::load_icon;
 
 /// One icon per 10% step, index 0 = 10% … index 9 = 100%.
@@ -40,8 +40,7 @@ impl Widget for Battery {
     fn build(_: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
         let levels = LEVELS.map(|svg| load_icon(&mut s.resource_mut::<Atlas>(), svg));
 
-        let icon = build_tile(me, s, LEVELS[0]);
-        use_icon_label_gap(me, s);
+        let icon = build_tile(me, s, LEVELS[0], WIDE_GAP);
         let percentage = s.spawn(
             me,
             text("N/A")

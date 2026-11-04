@@ -1,9 +1,6 @@
 use mecha_wayland::prelude::*;
 
-use crate::tiles::{
-    BatteryBuilder, BluetoothBuilder, CameraBuilder, DisplayTileBuilder, MicrophoneBuilder,
-    RecordBuilder, RotateBuilder, SettingsBuilder, TILE_HEIGHT, TerminalBuilder, WifiBuilder,
-};
+use crate::tiles::{BatteryBuilder, BluetoothBuilder, TILE_HEIGHT, WifiBuilder, action_tile, svg};
 
 const BOTTOM_BAR_HEIGHT: f32 = TILE_HEIGHT * 2.0;
 
@@ -36,15 +33,15 @@ impl Widget for BottomBar {
             },
         );
         s.spawn(top, BluetoothBuilder);
-        s.spawn(top, DisplayTileBuilder);
-        s.spawn(top, TerminalBuilder);
-        s.spawn(top, MicrophoneBuilder);
+        s.spawn(top, action_tile(svg::DISPLAY));
+        s.spawn(top, action_tile(svg::TERMINAL));
+        s.spawn(top, action_tile(svg::MICROPHONE));
 
         let bottom = s.spawn(me, div().style(row));
-        s.spawn(bottom, RecordBuilder);
-        s.spawn(bottom, SettingsBuilder);
-        s.spawn(bottom, CameraBuilder);
-        s.spawn(bottom, RotateBuilder);
+        s.spawn(bottom, action_tile(svg::RECORD));
+        s.spawn(bottom, action_tile(svg::SETTINGS));
+        s.spawn(bottom, action_tile(svg::CAMERA));
+        s.spawn(bottom, action_tile(svg::ROTATE));
         s.spawn(bottom, BatteryBuilder);
 
         BottomBar
