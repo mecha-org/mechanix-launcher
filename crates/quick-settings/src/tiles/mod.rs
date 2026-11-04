@@ -69,3 +69,12 @@ pub(super) fn build_label<W: Widget>(
             .color(ColorRole::OnSurfaceVariant),
     )
 }
+
+/// Keep short device names intact; abbreviate longer names for the tile.
+pub(crate) fn short_name(name: &str) -> String {
+    if name.chars().count() <= 5 {
+        name.to_string()
+    } else {
+        format!("{}...", name.chars().take(3).collect::<String>())
+    }
+}
