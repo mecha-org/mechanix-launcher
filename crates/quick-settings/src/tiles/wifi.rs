@@ -4,7 +4,10 @@ use mecha_wayland::prelude::*;
 
 use super::{DOT_RADIUS, GAP, build_label, build_tile};
 
-pub struct Wifi;
+pub struct Wifi {
+    ssid: Handle<Text>,
+    strength: u8,
+}
 
 pub struct WifiBuilder;
 
@@ -32,6 +35,10 @@ impl Widget for Wifi {
         // temporarily draw the dot immediately
         *s.component_mut::<Paint>(dot).unwrap() =
             Paint::Quad(Quad::new(s.color(ColorRole::Primary)).radius(5.0));
-        Wifi
+
+        Wifi {
+            ssid: ssid,
+            strength: 0,
+        }
     }
 }
