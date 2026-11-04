@@ -26,12 +26,7 @@ impl Widget for BottomBar {
             .row()
             .shrink(0.0);
         let top = s.spawn(me, div().style(row.clone()));
-        s.spawn(
-            top,
-            WifiBuilder {
-                name: "Office 01".into(),
-            },
-        );
+        s.spawn(top, WifiBuilder);
         s.spawn(top, BluetoothBuilder);
         s.spawn(top, action_tile(svg::DISPLAY));
         s.spawn(top, action_tile(svg::TERMINAL));
