@@ -277,4 +277,55 @@ mod tests {
     fn bundled_layout_has_prediction_block() {
         assert!(load_keymap().prediction.enabled);
     }
+
+    /// Every label, hint and long-press choice the bundled layout draws has a
+    /// glyph in the font that draws it: fontdue draws nothing for a missing
+    /// one, leaving a blank key.
+    #[test]
+    fn bundled_fonts_cover_every_drawn_character() {
+        use crate::modifiers::shift::{ShiftState, cased_choice};
+        use mecha_wayland::prelude::Atlas;
+        use style::KeyState;
+        use tokens::Fonts;
+
+        let keymap = load_keymap();
+        let mut atlas = Atlas::new();
+        let fonts = Fonts::load(&mut atlas);
+        let mut missing = Vec::new();
+        let mut check = |what: &str, s: &str, font: Font| {
+            for ch in s.chars().filter(|c| !c.is_whitespace()) {
+                if atlas.lookup(&[fonts.id(font)], ch).is_none() {
+                    missing.push(format!(
+                        "{what} {s:?}: {ch:?} (U+{:04X}) not in {font:?}",
+                        ch as u32
+                    ));
+                }
+            }
+        };
+        let base = keymap.keyboard.font;
+        for view in &keymap.views {
+            for key in view.rows.iter().flat_map(Row::keys) {
+                let at = format!("{}/{}", view.name, key.token);
+                if let KeyFace::Text(label) = &key.face {
+                    let font = key.look.style(KeyState::Normal).font.unwrap_or(base);
+                    check(&format!("{at} label"), label, font);
+                    if let Some(hint) = &key.hint {
+                        check(&format!("{at} hint"), hint, Font::GeistMono);
+                    }
+                }
+                for choice in &key.choices {
+                    check(&format!("{at} choice"), choice, base);
+                    let upper = cased_choice(choice, ShiftState::OneShot);
+                    if upper != *choice {
+                        check(&format!("{at} shifted choice"), &upper, base);
+                    }
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "missing glyphs:\n{}",
+            missing.join("\n")
+        );
+    }
 }
