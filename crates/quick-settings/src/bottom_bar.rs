@@ -103,13 +103,13 @@ mod tests {
         let dot_handle = bluetooth.dot;
 
         for (state, label, is_on) in [
-            (BluetoothState::On, "On", true),
+            (BluetoothState::On, None, true),
             (
                 BluetoothState::Connected {
                     count: 1,
                     name: Some("Headphones".into()),
                 },
-                "Hea...",
+                Some("Headp..."),
                 true,
             ),
             (
@@ -117,7 +117,7 @@ mod tests {
                     count: 1,
                     name: None,
                 },
-                "Connected",
+                Some("Connected"),
                 true,
             ),
             (
@@ -125,18 +125,25 @@ mod tests {
                     count: 2,
                     name: None,
                 },
-                "2 devices",
+                Some("2 devices"),
                 true,
             ),
-            (BluetoothState::Off, "Off", false),
+            (BluetoothState::Off, None, false),
         ] {
             app.emit(
                 BluetoothStateChanged { state },
                 app.descendants(app.root()).collect::<Vec<_>>(),
             );
             app.tick();
-            let native = app.widget::<Text>(text_handle).unwrap().native();
-            assert_eq!(app.widget::<NativeText>(native).unwrap().string, label);
+            let display = app.component::<LayoutStyle>(text_handle.id()).unwrap().display;
+            match label {
+                Some(label) => {
+                    assert_eq!(display, Display::Flex);
+                    let native = app.widget::<Text>(text_handle).unwrap().native();
+                    assert_eq!(app.widget::<NativeText>(native).unwrap().string, label);
+                }
+                None => assert_eq!(display, Display::Hidden),
+            }
             let dot_paint = app.component::<Paint>(dot_handle.id()).unwrap();
             if is_on {
                 assert!(matches!(dot_paint, Paint::Quad(_)));

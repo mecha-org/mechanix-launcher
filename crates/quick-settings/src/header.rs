@@ -24,7 +24,7 @@ impl Widget for Header {
             .row()
             .align_items(Align::Center)
             .justify(Justify::SpaceBetween)
-            .padding(Insets::new(px(0.0), px(20.0), px(0.0), px(20.0)));
+            .padding(Insets::symmetric(px(20.0), px(0.0)));
 
         s.spawn(
             me,

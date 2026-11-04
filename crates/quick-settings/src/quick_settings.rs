@@ -1,13 +1,10 @@
 use mecha_wayland::prelude::*;
 
 use crate::bottom_bar::BottomBarBuilder;
-use crate::header::{HEADER_HEIGHT, HeaderBuilder};
-use crate::sliders::{SLIDERS_HEIGHT, SlidersBuilder};
-use crate::util::full_width;
+use crate::header::HeaderBuilder;
+use crate::sliders::SlidersBuilder;
 
-const TOP_HEIGHT: f32 = HEADER_HEIGHT + SLIDERS_HEIGHT;
 const SECTION_GAP: f32 = 31.0;
-const MAX_HEIGHT: f32 = 600.0;
 
 pub struct QuickSettings;
 
@@ -28,14 +25,15 @@ impl Widget for QuickSettings {
         *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
             .fill()
             .width(percent(100.0))
-            .max_height(px(MAX_HEIGHT))
+            .height(percent(100.0))
             .column()
-            .gap(px(SECTION_GAP))
-            .justify(Justify::SpaceBetween);
+            .justify(Justify::SpaceBetween)
+            .gap(px(SECTION_GAP));
 
-        let top = s.spawn(me, div().style(full_width(TOP_HEIGHT).column()));
-        s.spawn(top, b.header);
-        s.spawn(top, b.sliders);
+        // Header and bottom bar keep their fixed heights; the sliders grow
+        // into the space between them and center themselves there.
+        s.spawn(me, b.header);
+        s.spawn(me, b.sliders);
         s.spawn(me, b.bottom_bar);
 
         QuickSettings

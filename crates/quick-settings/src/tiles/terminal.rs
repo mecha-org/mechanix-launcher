@@ -1,6 +1,6 @@
 use mecha_wayland::prelude::*;
 
-use super::build_tile;
+use super::build_image_tile;
 
 mod svg {
     pub const ICON: &[u8] = include_bytes!("../../assets/terminal.svg");
@@ -18,7 +18,7 @@ impl Widget for Terminal {
     type Builder = TerminalBuilder;
 
     fn build(_: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
-        build_tile(me, s, svg::ICON);
+        build_image_tile(me, s, svg::ICON);
         Terminal
     }
 }
