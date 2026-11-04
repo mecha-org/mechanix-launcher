@@ -7,12 +7,9 @@ use crate::layout::icons::Icons;
 use crate::layout::tokens::Fonts;
 use crate::modifiers::latch::LatchedState;
 use crate::modifiers::shift::Shift;
-use crate::protocol::fractional_scale::{
-    FractionalScale, ensure_fractional_scale, on_buffer_scale, on_preferred_scale,
-};
 use crate::protocol::input_method::InputMethodModule;
 use crate::protocol::virtual_keyboard::VirtualKeyboardModule;
-use crate::scale::KeyboardGeometry;
+use crate::scale::{KeyboardGeometry, on_resized};
 use crate::view::on_text_input_focused;
 use crate::widget::surface::{InputRegion, KeyboardUI, KeyboardUIBuilder, ensure_input_region};
 use crate::zone::ExclusiveZone;
@@ -35,7 +32,7 @@ use crate::zone::ExclusiveZone;
 pub struct KeyboardModule {
     /// Empty space under the keys, logical px: room for a host's bottom-edge
     /// swipe strip, which should sit in a layer above the keyboard. Unlike
-    /// the keys it does not follow the output scale.
+    /// the keys it does not follow the output width.
     pub bottom_gap: f32,
 }
 
@@ -48,11 +45,8 @@ impl Module for KeyboardModule {
             .add_module(InputMethodModule);
         app.system(on_text_input_focused);
         spawn_ui(app, self.bottom_gap);
-        // The output scale, to keep the keyboard one physical size.
-        app.insert_resource(FractionalScale::default());
-        app.system(ensure_fractional_scale)
-            .system(on_preferred_scale)
-            .system(on_buffer_scale);
+        // The output's width, which the keyboard spans and scales to.
+        app.system(on_resized);
     }
 }
 

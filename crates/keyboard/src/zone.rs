@@ -145,7 +145,6 @@ mod tests {
             height: 100.0 + 301.5 + 20.0,
             headroom: 100.0,
             bottom_gap: 20.0,
-            width: None,
         };
         let on = ExclusiveZone::default();
         let zone = |s: KeyboardSurface| on.zone(reserved_height(s.height, s.headroom));

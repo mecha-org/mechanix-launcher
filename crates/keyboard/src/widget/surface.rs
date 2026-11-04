@@ -35,21 +35,13 @@ pub(crate) struct KeyboardSurface {
     pub(crate) headroom: f32,
     /// Opaque gap under the keys.
     pub(crate) bottom_gap: f32,
-    /// The surface's width when the layout fixes it, else `None` (full output
-    /// width, which an input rect covers with a huge span).
-    pub(crate) width: Option<f32>,
 }
 
 impl KeyboardSurface {
     /// The part of the surface that takes input: everything below the
-    /// headroom strip.
+    /// headroom strip, across the whole output.
     pub(crate) fn input_rect(self) -> Rect {
-        Rect::new(
-            0.0,
-            self.headroom,
-            self.width.unwrap_or(INPUT_SPAN),
-            self.height - self.headroom,
-        )
+        Rect::new(0.0, self.headroom, INPUT_SPAN, self.height - self.headroom)
     }
 }
 impl Resource for KeyboardSurface {}
@@ -161,18 +153,16 @@ pub(crate) fn view_height_of(style: &KeyboardStyle, weights: &[f32]) -> f32 {
         + style.row_gap * weights.len().saturating_sub(1) as f32
 }
 
-/// The surface's size for a keyboard `style` (at the current scale) whose
-/// views are `heights` tall: room for the pop-up on top, the tallest view and
-/// the `bottom_gap`. The compositor sizes a layer surface in whole logical
-/// px, so the height and a fixed width are rounded up; the height's fraction
-/// joins the transparent strip above the keys.
+/// The surface's height for a keyboard `style` (at the current output
+/// width) whose views are `heights` tall: room for the pop-up on top, the
+/// tallest view and the `bottom_gap`. The compositor sizes a layer surface in
+/// whole logical px, so the height is rounded up; its fraction joins the
+/// transparent strip above the keys. The width is always the output's.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Metrics {
     /// The pop-up's room above the tallest view.
     pub(crate) popup_room: f32,
     pub(crate) height: f32,
-    /// `None` spans the output.
-    pub(crate) width: Option<f32>,
 }
 
 pub(crate) fn metrics(
@@ -186,16 +176,12 @@ pub(crate) fn metrics(
     Metrics {
         popup_room,
         height: (popup_room + tallest + bottom_gap).ceil(),
-        width: style.width.map(f32::ceil),
     }
 }
 
-/// Spawns a `zwlr_layer_surface` anchored to the bottom edge of the output.
-///
-/// When no fixed width is configured it is stretched full-width (left + right
-/// anchors); otherwise it is anchored to the bottom only at the configured
-/// width, `bottom_gap` taller than the keys so the host's bottom-edge swipe
-/// strip has room under them. The surface also has a transparent headroom
+/// Spawns a `zwlr_layer_surface` anchored to the bottom edge of the output,
+/// stretched full-width (left + right anchors, no width), `bottom_gap` taller
+/// than the keys so the host's bottom-edge swipe strip has room under them. The surface also has a transparent headroom
 /// strip above the keys for pop-ups; the gap under the keys is opaque black.
 /// The exclusive zone follows [`ExclusiveZone`]: `-1` (overlap other content
 /// without reserving space) while off or suspended, the keyboard part of the
@@ -241,13 +227,9 @@ impl Widget for KeyboardUI {
             .unwrap_or(0);
         let headroom =
             height - heights.get(initial).copied().unwrap_or(style.height) - b.bottom_gap;
-        let (anchor, width) = match m.width {
-            Some(w) => (Anchor::BOTTOM, px(w)),
-            _ => (Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT, auto()),
-        };
         let role = Role::Layer(LayerRole {
             layer: Layer::Top,
-            anchor,
+            anchor: Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
             // No zone yet: the keyboard starts hidden, and its first commit
             // reaches the compositor even so. A show sets it.
             exclusive_zone: -1,
@@ -264,7 +246,7 @@ impl Widget for KeyboardUI {
                         // The keys sit on the bottom; a shorter view leaves
                         // its slack above them.
                         .justify(Justify::End)
-                        .size(width, px(height))
+                        .size(auto(), px(height))
                         .padding(Insets::new(
                             px(popup_room),
                             px(0.0),
@@ -305,7 +287,6 @@ impl Widget for KeyboardUI {
             height,
             headroom,
             bottom_gap: b.bottom_gap,
-            width: m.width,
         };
         s.on::<ApplyKeyboardVisibility>(me, move |ctx, _| {
             let visible = ctx.keyboard_visible();
@@ -325,7 +306,7 @@ impl Widget for KeyboardUI {
 }
 
 /// Re-lay the keyboard out for the current [`KeyboardGeometry`] after the
-/// output scale changed: the container's padding and gap, each view's height
+/// output width changed: the container's padding and gap, each view's height
 /// and gaps, the key, pop-up and choices-row corners, the pop-up's room, and
 /// the surface (its size, then, if shown, its exclusive zone and input
 /// region). Fonts keep their size.
@@ -334,12 +315,6 @@ pub(crate) fn relayout(app: &mut App) {
     let style = geometry.style();
     let popup_gap = geometry.popup_gap();
     let headroom = popup_headroom(&style, popup_gap);
-    tracing::info!(
-        scale = geometry.scale(),
-        factor = geometry.factor(),
-        height = style.height,
-        "keyboard: re-laid out for the output scale"
-    );
 
     let Some(kb) = app.widgets::<Keyboard>().map(|(id, _)| id).next() else {
         return;
@@ -404,18 +379,12 @@ pub(crate) fn relayout(app: &mut App) {
     let m = metrics(&style, popup_gap, &heights, old.bottom_gap);
     let surface = KeyboardSurface {
         height: m.height,
-        width: m.width,
         ..old
     }
     .showing(heights.get(current).copied().unwrap_or(style.height));
     *app.resource_mut::<KeyboardSurface>() = surface;
     restyle(app, surface.window, |s| {
-        let s = s.height(px(m.height));
-        let s = match m.width {
-            Some(w) => s.width(px(w)),
-            None => s,
-        };
-        s.padding(Insets::new(
+        s.height(px(m.height)).padding(Insets::new(
             px(m.popup_room),
             px(0.0),
             px(old.bottom_gap),
@@ -428,8 +397,8 @@ pub(crate) fn relayout(app: &mut App) {
     let visible = app.keyboard_visible();
     let zone = *app.resource::<ExclusiveZone>();
     let (mut surfaces, mut wl) = app.query::<(ResMut<Surfaces>, ResMut<Wayland>)>();
-    let width = m.width.map_or(0, |w| w as u32);
-    surfaces.request_layer_size(surface.window, width, m.height as u32, &mut wl);
+    // Width 0: the compositor keeps it the output's.
+    surfaces.request_layer_size(surface.window, 0, m.height as u32, &mut wl);
     if visible {
         send_zone(zone, true, surface, &mut surfaces, &mut wl);
         if surfaces.is_mapped(surface.window) {
@@ -449,27 +418,26 @@ fn restyle(app: &mut App, node: impl Into<NodeId>, f: impl FnOnce(LayoutStyle) -
 mod tests {
     use super::*;
 
-    fn surface(width: Option<f32>) -> KeyboardSurface {
+    fn surface() -> KeyboardSurface {
         KeyboardSurface {
             window: App::new().root(),
             height: 352.0,
             headroom: 100.0,
             bottom_gap: 0.0,
-            width,
         }
     }
 
     #[test]
     fn input_rect_skips_the_headroom() {
-        let r = surface(Some(800.0)).input_rect();
+        let r = surface().input_rect();
         assert_eq!((r.origin.x, r.origin.y), (0.0, 100.0));
-        assert_eq!((r.size.width, r.size.height), (800.0, 252.0));
+        assert_eq!(r.size.height, 252.0);
         assert_eq!(r.bottom(), 352.0);
     }
 
     #[test]
-    fn input_rect_spans_the_output_without_a_fixed_width() {
-        assert_eq!(surface(None).input_rect().size.width, INPUT_SPAN);
+    fn input_rect_spans_the_output() {
+        assert_eq!(surface().input_rect().size.width, INPUT_SPAN);
     }
 
     fn view_of(weights: &[f32]) -> View {
@@ -515,7 +483,6 @@ mod tests {
             height: 100.0 + 301.5 + 20.0,
             headroom: 100.0,
             bottom_gap: 20.0,
-            width: None,
         };
         let short = s.showing(252.0);
         assert_eq!(short.headroom, 100.0 + 49.5);
@@ -535,10 +502,10 @@ mod tests {
     use crate::scale::KeyboardGeometry;
     use crate::zone::{ExclusiveZone, reserved_height};
 
-    /// The shipped keyboard at output `scale`.
+    /// The shipped keyboard on the Comet's 1080 px panel at output `scale`.
     fn at_scale(scale: f32) -> KeyboardGeometry {
         let mut g = KeyboardGeometry::new(crate::layout::load_keymap().keyboard);
-        g.fractional = Some(scale);
+        g.output_width = Some(1080.0 / scale);
         g
     }
 
@@ -558,7 +525,6 @@ mod tests {
             Metrics {
                 popup_room: 69.0,
                 height: 391.0,
-                width: Some(540.0)
             }
         );
         let zone = ExclusiveZone::default();
@@ -570,6 +536,7 @@ mod tests {
 
     #[test]
     fn scale_3_2_keeps_the_physical_size() {
+        // 337.5 logical px wide: factor 0.625.
         let g = at_scale(3.2);
         let style = g.style();
         let letters = view_height_of(&style, &LETTERS);
@@ -582,13 +549,11 @@ mod tests {
         let m = metrics(&style, g.popup_gap(), &[letters, terminal], 20.0);
         assert_eq!(m.popup_room, 44.0);
         assert_eq!(m.height, (44.0f32 + terminal + 20.0).ceil());
-        assert_eq!(m.width, Some(338.0));
         let s = KeyboardSurface {
             window: App::new().root(),
             height: m.height,
             headroom: 0.0,
             bottom_gap: 20.0,
-            width: m.width,
         };
         let zone = ExclusiveZone::default();
         let shown = s.showing(letters);
@@ -602,5 +567,24 @@ mod tests {
             zone.zone(reserved_height(shown.height, shown.headroom)),
             208
         );
+    }
+
+    #[test]
+    fn nothing_4a_keeps_the_design_aspect_ratio() {
+        // 1224 px at scale 3: 408 logical px wide.
+        let mut g = KeyboardGeometry::new(crate::layout::load_keymap().keyboard);
+        g.output_width = Some(408.0);
+        let style = g.style();
+        let letters = view_height_of(&style, &LETTERS);
+        assert!((letters - 252.0 * 408.0 / 540.0).abs() < 1e-3, "{letters}");
+        assert!((408.0 / letters - 540.0 / 252.0).abs() < 1e-4);
+        let terminal = view_height_of(&style, &TERMINAL);
+        assert!(
+            (terminal - 301.5 * 408.0 / 540.0).abs() < 1e-3,
+            "{terminal}"
+        );
+        let m = metrics(&style, g.popup_gap(), &[letters, terminal], 20.0);
+        assert_eq!(m.popup_room, popup_headroom(&style, g.popup_gap()));
+        assert_eq!(m.height, (m.popup_room + terminal + 20.0).ceil());
     }
 }

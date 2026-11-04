@@ -89,7 +89,8 @@ pub struct KeyboardStyle {
     pub gap: f32,
     pub row_gap: f32,
     pub padding: f32,
-    /// Window width in logical px; `None` spans the whole output.
+    /// Design width in logical px: the keyboard always spans the output, and
+    /// its geometry is written for an output this wide (`None`: 540).
     pub width: Option<f32>,
     /// Window height in logical px.
     pub height: f32,
