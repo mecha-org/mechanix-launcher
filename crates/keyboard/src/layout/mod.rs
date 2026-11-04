@@ -16,9 +16,9 @@ use tracing::{info, warn};
 use spec::{KeyboardSpec, Layout, PredictionSpec};
 use tokens::Font;
 
-pub use keymap::{Cell, Family, Key, KeyAction, KeyFace, Keymap, Modifier, Page, View};
 #[cfg(test)]
 pub(crate) use keymap::Row;
+pub use keymap::{Cell, Family, Key, KeyAction, KeyFace, Keymap, Modifier, Page, View};
 
 /// Default predictive-touch bias strength.
 pub const DEFAULT_STRENGTH: f32 = 0.25;
