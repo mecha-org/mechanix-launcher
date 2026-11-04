@@ -7,10 +7,10 @@ use mecha_wayland::prelude::*;
 
 use crate::layout::style::KeyState;
 use crate::layout::tokens::Fonts;
-use crate::layout::{KeyAction, Keymap, Modifier};
+use crate::layout::{Family, KeyAction, Keymap, Modifier, Page};
 use crate::predict::TypingContext;
 use crate::touch::{self, KeyEntry, TouchState, TouchTracker, letter_views};
-use crate::view::{BASE_VIEW, SwitchView, switch_view};
+use crate::view::{BASE_VIEW, SwitchView, switch_view, view_for};
 use crate::widget::key::{Key, KeyBuilder};
 use crate::widget::popup::{KeyPopup, KeyPopupBuilder};
 use crate::widget::surface::popup_headroom;
@@ -18,6 +18,8 @@ use crate::widget::surface::popup_headroom;
 /// One spawned view: its keymap name and the node toggled
 /// `Display::Hidden`/`Flex` on switch.
 pub(crate) struct ViewNode {
+    pub(crate) family: Family,
+    pub(crate) page: Page,
     pub(crate) name: String,
     pub(crate) node: Handle<Div>,
 }
@@ -29,6 +31,8 @@ pub(crate) struct Keyboard {
     pub(crate) views: Vec<ViewNode>,
     /// Index into `views` of the view currently shown.
     pub(crate) current_view: usize,
+    /// The focused field's layout family, set on focus; page keys stay inside it.
+    pub(crate) family: Family,
     /// Every latching modifier key across all views, for armed-state repaint on
     /// latch toggle.
     pub(crate) latch_keys: Vec<(Modifier, Handle<Key>)>,
@@ -115,6 +119,8 @@ impl Widget for Keyboard {
             let view_div = s.spawn(me, div().style(view_style));
             views.push(ViewNode {
                 name: view.name.clone(),
+                family: view.family,
+                page: view.page,
                 node: view_div,
             });
             let mut view_keys = Vec::new();
@@ -169,13 +175,19 @@ impl Widget for Keyboard {
         s.on::<SwitchView>(me, |ctx, event| {
             ctx.resource_mut::<TypingContext>().clear();
             let old = ctx.me().current_view;
-            switch_view(ctx, event.view);
+            ctx.me().family = event.field.family;
+            let me = ctx.me();
+            if let Some(idx) = view_for(&me.views, event.field.family, Page::Letters) {
+                let name = me.views[idx].name.clone();
+                switch_view(ctx, &name);
+            }
             touch::view_switched(ctx, old);
         });
 
         Keyboard {
             views,
             current_view: initial_view,
+            family: Family::Text,
             latch_keys,
             zone_keys,
             radius: style.radius,

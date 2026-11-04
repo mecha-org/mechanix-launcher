@@ -9,12 +9,13 @@
 use mecha_wayland::prelude::*;
 use xkbcommon::xkb::Keysym;
 
+use crate::field::purpose_hint;
 use crate::latch::{LatchedState, consume_latch, toggle_latch};
 use crate::layout::{KeyAction, Modifier};
 use crate::predict::{Prediction, TypingContext};
 use crate::protocol::input_method::{self, InputMethodState};
 use crate::protocol::virtual_keyboard::{self, VirtualKeyboardState};
-use crate::view::switch_view;
+use crate::view::{switch_view, view_for};
 use crate::visibility::KeyboardVisibilityExt;
 use crate::widget::keyboard::Keyboard;
 use crate::zone::toggle_exclusive_zone;
@@ -82,7 +83,17 @@ pub(crate) fn dispatch(ctx: &mut Context<'_, Keyboard>, action: &KeyAction) {
         KeyAction::ToggleExclusiveZone => {
             toggle_exclusive_zone(ctx);
         }
-        KeyAction::Page(_) | KeyAction::Shift => {
+        KeyAction::Page(page) => {
+            let me = ctx.me();
+            match view_for(&me.views, me.family, *page) {
+                Some(idx) => {
+                    let name = me.views[idx].name.clone();
+                    switch_view(ctx, &name);
+                }
+                None => tracing::warn!(?page, "no view for page; ignored"),
+            }
+        }
+        KeyAction::Shift => {
             tracing::info!(?action, "tapped key whose action is not wired yet");
         }
         KeyAction::Unhandled(name) => {
@@ -117,15 +128,6 @@ pub(crate) fn release(ctx: &mut Context<'_, Keyboard>) {
     virtual_keyboard::release_held(&mut vk, &mut wl);
 }
 
-/// The focused field's content purpose and hints, which pick the prediction
-/// profile.
-pub(crate) fn field_kind(
-    ctx: &Context<'_, Keyboard>,
-) -> (ZwpTextInputV3ContentPurpose, ZwpTextInputV3ContentHint) {
-    let field = &ctx.resource::<InputMethodState>().current;
-    (field.purpose, field.hint)
-}
-
 /// Finish the word being typed, handing it to the recorder.
 pub(crate) fn end_word(ctx: &mut Context<'_, Keyboard>) {
     let word = ctx.resource_mut::<TypingContext>().end_word();
@@ -152,7 +154,7 @@ fn note_control(ctx: &mut Context<'_, Keyboard>, ks: Keysym) {
 
 /// Hand finished words to the recorder, if the focused field's profile allows.
 fn record(ctx: &mut Context<'_, Keyboard>, words: impl IntoIterator<Item = String>) {
-    let (purpose, hint) = field_kind(ctx);
+    let (purpose, hint) = purpose_hint(ctx);
     let mut prediction = ctx.resource_mut::<Prediction>();
     if !prediction.active(purpose, hint).0.may_record {
         return;

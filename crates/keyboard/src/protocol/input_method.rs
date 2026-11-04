@@ -98,6 +98,7 @@ pub(crate) fn commit_text(state: &InputMethodState, wl: &mut Wayland, text: &str
 #[derive(Debug, Clone, Copy)]
 pub struct TextInputFocused {
     pub purpose: ZwpTextInputV3ContentPurpose,
+    pub hint: ZwpTextInputV3ContentHint,
 }
 impl Signal for TextInputFocused {}
 
@@ -211,6 +212,7 @@ fn on_input_method_event(app: &mut App, event: &ZwpInputMethodV2Event) {
                 if now.active && (activated || !prev.active || prev.purpose != now.purpose) {
                     focused = Some(TextInputFocused {
                         purpose: now.purpose,
+                        hint: now.hint,
                     });
                 }
                 // Only an activate/deactivate moves the surface, so other

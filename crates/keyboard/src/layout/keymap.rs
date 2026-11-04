@@ -15,8 +15,6 @@ pub struct Keymap {
 
 /// One selectable arrangement of keys (e.g. `base`, `upper`).
 #[derive(Debug)]
-// family/page/height/spacer/token/Page are consumed by later tasks.
-#[allow(dead_code)]
 pub struct View {
     pub name: String,
     pub family: Family,
