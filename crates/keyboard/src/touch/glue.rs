@@ -26,6 +26,7 @@ use crate::input::{dispatch, dispatch_choice, hold, release, repeats};
 use crate::layout::KeyAction;
 use crate::modifiers::shift::{self, Shift};
 use crate::predict::{LetterPrior, Prediction, TypingContext};
+use crate::visibility::KeyboardVisibilityExt;
 use crate::widget::keyboard::Keyboard;
 use crate::widget::more_keys::ChoicesFeedback;
 
@@ -88,6 +89,9 @@ impl Board for Kb<'_, '_> {
     }
     fn act(&mut self, out: Vec<TouchOut>, time: u32) {
         run(self.0, out, time);
+    }
+    fn close(&mut self) {
+        self.0.set_keyboard_visibility(false);
     }
 }
 
