@@ -433,7 +433,6 @@ dependencies = [
  "serde",
  "status-bar",
  "tracing",
- "wayland",
  "xkbcommon",
  "yaml_serde",
 ]

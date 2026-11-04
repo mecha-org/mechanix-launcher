@@ -5,9 +5,6 @@ edition = "2024"
 
 [dependencies]
 mecha-wayland.workspace = true
-# The toolkit's protocol core, for `wp_fractional_scale_v1` (hand-written: the
-# toolkit does not generate it). Same repo and revision as `mecha-wayland`.
-mw-wayland = { package = "wayland", git = "https://github.com/mecha-org/mecha-wayland", branch = "dev" }
 status-bar.workspace = true
 gestures.workspace = true
 

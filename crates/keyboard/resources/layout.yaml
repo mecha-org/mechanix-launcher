@@ -1,6 +1,8 @@
-# config for the entire keyboard layout. Geometry (width, height, padding, gap,
-# row-gap, radius) is logical px at output scale 2 and is rescaled at any other
-# scale so the keyboard keeps one physical size; font sizes stay logical.
+# config for the entire keyboard layout. The keyboard always spans the output;
+# `width` is the design width the geometry (height, padding, gap, row-gap,
+# radius) is written for, in logical px. On an output w logical px wide the
+# geometry is multiplied by w / width, keeping every proportion; font sizes
+# stay logical.
 keyboard:
   mode: dark
   background: surface-container-low
