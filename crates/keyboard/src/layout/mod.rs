@@ -4,6 +4,7 @@
 mod build;
 pub(crate) mod icons;
 mod keymap;
+mod more_keys;
 mod spec;
 pub(crate) mod style;
 pub(crate) mod tokens;

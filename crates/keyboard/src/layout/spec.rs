@@ -39,8 +39,7 @@ pub(crate) struct ViewMap {
     /// Token to token, applied to every occurrence.
     #[serde(default)]
     pub(crate) replace: HashMap<String, String>,
-    /// Which set in `more_keys.yaml` this view uses (consumed later).
-    #[allow(dead_code)]
+    /// Which set in `more_keys.yaml` this view uses.
     pub(crate) more_keys: Option<String>,
     pub(crate) rows: Option<Vec<RowSpec>>,
 }

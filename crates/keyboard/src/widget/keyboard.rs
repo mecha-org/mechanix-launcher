@@ -6,7 +6,7 @@
 use mecha_wayland::prelude::*;
 
 use crate::layout::style::KeyState;
-use crate::layout::tokens::Fonts;
+use crate::layout::tokens::{Font, Fonts};
 use crate::layout::{KeyAction, Keymap, Modifier};
 use crate::predict::TypingContext;
 use crate::touch::{self, KeyEntry, TouchState, TouchTracker, letter_views};
@@ -133,6 +133,7 @@ impl Widget for Keyboard {
                         KeyBuilder {
                             font: b.fonts.id(label_style.font.unwrap_or(style.font)),
                             font_size: label_style.font_size.unwrap_or(style.font_size),
+                            hint_font: b.fonts.id(Font::GeistMono),
                             key: key.clone(),
                             radius: style.radius,
                         },
