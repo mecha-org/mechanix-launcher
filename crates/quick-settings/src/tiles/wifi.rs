@@ -161,7 +161,7 @@ fn render(
     ));
 
     let dot_colour = if dot_enabled {
-        Paint::Quad(Quad::new(ctx.color(ColorRole::Primary)).radius(DOT_RADIUS / 2.0))
+        Paint::Quad(Quad::new(ctx.color(ColorRole::Primary)).radius(DOT_RADIUS))
     } else {
         Paint::None
     };

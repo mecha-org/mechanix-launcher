@@ -3,7 +3,7 @@ use mecha_wayland::mechanix_widgets::prelude::{
 };
 use mecha_wayland::prelude::*;
 
-use super::{WIDE_GAP, build_tile};
+use super::{DOT_RADIUS, WIDE_GAP, build_tile};
 use crate::util::{load_icon, short_name};
 use services::{BluetoothState, BluetoothStateChanged, ToggleBluetooth};
 
@@ -50,7 +50,7 @@ impl Widget for Bluetooth {
             me,
             div().style(
                 LayoutStyle::default()
-                    .size(px(5.0), px(5.0))
+                    .size(px(DOT_RADIUS), px(DOT_RADIUS))
                     .absolute()
                     .inset(Insets::new(px(8.0), px(10.0), auto(), auto())),
             ),
@@ -95,7 +95,7 @@ impl BluetoothContext for Context<'_, Bluetooth> {
         let icon_color = self.color(ColorRole::OnSurface);
         let text_color = self.color(ColorRole::OnSurfaceVariant);
         let dot_paint = if is_on {
-            Paint::Quad(Quad::new(self.color(ColorRole::Primary)).radius(5.0))
+            Paint::Quad(Quad::new(self.color(ColorRole::Primary)).radius(DOT_RADIUS))
         } else {
             Paint::None
         };
