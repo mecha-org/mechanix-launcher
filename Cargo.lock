@@ -417,6 +417,7 @@ dependencies = [
 name = "keyboard"
 version = "0.1.0"
 dependencies = [
+ "gestures",
  "mecha-wayland",
  "rustix",
  "serde",

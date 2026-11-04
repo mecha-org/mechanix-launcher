@@ -4,6 +4,7 @@
 //! into keystrokes and [`KeyFeedback`] for the key widgets, which only draw.
 
 mod defer;
+mod flick;
 mod flow;
 mod glue;
 pub(crate) mod long_press;
