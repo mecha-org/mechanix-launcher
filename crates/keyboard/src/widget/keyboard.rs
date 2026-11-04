@@ -13,6 +13,7 @@ use crate::predict::TypingContext;
 use crate::touch::long_press::LONG_PRESS;
 use crate::touch::{self, KeyEntry, TouchState, TouchTracker, letter_views};
 use crate::view::{BASE_VIEW, SwitchView, switch_view, view_for};
+use crate::visibility::{ApplyKeyboardVisibility, KeyboardVisibilityExt};
 use crate::widget::key::{Key, KeyBuilder};
 use crate::widget::more_keys::{MoreKeys, MoreKeysBuilder};
 use crate::widget::popup::{KeyPopup, KeyPopupBuilder};
@@ -222,21 +223,33 @@ impl Widget for Keyboard {
         let long_press_timer = s.add_timeout(LONG_PRESS, |ctx, _| touch::long_pressed(ctx));
 
         touch::attach(s, me);
-        // A focused field asked for this view: the word typed belonged to
-        // the previous field, so drop it rather than finish (and record) it,
-        // and cancel any touch whose key the switch hid.
+        // A field was focused: cancel any touch first (even on the same
+        // view, nothing it holds belongs in the new field), then drop the
+        // word typed for the previous field rather than finish (and record)
+        // it, and show the field's view.
         s.on::<SwitchView>(me, |ctx, event| {
+            touch::abort(ctx);
             ctx.resource_mut::<TypingContext>().clear();
             ctx.resource_mut::<Shift>().reset();
             shift::refresh(ctx);
-            let old = ctx.me().current_view;
             ctx.me().family = event.field.family;
             let me = ctx.me();
             if let Some(idx) = view_for(&me.views, event.field.family, Page::Letters) {
                 let name = me.views[idx].name.clone();
                 switch_view(ctx, &name);
             }
-            touch::view_switched(ctx, old);
+        });
+
+        // Every hide (flick, input-method deactivate, `hide_keyboard`) ends
+        // here: cancel any touch so nothing is typed into a hidden keyboard
+        // and no long-press opens a row on it, and drop Shift.
+        s.on::<ApplyKeyboardVisibility>(me, |ctx, _| {
+            if ctx.keyboard_visible() {
+                return;
+            }
+            touch::abort(ctx);
+            ctx.resource_mut::<Shift>().reset();
+            shift::refresh(ctx);
         });
 
         Keyboard {

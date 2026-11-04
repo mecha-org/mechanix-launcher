@@ -127,6 +127,17 @@ pub(crate) fn cancel(b: &mut impl Board, c: ContactId, time: u32) {
     }
 }
 
+/// The keyboard was refocused or hidden under the contact: cancel it and
+/// drop any held-back press. Nothing is typed; its row closes, its hold and
+/// long-press wait end.
+pub(crate) fn abort(b: &mut impl Board, time: u32) {
+    let flow = b.flow();
+    flow.deferral = Deferral::default();
+    flow.flick = None;
+    let out = b.tracker().cancel_active(time);
+    b.act(out, time);
+}
+
 /// The long-press timer fired at `time` for the key under the active
 /// contact: open its choices row.
 pub(crate) fn long_pressed(b: &mut impl Board, time: u32) {
@@ -584,5 +595,55 @@ mod tests {
         release(&mut b, B, 20);
         assert_eq!(b.typed, "qh");
         assert_eq!(b.predicted, vec!["".to_string(), "q".to_string()]);
+    }
+
+    #[test]
+    fn abort_while_key_held_types_nothing() {
+        // A focus change to a field on the same view, mid-press.
+        let mut b = choices_board();
+        press(&mut b, at(A, 60.0, 0));
+        abort(&mut b, 100);
+        assert_eq!(b.timer, None, "the long-press wait is cancelled");
+        release(&mut b, A, 150);
+        assert_eq!(b.typed, "");
+        assert_eq!(b.tracker.contact(), None);
+    }
+
+    #[test]
+    fn abort_while_choices_open_closes_row_and_types_nothing() {
+        let mut b = choices_board();
+        press(&mut b, at(A, 60.0, 0));
+        b.fire(300);
+        assert!(b.row_shown);
+        abort(&mut b, 350);
+        assert!(!b.row_shown, "the row closes");
+        release(&mut b, A, 400);
+        // The next press does not finish (commit) the aborted contact.
+        press(&mut b, at(B, 20.0, 500));
+        release(&mut b, B, 550);
+        assert_eq!(b.typed, "q");
+    }
+
+    #[test]
+    fn abort_stops_a_running_hold() {
+        let mut b = Fake::new(vec![[Act::Letter('q'), Act::Letter('h')]]);
+        b.repeat = Some(1);
+        press(&mut b, at(A, 60.0, 0));
+        assert!(b.holding);
+        abort(&mut b, 100);
+        assert!(!b.holding, "no stuck repeat");
+        release(&mut b, A, 150);
+        assert_eq!(b.typed, "");
+    }
+
+    #[test]
+    fn abort_drops_a_held_back_press() {
+        let mut b = Fake::new(vec![[Act::Letter('q'), Act::Letter('h')]]);
+        b.laid[0] = false;
+        press(&mut b, at(A, 60.0, 0));
+        abort(&mut b, 5);
+        b.laid[0] = true;
+        release(&mut b, A, 10);
+        assert_eq!(b.typed, "");
     }
 }

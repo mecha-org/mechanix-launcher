@@ -127,16 +127,17 @@ pub(crate) fn attach(s: &mut Spawner<'_, Keyboard>, me: Handle<Keyboard>) {
     });
 }
 
-/// The view changed from `old` outside a touch event (a focused field asked
-/// for another view): cancel any active contact against `old`.
-pub(crate) fn view_switched(ctx: &mut Context<'_, Keyboard>, old: usize) {
+/// The focused field changed or the keyboard hid: cancel any active contact
+/// against the current view (nothing is typed, its row closes, its hold and
+/// timers end). Call before switching the view.
+pub(crate) fn abort(ctx: &mut Context<'_, Keyboard>) {
     let me = ctx.me();
     let time = me
         .tracker
         .contact()
         .and_then(|c| me.touch.last_time.get(&c).copied())
         .unwrap_or(0);
-    settle(ctx, old, time);
+    flow::abort(&mut Kb(ctx), time);
 }
 
 /// The long-press timer fired: open the held key's choices row.
