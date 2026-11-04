@@ -32,6 +32,8 @@ pub struct PredictionConfig {
     pub strength: f32,
     /// Bundled list name, or a path to a `word<TAB>count` file.
     pub dictionary: String,
+    /// Bundled list name, or a path, used in terminal fields.
+    pub terminal_dictionary: String,
     /// Show a pop-up of the pressed character key.
     pub popup: bool,
 }
@@ -42,6 +44,7 @@ impl Default for PredictionConfig {
             enabled: true,
             strength: DEFAULT_STRENGTH,
             dictionary: "en".to_string(),
+            terminal_dictionary: "terminal".to_string(),
             popup: true,
         }
     }
@@ -64,6 +67,10 @@ impl PredictionConfig {
             enabled: spec.enabled.unwrap_or(default.enabled),
             strength,
             dictionary: spec.dictionary.clone().unwrap_or(default.dictionary),
+            terminal_dictionary: spec
+                .terminal_dictionary
+                .clone()
+                .unwrap_or(default.terminal_dictionary),
             popup: spec.popup.unwrap_or(default.popup),
         }
     }

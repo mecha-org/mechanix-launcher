@@ -45,21 +45,10 @@ impl Field {
     }
 
     /// The currently focused field, from the input-method state.
-    // Consumed by profile selection in Task 10.
-    #[allow(dead_code)]
     pub(crate) fn current(ctx: &Context<'_, Keyboard>) -> Field {
-        let (purpose, hint) = purpose_hint(ctx);
-        Field::from_purpose(purpose, hint)
+        let field = &ctx.resource::<InputMethodState>().current;
+        Field::from_purpose(field.purpose, field.hint)
     }
-}
-
-/// The focused field's raw content purpose and hints, which pick the
-/// prediction profile.
-pub(crate) fn purpose_hint(
-    ctx: &Context<'_, Keyboard>,
-) -> (ZwpTextInputV3ContentPurpose, ZwpTextInputV3ContentHint) {
-    let field = &ctx.resource::<InputMethodState>().current;
-    (field.purpose, field.hint)
 }
 
 #[cfg(test)]
