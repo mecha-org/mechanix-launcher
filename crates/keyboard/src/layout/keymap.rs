@@ -77,7 +77,6 @@ impl Page {
 
 /// One horizontal line of cells within a view.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct Row {
     pub cells: Vec<Cell>,
     /// Height weight relative to a key row (`1.0`).
@@ -96,7 +95,6 @@ impl Row {
 
 /// A slot in a row: a key, or blank space of the given width (outline units).
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum Cell {
     Key(Key),
     Spacer(f32),
@@ -134,7 +132,6 @@ impl Modifier {
 /// Resolved at IR-build time from a squeekboard button's `keysym`/`text`/`action`
 /// fields.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum KeyAction {
     /// Emit a single xkb keysym (letters, digits, Return, BackSpace…).
     EmitKeysym(Keysym),
@@ -156,7 +153,6 @@ pub enum KeyAction {
 
 /// One drawable key: what to draw, what it does, and where (logical units).
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct Key {
     /// The YAML token this key came from.
     pub token: String,

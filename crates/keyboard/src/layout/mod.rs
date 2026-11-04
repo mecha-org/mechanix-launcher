@@ -16,10 +16,9 @@ use tracing::{info, warn};
 use spec::{KeyboardSpec, Layout, PredictionSpec};
 use tokens::Font;
 
-// `Row` and `View` are part of the module's public surface even where no
-// sibling currently names them.
-#[allow(unused_imports)]
-pub use keymap::{Cell, Family, Key, KeyAction, KeyFace, Keymap, Modifier, Page, Row, View};
+pub use keymap::{Cell, Family, Key, KeyAction, KeyFace, Keymap, Modifier, Page, View};
+#[cfg(test)]
+pub(crate) use keymap::Row;
 
 /// Default predictive-touch bias strength.
 pub const DEFAULT_STRENGTH: f32 = 0.25;
