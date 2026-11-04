@@ -21,7 +21,7 @@ impl Widget for Wifi {
     type Builder = WifiBuilder;
 
     fn build(_: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
-        build_tile(me, s, icons::HIGH, GAP);
+        let icon_handle = build_tile(me, s, icons::X, GAP);
         let ssid_handle = build_label(me, s, "");
         let dot = s.spawn(
             me,
@@ -37,7 +37,7 @@ impl Widget for Wifi {
         *s.component_mut::<Paint>(dot).unwrap() =
             Paint::Quad(Quad::new(s.color(ColorRole::Primary)).radius(5.0));
 
-        s.on::<APUpdate>(me, |ctx, e| {
+        s.on::<APUpdate>(me, move |ctx, e| {
             let label = e
                 .ssid
                 .as_deref()
@@ -51,6 +51,8 @@ impl Widget for Wifi {
             );
             ctx.me().ssid = label;
             ctx.me().strength = e.strength;
+
+            render(ctx, icon_handle, ssid_handle, dot);
         });
 
         Wifi {
@@ -59,4 +61,13 @@ impl Widget for Wifi {
             strength: 0,
         }
     }
+}
+
+// make changes to tile
+fn render<W: Widget>(
+    ctx: &mut Context<'_, W>,
+    icon_handle: Handle<Icon>,
+    ssid_handle: Handle<Text>,
+    dot: Handle<Div>,
+) {
 }
