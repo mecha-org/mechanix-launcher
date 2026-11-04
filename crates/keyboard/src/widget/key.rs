@@ -115,9 +115,11 @@ impl Widget for Key {
             .center()
             // Outline width is the flex-grow weight; only ratios within a row
             // matter. Kept unscaled so a row's weights never sum below 1, which
-            // would leave part of the row's free space unfilled.
+            // would leave part of the row's free space unfilled. A zero basis
+            // and no padding make the weights exact proportions, whatever the
+            // label's width (padding would add to every key's basis).
             .grow(b.key.width)
-            .padding_all(px(2.0));
+            .flex_basis(px(0.0));
 
         *s.component_mut::<Paint>(me).unwrap() =
             Paint::Quad(Quad::new(s.color(bg_role)).radius(radius));
@@ -211,6 +213,123 @@ impl Widget for Key {
             look,
             lock_bar,
             popup_text: popup_text(&b.key),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout::tokens::{Font, Fonts};
+    use crate::layout::{Cell, load_keymap};
+    use crate::modifiers::latch::LatchedState;
+
+    struct Leaf;
+    impl Build for Leaf {
+        type Widget = Leaf;
+    }
+    impl Widget for Leaf {
+        type Builder = Leaf;
+        fn build(b: Leaf, _: Handle<Self>, _: &mut Spawner<'_, Self>) -> Self {
+            b
+        }
+    }
+
+    /// The base view's rows laid out 540 wide with an 8 px gap, as the
+    /// keyboard lays them out: each key's width, by token.
+    fn base_row_widths() -> Vec<Vec<(String, f32)>> {
+        let keymap = load_keymap();
+        let mut app = App::new();
+        app.add_module(LayoutModule)
+            .add_module(PaintModule)
+            .add_module(MechanixTheme::dark());
+        let mut atlas = Atlas::new();
+        let fonts = Fonts::load(&mut atlas);
+        let icons = Icons::load(&mut atlas, 20);
+        app.insert_resource(atlas);
+        app.insert_resource(icons);
+        app.insert_resource(LatchedState::default());
+        app.insert_resource(Shift::default());
+
+        let view = keymap.views.iter().find(|v| v.name == "base").unwrap();
+        let mut rows = Vec::new();
+        for row in &view.rows {
+            let root = app.root();
+            let row_node = app.spawn_with(
+                root,
+                Leaf,
+                (
+                    LayoutRoot(true),
+                    LayoutStyle::default()
+                        .row()
+                        .size(px(540.0), px(50.0))
+                        .gap(px(8.0)),
+                ),
+            );
+            let mut keys = Vec::new();
+            for cell in &row.cells {
+                let key = match cell {
+                    Cell::Spacer(w) => {
+                        let spacer = LayoutStyle::default().grow(*w).flex_basis(px(0.0));
+                        app.spawn_with(row_node, Leaf, (spacer,));
+                        continue;
+                    }
+                    Cell::Key(key) => key,
+                };
+                let h = app.spawn(
+                    row_node,
+                    KeyBuilder {
+                        font: fonts.id(Font::Geist),
+                        font_size: 20,
+                        hint_font: fonts.id(Font::GeistMono),
+                        key: key.clone(),
+                        radius: 0.0,
+                    },
+                );
+                keys.push((key.token.clone(), h));
+            }
+            rows.push(keys);
+        }
+        app.tick();
+        rows.into_iter()
+            .map(|keys| {
+                keys.into_iter()
+                    .map(|(t, h)| (t, app.component::<ComputedLayout>(h).unwrap().rect.width()))
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn width(row: &[(String, f32)], token: &str) -> f32 {
+        row.iter().find(|(t, _)| t == token).unwrap().1
+    }
+
+    /// Key widths are the outline units' proportions, whatever the label:
+    /// `i` and `w` are equally wide, and space is four letters.
+    #[test]
+    fn key_widths_follow_outline_units_not_labels() {
+        let rows = base_row_widths();
+        let letter = width(&rows[0], "q");
+        for (token, w) in rows[0].iter().chain(&rows[1]) {
+            assert!((w - letter).abs() <= 1.0, "{token} is {w}, q is {letter}");
+        }
+        let bottom = &rows[3];
+        let unit = width(bottom, "comma");
+        assert!((width(bottom, "period") - unit).abs() <= 1.0);
+        for wide in ["to_symbols", "Return"] {
+            let w = width(bottom, wide);
+            assert!((w - 1.5 * unit).abs() <= 1.0, "{wide} is {w}, comma {unit}");
+        }
+        let space = width(bottom, "space");
+        assert!(
+            (space - 4.0 * unit).abs() <= 1.5,
+            "space {space}, comma {unit}"
+        );
+        let third = &rows[2];
+        let z = width(third, "z");
+        for wide in ["shift", "BackSpace"] {
+            let w = width(third, wide);
+            assert!((w - 1.5 * z).abs() <= 1.0, "{wide} is {w}, z {z}");
         }
     }
 }
