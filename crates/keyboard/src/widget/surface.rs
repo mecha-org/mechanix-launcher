@@ -128,7 +128,8 @@ impl Widget for KeyboardUI {
             // No zone yet: the keyboard starts hidden, and its first commit
             // reaches the compositor even so. A show sets it.
             exclusive_zone: -1,
-            namespace: "keyboard".into(),
+            // The usual OSK namespace: compositors show it over fullscreen apps.
+            namespace: "osk".into(),
             keyboard_interactivity: KeyboardInteractivity::None,
         });
 
