@@ -148,7 +148,7 @@ impl Widget for Key {
                 let handle = s.spawn(me, text(b.hint_font, h).color(color).size(size));
                 *s.component_mut::<LayoutStyle>(handle).unwrap() = LayoutStyle::default()
                     .absolute()
-                    .inset(Insets::new(px(3.0), px(5.0), auto(), auto()));
+                    .inset(Insets::new(px(0.0), px(5.0), auto(), auto()));
                 Some(handle)
             }
             _ => None,
