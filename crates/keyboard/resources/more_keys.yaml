@@ -113,3 +113,6 @@ sets:
     choices:
       "0": "+"
       minus: "+"
+  number:
+    choices:
+      minus: "+"

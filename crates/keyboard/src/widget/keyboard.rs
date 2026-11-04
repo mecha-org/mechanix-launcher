@@ -40,7 +40,6 @@ pub(crate) struct Keyboard {
     /// latch toggle.
     pub(crate) latch_keys: Vec<(Modifier, Handle<Key>)>,
     /// Every exclusive-zone toggle key across all views, for on-state repaint.
-    pub(crate) zone_keys: Vec<Handle<Key>>,
     /// Every Shift key across all views, for repaint on shift state change.
     pub(crate) shift_keys: Vec<Handle<Key>>,
     /// The hold-to-lock timer on ⇧, started while a Shift key is pressed.
@@ -65,10 +64,6 @@ impl Keyboard {
     /// Resolved once per switch so later reads stay O(1) array indexing.
     pub(crate) fn index_of(&self, name: &str) -> Option<usize> {
         self.views.iter().position(|v| v.name == name)
-    }
-
-    pub(crate) fn current_view_name(&self) -> &str {
-        &self.views[self.current_view].name
     }
 }
 
@@ -111,7 +106,6 @@ impl Widget for Keyboard {
         // ── spawn all views ─────────────────────────────────────────────
         let mut views = Vec::with_capacity(b.keymap.views.len());
         let mut latch_keys = Vec::new();
-        let mut zone_keys = Vec::new();
         let mut shift_keys = Vec::new();
         let mut keys = Vec::with_capacity(b.keymap.views.len());
 
@@ -178,7 +172,6 @@ impl Widget for Keyboard {
 
                     match key.action {
                         KeyAction::LatchModifier(m) => latch_keys.push((m, key_handle)),
-                        KeyAction::ToggleExclusiveZone => zone_keys.push(key_handle),
                         KeyAction::Shift => shift_keys.push(key_handle),
                         _ => {}
                     }
@@ -226,7 +219,6 @@ impl Widget for Keyboard {
             current_view: initial_view,
             family: Family::Text,
             latch_keys,
-            zone_keys,
             shift_keys,
             shift_timer,
             radius: style.radius,

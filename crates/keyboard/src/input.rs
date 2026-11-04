@@ -17,9 +17,7 @@ use crate::predict::{Prediction, TypingContext};
 use crate::protocol::input_method::{self, InputMethodState};
 use crate::protocol::virtual_keyboard::{self, VirtualKeyboardState};
 use crate::view::{switch_view, view_for};
-use crate::visibility::KeyboardVisibilityExt;
 use crate::widget::keyboard::Keyboard;
-use crate::zone::toggle_exclusive_zone;
 
 /// Route a tapped key's action. View switches and modifier latches mutate the
 /// Keyboard widget state; every other action is a keystroke the virtual
@@ -28,14 +26,6 @@ pub(crate) fn dispatch(ctx: &mut Context<'_, Keyboard>, action: &KeyAction, time
     match action {
         KeyAction::SetView(name) => {
             switch_view(ctx, name);
-        }
-        KeyAction::ToggleView { lock, unlock } => {
-            let target = if ctx.me().current_view_name() == lock {
-                unlock
-            } else {
-                lock
-            };
-            switch_view(ctx, target);
         }
         KeyAction::LatchModifier(m) => {
             toggle_latch(ctx, *m);
@@ -87,12 +77,6 @@ pub(crate) fn dispatch(ctx: &mut Context<'_, Keyboard>, action: &KeyAction, time
             } else {
                 ctx.resource_mut::<TypingContext>().clear();
             }
-        }
-        KeyAction::HideKeyboard => {
-            ctx.set_keyboard_visibility(false);
-        }
-        KeyAction::ToggleExclusiveZone => {
-            toggle_exclusive_zone(ctx);
         }
         KeyAction::Page(page) => {
             let me = ctx.me();

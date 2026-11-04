@@ -42,18 +42,6 @@ fn pick_view<'a>(
     if let Some(idx) = find(family) {
         return Some(idx);
     }
-    // Legacy names until the AOSP layout lands (Task 11): today's layout has
-    // no family views, so its letters pages are found by view name.
-    if page == Page::Letters {
-        let legacy = match family {
-            Family::Terminal => Some("terminal"),
-            Family::Number => Some("numbers"),
-            _ => None,
-        };
-        if let Some(idx) = legacy.and_then(|n| views.clone().position(|(name, ..)| name == n)) {
-            return Some(idx);
-        }
-    }
     find(Family::Text)
 }
 
@@ -138,14 +126,20 @@ mod tests {
     }
 
     #[test]
-    fn todays_layout_still_maps_terminal_and_numbers() {
+    fn bundled_layout_maps_every_family_to_its_letters_page() {
         let keymap = layout::load_keymap();
         let views = keymap_views(&keymap);
         let name = |f| pick_view(views.iter().copied(), f, Page::Letters).map(|i| views[i].0);
         assert_eq!(name(Family::Terminal), Some("terminal"));
-        assert_eq!(name(Family::Number), Some("numbers"));
+        assert_eq!(name(Family::Number), Some("number"));
+        assert_eq!(name(Family::Phone), Some("phone"));
         assert_eq!(name(Family::Text), Some(BASE_VIEW));
-        assert_eq!(name(Family::Email), Some(BASE_VIEW));
+        assert_eq!(name(Family::Email), Some("email"));
+        assert_eq!(name(Family::Url), Some("url"));
+        assert_eq!(name(Family::Password), Some("password"));
+        let sym = |f| pick_view(views.iter().copied(), f, Page::Symbols).map(|i| views[i].0);
+        assert_eq!(sym(Family::Terminal), Some("terminal_symbols"));
+        assert_eq!(sym(Family::Email), Some("symbols"));
     }
 
     #[test]
@@ -174,7 +168,7 @@ mod tests {
     #[test]
     fn auto_switch_views_exist_in_bundled_layout() {
         let keymap = layout::load_keymap();
-        for view in [BASE_VIEW, "terminal", "numbers"] {
+        for view in [BASE_VIEW, "terminal", "number"] {
             assert!(
                 keymap.views.iter().any(|v| v.name == view),
                 "layout.yaml has no `{view}` view"

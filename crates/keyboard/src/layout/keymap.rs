@@ -139,9 +139,6 @@ pub enum KeyAction {
     EmitText(String),
     /// Switch to a named view and stay there (squeekboard `set_view`).
     SetView(String),
-    /// Flip between two views: go to `lock`, or back to `unlock` when `lock`
-    /// is already current (squeekboard `locking`).
-    ToggleView { lock: String, unlock: String },
     /// Arm a modifier for the next keystroke only (one-shot latch). Several
     /// modifiers can be armed at once; tapping again disarms.
     LatchModifier(Modifier),
@@ -149,11 +146,6 @@ pub enum KeyAction {
     Page(Page),
     /// Toggle shift (tap) / caps lock (double tap).
     Shift,
-    /// Hide the keyboard (`action: hide_keyboard`).
-    HideKeyboard,
-    /// Flip whether the shown keyboard reserves its height, so apps shrink
-    /// above it rather than sit under it (`action: toggle_exclusive_zone`).
-    ToggleExclusiveZone,
     /// An action not wired this pass (prefs, modifiers other than Control/Alt).
     /// The key still draws and hit-tests; tapping it logs but types nothing.
     Unhandled(String),

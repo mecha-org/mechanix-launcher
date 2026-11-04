@@ -125,12 +125,10 @@ mod tests {
     #[test]
     fn letter_of_counts_a_to_z_lowercased() {
         let keymap = layout::load_keymap();
-        assert_eq!(letter_of(&key(&keymap, "upper", "Q").action), Some('q'));
         assert_eq!(letter_of(&key(&keymap, "base", "q").action), Some('q'));
-        assert_eq!(letter_of(&key(&keymap, "numbers", "1").action), None);
+        assert_eq!(letter_of(&key(&keymap, "symbols", "1").action), None);
         assert_eq!(letter_of(&key(&keymap, "base", ".").action), None);
         assert_eq!(letter_of(&key(&keymap, "base", " ").action), None);
-        assert_eq!(letter_of(&key(&keymap, "eschars", "ä").action), None);
     }
 
     #[test]
@@ -140,8 +138,8 @@ mod tests {
         assert_eq!(flags.len(), keymap.views.len());
         let flag = |name: &str| flags[keymap.views.iter().position(|v| v.name == name).unwrap()];
         assert!(flag("base"));
-        assert!(flag("upper"));
-        assert!(!flag("numbers"));
+        assert!(flag("terminal"));
+        assert!(!flag("number"));
         assert!(!flag("symbols"));
     }
 
@@ -150,11 +148,7 @@ mod tests {
         let keymap = layout::load_keymap();
         assert_eq!(popup_text(key(&keymap, "base", "a")), Some("a".to_string()));
         assert_eq!(
-            popup_text(key(&keymap, "upper", "A")),
-            Some("A".to_string())
-        );
-        assert_eq!(
-            popup_text(key(&keymap, "numbers", "1")),
+            popup_text(key(&keymap, "symbols", "1")),
             Some("1".to_string())
         );
         assert_eq!(popup_text(key(&keymap, "base", " ")), None);

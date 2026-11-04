@@ -101,17 +101,6 @@ fn resolve(file: &FileSpec, name: &str, visiting: &mut Vec<String>) -> MoreKeySe
     set
 }
 
-/// The set a view uses when its layout names none: plain-list views (no
-/// metadata) get one by family and page; views with metadata get none unless
-/// they say `more_keys:`.
-pub(crate) fn default_set(family: Family, page: Page) -> Option<&'static str> {
-    match (family, page) {
-        (Family::Text, Page::Letters) => Some("letters"),
-        (Family::Text, Page::Symbols | Page::MoreSymbols) => Some("symbols"),
-        _ => None,
-    }
-}
-
 /// Fill `hint` and `choices` on every text key of `view` from `set`.
 pub(crate) fn attach(view: &mut View, set: &MoreKeySet) {
     for row in &mut view.rows {
@@ -227,5 +216,21 @@ mod tests {
         assert!(mm.set("b").is_some());
         assert!(mm.set("zzz").is_none());
         assert!(MoreKeys::parse("not: [yaml").set("a").is_none());
+    }
+
+    #[test]
+    fn every_token_named_in_a_set_exists_in_a_view() {
+        let keymap = crate::layout::load_keymap();
+        let tokens: HashSet<&str> = keymap.keys().map(|k| k.token.as_str()).collect();
+        let mm = MoreKeys::bundled();
+        for (name, set) in &mm.sets {
+            let named = set.hints.keys().chain(set.choices.keys());
+            for token in named {
+                assert!(
+                    tokens.contains(token.as_str()),
+                    "set {name:?} names token {token:?}, which no view has"
+                );
+            }
+        }
     }
 }
