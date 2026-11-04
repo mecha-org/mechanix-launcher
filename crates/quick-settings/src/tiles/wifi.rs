@@ -2,13 +2,24 @@ use assets::icons::wifi as icons;
 use mecha_wayland::mechanix_widgets::prelude::{Text, TextContextExt, text};
 use mecha_wayland::prelude::*;
 
-use super::{DOT_RADIUS, GAP, build_label, build_tile};
+use super::{DOT_RADIUS, GAP, build_label, build_tile, load_icon};
 use services::{APUpdate, StateUpdate, WifiState};
 
 pub struct Wifi {
     state: WifiState,
     ssid: String,
     strength: u8,
+}
+
+#[derive(Clone, Copy)]
+struct WifiSprites {
+    x: SpriteId,
+    slash: SpriteId,
+    connecting: SpriteId,
+    none: SpriteId,
+    low: SpriteId,
+    medium: SpriteId,
+    high: SpriteId,
 }
 
 pub struct WifiBuilder;
@@ -22,6 +33,16 @@ impl Widget for Wifi {
 
     fn build(_: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
         let icon_handle = build_tile(me, s, icons::X, GAP);
+        let atlas = &mut s.resource_mut::<Atlas>();
+        let sprites = WifiSprites {
+            x: load_icon(atlas, icons::X),
+            slash: load_icon(atlas, icons::SLASH),
+            connecting: load_icon(atlas, icons::CONNECTING),
+            none: load_icon(atlas, icons::NONE),
+            low: load_icon(atlas, icons::LOW),
+            medium: load_icon(atlas, icons::MEDIUM),
+            high: load_icon(atlas, icons::HIGH),
+        };
         let ssid_handle = build_label(me, s, "");
         let dot = s.spawn(
             me,
