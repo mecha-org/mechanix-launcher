@@ -299,6 +299,9 @@ impl Widget for KeyboardUI {
             // The resource follows the shown view; the copy captured here
             // would be the initial view's.
             let surface = *ctx.resource::<KeyboardSurface>();
+            if visible {
+                ctx.resource_mut::<KeyboardGeometry>().ever_shown = true;
+            }
             let applied = {
                 let (mut surfaces, mut wl) = ctx.fetch::<(ResMut<Surfaces>, ResMut<Wayland>)>();
                 apply_visibility(zone, visible, surface, &mut surfaces, &mut wl)
@@ -402,8 +405,14 @@ pub(crate) fn relayout(app: &mut App) {
     let visible = app.keyboard_visible();
     let zone = *app.resource::<ExclusiveZone>();
     let (mut surfaces, mut wl) = app.query::<(ResMut<Surfaces>, ResMut<Wayland>)>();
-    // Width 0: the compositor keeps it the output's.
-    surfaces.request_layer_size(surface.window, 0, m.height as u32, &mut wl);
+    // Width 0: the compositor keeps it the output's. That needs the left and
+    // right anchors, which a hide resets at the compositor; `on_resized`
+    // only re-lays out while they hold, and this never asks without them.
+    if geometry.anchored(visible) {
+        surfaces.request_layer_size(surface.window, 0, m.height as u32, &mut wl);
+    } else {
+        tracing::warn!("keyboard: not resizing the hidden, unanchored surface");
+    }
     if visible {
         send_zone(zone, true, surface, &mut surfaces, &mut wl);
         if surfaces.is_mapped(surface.window) {
