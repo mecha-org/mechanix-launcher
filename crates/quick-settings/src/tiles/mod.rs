@@ -14,6 +14,7 @@ pub use bluetooth::BluetoothBuilder;
 pub use wifi::WifiBuilder;
 
 pub(crate) const TILE_HEIGHT: f32 = 106.0;
+pub(crate) const DOT_RADIUS: f32 = 10.0;
 
 /// Default space between a tile's icon and its label.
 pub(super) const GAP: f32 = 12.0;
@@ -67,4 +68,13 @@ pub(super) fn build_label<W: Widget>(
             .style(LayoutStyle::default().shrink(0.0))
             .color(ColorRole::OnSurfaceVariant),
     )
+}
+
+/// Keep short device names intact; abbreviate longer names for the tile.
+pub(crate) fn short_name(name: &str) -> String {
+    if name.chars().count() <= 5 {
+        name.to_string()
+    } else {
+        format!("{}...", name.chars().take(3).collect::<String>())
+    }
 }
