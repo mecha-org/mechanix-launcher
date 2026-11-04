@@ -7,13 +7,13 @@ use mecha_wayland::prelude::*;
 
 use crate::layout::style::KeyState;
 use crate::layout::tokens::Fonts;
-use crate::layout::{Family, KeyAction, Keymap, Modifier, Page};
+use crate::layout::{Cell, Family, KeyAction, Keymap, Modifier, Page};
 use crate::predict::TypingContext;
 use crate::touch::{self, KeyEntry, TouchState, TouchTracker, letter_views};
 use crate::view::{BASE_VIEW, SwitchView, switch_view, view_for};
 use crate::widget::key::{Key, KeyBuilder};
 use crate::widget::popup::{KeyPopup, KeyPopupBuilder};
-use crate::widget::surface::popup_headroom;
+use crate::widget::surface::{popup_headroom, row_weight, view_height};
 
 /// One spawned view: its keymap name and the node toggled
 /// `Display::Hidden`/`Flex` on switch.
@@ -22,6 +22,8 @@ pub(crate) struct ViewNode {
     pub(crate) page: Page,
     pub(crate) name: String,
     pub(crate) node: Handle<Div>,
+    /// Height the view takes when shown, padding included.
+    pub(crate) height: f32,
 }
 
 /// The on-screen keyboard: every view, the index of the one currently shown,
@@ -77,12 +79,13 @@ impl Build for KeyboardBuilder {
 impl Widget for Keyboard {
     type Builder = KeyboardBuilder;
     fn build(b: KeyboardBuilder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
-        // Keyboard container: column filling the window, surface background.
+        // Keyboard container: a column as wide as the window, as tall as the
+        // shown view (the window puts it on the bottom), surface background.
         // Its gap only separates views, and just one view is ever shown.
         let style = b.keymap.keyboard;
         *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
             .column()
-            .fill()
+            .width(percent(100.0))
             .gap(px(style.row_gap))
             .padding_all(px(style.padding));
         let bg_role = b.keymap.keyboard.background_color;
@@ -107,9 +110,10 @@ impl Widget for Keyboard {
         let mut keys = Vec::with_capacity(b.keymap.views.len());
 
         for (vi, view) in b.keymap.views.iter().enumerate() {
+            let height = view_height(&style, view);
             let view_style = LayoutStyle::default()
                 .column()
-                .fill()
+                .size(percent(100.0), px(height - 2.0 * style.padding))
                 .gap(px(style.row_gap));
             let view_style = if vi == initial_view {
                 view_style
@@ -122,16 +126,37 @@ impl Widget for Keyboard {
                 family: view.family,
                 page: view.page,
                 node: view_div,
+                height,
             });
             let mut view_keys = Vec::new();
 
             for row in &view.rows {
+                // Rows share the view's height by weight.
                 let row_div = s.spawn(
                     view_div,
-                    div().style(LayoutStyle::default().row().fill().gap(px(style.gap))),
+                    div().style(
+                        LayoutStyle::default()
+                            .row()
+                            .width(percent(100.0))
+                            .flex_basis(px(0.0))
+                            .grow(row_weight(row.height))
+                            .gap(px(style.gap)),
+                    ),
                 );
 
-                for key in row.keys() {
+                for cell in &row.cells {
+                    // A spacer is blank width; it spawns no key, so it is
+                    // never in `view_keys` and never hit.
+                    let key = match cell {
+                        Cell::Spacer(w) => {
+                            s.spawn(
+                                row_div,
+                                div().style(LayoutStyle::default().grow(*w).flex_basis(px(0.0))),
+                            );
+                            continue;
+                        }
+                        Cell::Key(key) => key,
+                    };
                     // The label keeps its normal font while latched.
                     let label_style = key.look.style(KeyState::Normal);
                     let key_handle = s.spawn(

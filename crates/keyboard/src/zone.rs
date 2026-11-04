@@ -50,7 +50,7 @@ pub(crate) fn reserved_height(height: f32, headroom: f32) -> f32 {
 
 /// Send the zone the surface should have now: [`ExclusiveZone::zone`] while
 /// shown, none while hidden. Sends nothing if it has not changed.
-fn send_zone(
+pub(crate) fn send_zone(
     zone: ExclusiveZone,
     visible: bool,
     surface: KeyboardSurface,
@@ -156,6 +156,22 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(zone.zone(252.0), -1);
+    }
+
+    #[test]
+    fn zone_follows_the_shown_view_height() {
+        use crate::widget::surface::KeyboardSurface;
+        let surface = KeyboardSurface {
+            window: App::new().root(),
+            height: 100.0 + 301.5 + 20.0,
+            headroom: 100.0,
+            bottom_gap: 20.0,
+            width: None,
+        };
+        let on = ExclusiveZone::default();
+        let zone = |s: KeyboardSurface| on.zone(reserved_height(s.height, s.headroom));
+        assert_eq!(zone(surface.showing(301.5)), 321);
+        assert_eq!(zone(surface.showing(252.0)), 272);
     }
 
     #[test]

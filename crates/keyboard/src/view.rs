@@ -77,6 +77,8 @@ pub(crate) fn switch_view(ctx: &mut Context<'_, Keyboard>, target: &str) {
     if !ctx.me().letter_views[idx] {
         end_word(ctx);
     }
+    // The surface keeps its size; its zone and input region follow the view.
+    crate::widget::surface::view_shown(ctx);
     tracing::info!(view = %target, "switched view");
 }
 
