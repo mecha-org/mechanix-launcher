@@ -42,7 +42,6 @@ pub(crate) struct Keyboard {
     /// Every latching modifier key across all views, for armed-state repaint on
     /// latch toggle.
     pub(crate) latch_keys: Vec<(Modifier, Handle<Key>)>,
-    /// Every exclusive-zone toggle key across all views, for on-state repaint.
     /// Every Shift key across all views, for repaint on shift state change.
     pub(crate) shift_keys: Vec<Handle<Key>>,
     /// The hold-to-lock timer on ⇧, started while a Shift key is pressed.

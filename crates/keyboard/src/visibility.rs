@@ -2,9 +2,11 @@
 //!
 //! Driven by input-method `activate`/`deactivate` (applied at `done`), shown
 //! by the host with [`show_keyboard`] and hidden by a downward flick on the
-//! keys; all write through [`KeyboardVisibilityExt`]. A [`KeyboardVisibilityChanged`] signal is fanned
-//! out as an [`ApplyKeyboardVisibility`] event by a system, which the keyboard
-//! surface widget subscribes to.
+//! keys; all write through [`KeyboardVisibilityExt`]. A
+//! [`KeyboardVisibilityChanged`] signal is fanned out as an
+//! [`ApplyKeyboardVisibility`] event by a system, which the keyboard surface
+//! widget (map/unmap) and the keyboard widget (cancel touch, drop Shift on
+//! hide) subscribe to.
 
 use mecha_wayland::prelude::*;
 

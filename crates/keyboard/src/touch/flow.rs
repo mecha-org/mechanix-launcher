@@ -367,7 +367,7 @@ mod tests {
         }
     }
 
-    /// Shift on the left; `h` (base) or `H` (upper) on the right.
+    /// A view switch on the left; `h` (view 0) or `H` (view 1) on the right.
     fn shift_board() -> Fake {
         Fake::new(vec![
             [Act::View(1), Act::Letter('h')],

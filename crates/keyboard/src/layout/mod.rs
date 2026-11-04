@@ -1,5 +1,7 @@
-//! The keymap: the resolved IR built from a squeekboard `layout.yaml`, plus the
-//! loading and resolution that turns the raw [`spec`] structs into [`Key`]s.
+//! The keymap: the resolved IR built from `layout.yaml` (squeekboard-style
+//! buttons and outlines, AOSP LatinIME pages tagged by field family and page),
+//! plus the loading and resolution that turns the raw [`spec`] structs into
+//! [`Key`]s, and the long-press choices from `more_keys.yaml`.
 
 mod build;
 pub(crate) mod icons;

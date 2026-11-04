@@ -1,6 +1,6 @@
-//! Selecting which keymap view is shown: by the focused field's content
-//! purpose, by an explicit `set_view`/`locking` key tap, and the surface-wide
-//! [`SwitchView`] event the keyboard widget subscribes to.
+//! Selecting which keymap view is shown: by the focused field's family (its
+//! content purpose and hint), by a page key tap within that family, and the
+//! surface-wide [`SwitchView`] event the keyboard widget subscribes to.
 
 use mecha_wayland::prelude::*;
 

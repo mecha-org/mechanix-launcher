@@ -61,7 +61,7 @@ pub fn spawn_ui(app: &mut App, bottom_gap: f32) {
     app.insert_resource(crate::predict::Prediction::from_config(&keymap.prediction));
     app.insert_resource(ExclusiveZone::default());
     // Keyboard surface visibility — starts hidden; IM2 `activate`, a
-    // corner swipe and the hide key flip it through `KeyboardVisibilityExt`.
+    // corner swipe and a downward flick flip it through `KeyboardVisibilityExt`.
     crate::visibility::install(app);
 
     let fonts = Fonts::load(&mut app.resource_mut::<Atlas>());

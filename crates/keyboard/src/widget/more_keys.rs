@@ -1,7 +1,8 @@
 //! The long-press choices row: a strip of key-sized cells over the held key,
-//! the highlighted one in the primary colours. It is the keyboard container's
-//! last child (painting above the keys and the pop-up), absolutely
-//! positioned, draw-only, and driven by the input layer's [`ChoicesFeedback`].
+//! the highlighted one in the `latched` key style. It is the keyboard
+//! container's last child (painting above the keys and the pop-up),
+//! absolutely positioned, draw-only, and driven by the input layer's
+//! [`ChoicesFeedback`].
 
 use mecha_wayland::prelude::*;
 

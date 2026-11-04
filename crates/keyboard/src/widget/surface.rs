@@ -3,8 +3,8 @@
 //!
 //! The surface is unmapped while the keyboard is hidden, so it takes no
 //! space and catches no touches; visibility flips — from input-method
-//! `activate`/`deactivate`, a corner swipe, the hide key or going home — map
-//! and unmap it. The compositor keeps an unmapped layer's exclusive zone, so
+//! `activate`/`deactivate`, a corner swipe, a downward flick on the keys or
+//! going home — map and unmap it. The compositor keeps an unmapped layer's exclusive zone, so
 //! a hide clears the zone first and a show puts it back.
 
 use mecha_wayland::prelude::*;

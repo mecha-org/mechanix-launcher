@@ -16,7 +16,7 @@ pub struct Keymap {
     pub choices_look: KeyLook,
 }
 
-/// One selectable arrangement of keys (e.g. `base`, `upper`).
+/// One selectable arrangement of keys (e.g. `base`, `symbols`).
 #[derive(Debug)]
 pub struct View {
     pub name: String,

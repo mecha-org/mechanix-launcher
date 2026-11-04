@@ -1,7 +1,7 @@
 //! The keyboard's exclusive zone: off, the shown keyboard sits over apps; on,
 //! it reserves its height so apps shrink above it. On by default; no key flips
-//! it now, but the setting stays so one can return. The host suspends it while its home screen is up, and a hidden
-//! keyboard has none.
+//! it now, but the setting stays so one can return. The host suspends it
+//! while its home screen is up, and a hidden keyboard has none.
 
 use mecha_wayland::prelude::*;
 
