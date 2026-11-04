@@ -84,6 +84,8 @@ pub(crate) fn set_label_color<W: Widget>(ctx: &mut Context<'_, W>, label: Label,
 pub(crate) struct KeyBuilder {
     pub(crate) font: FontId,
     pub(crate) font_size: u16,
+    /// Font for the corner hint (`geist-mono`).
+    pub(crate) hint_font: FontId,
     pub(crate) key: crate::layout::Key,
     pub(crate) radius: f32,
 }
@@ -135,6 +137,20 @@ impl Widget for Key {
             }
         };
 
+        // Corner hint: top-right, half the label size, not on icon keys.
+        let hint = match (&b.key.face, &b.key.hint) {
+            (KeyFace::Text(_), Some(h)) => {
+                let color = s.color(ColorRole::OnSecondaryContainer);
+                let size = (f32::from(b.font_size) * 0.5).round().max(1.0) as u16;
+                let handle = s.spawn(me, text(b.hint_font, h).color(color).size(size));
+                *s.component_mut::<LayoutStyle>(handle).unwrap() = LayoutStyle::default()
+                    .absolute()
+                    .inset(Insets::new(px(3.0), px(5.0), auto(), auto()));
+                Some(handle)
+            }
+            _ => None,
+        };
+
         let latch = match b.key.action {
             KeyAction::LatchModifier(m) => Some(m),
             _ => None,
@@ -151,6 +167,10 @@ impl Widget for Key {
             let fg = ctx.color(fg_role);
             ctx.set_paint(Paint::Quad(Quad::new(bg).radius(radius)));
             set_label_color(ctx, label, fg);
+            if let Some(h) = hint {
+                let c = ctx.color(ColorRole::OnSecondaryContainer);
+                ctx.at(h).unwrap().set_color(c);
+            }
         });
 
         if !is_latch {

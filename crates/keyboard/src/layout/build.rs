@@ -5,6 +5,7 @@ use tracing::warn;
 use xkbcommon::xkb::{self, Keysym};
 
 use super::keymap::{Cell, Family, Key, KeyAction, KeyFace, Modifier, Page, Row, View};
+use super::more_keys::{self, MoreKeys};
 use super::spec::{ActionSpec, Button, Layout, Outline, RowSpec, ViewSpec};
 use super::style::{self, KeyLook, KeyStyle};
 use super::{KeyboardStyle, Keymap, PredictionConfig};
@@ -129,12 +130,23 @@ impl View {
             })
             .collect();
 
-        View {
+        let mut view = View {
             name: name.to_string(),
             family,
             page,
             rows: out_rows,
+        };
+        let set_name = match spec {
+            ViewSpec::Rows(_) => more_keys::default_set(family, page),
+            ViewSpec::Map(m) => m.more_keys.as_deref(),
+        };
+        if let Some(set_name) = set_name {
+            match MoreKeys::bundled().set(set_name) {
+                Some(set) => more_keys::attach(&mut view, set),
+                None => warn!("view {name:?}: more_keys set {set_name:?} is not defined"),
+            }
         }
+        view
     }
 }
 
@@ -153,6 +165,8 @@ fn resolve_key(layout: &Layout, styles: &HashMap<String, KeyStyle>, token: &str)
         action,
         width: resolve_outline(layout, button).width,
         look,
+        hint: None,
+        choices: Vec::new(),
     }
 }
 
@@ -589,6 +603,33 @@ mod tests {
                 "{name} has an exclusive-zone key"
             );
         }
+    }
+
+    #[test]
+    fn views_get_long_press_data_by_set() {
+        let layout: Layout = yaml_serde::from_str(FALLBACK_LAYOUT).expect("fallback parses");
+        let keymap = Keymap::from_layout(&layout);
+        let find = |view: &str, token: &str| {
+            keymap
+                .view(view)
+                .unwrap()
+                .keys()
+                .find(|k| k.token == token)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(find("base", "q").hint.as_deref(), Some("1"));
+        assert_eq!(find("base", "e").choices.len(), 6);
+        assert_eq!(find("symbols", "$").choices.len(), 5);
+
+        let yaml = "outlines: { default: { width: 10 } }\nviews:\n  v:\n    family: text\n    page: letters\n    rows: [\"q\"]\n  w:\n    more_keys: terminal\n    rows: [\"q\"]\n";
+        let layout: Layout = yaml_serde::from_str(yaml).unwrap();
+        let km = Keymap::from_layout(&layout);
+        assert_eq!(km.view("v").unwrap().keys().next().unwrap().hint, None);
+        assert_eq!(
+            km.view("w").unwrap().keys().next().unwrap().hint.as_deref(),
+            Some("1")
+        );
     }
 
     #[test]

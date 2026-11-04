@@ -172,6 +172,35 @@ pub struct Key {
     /// Colours per [`super::style::KeyState`], from the button's `key_style:` (or
     /// `normal`) and the `latched` style.
     pub look: KeyLook,
+    /// Corner label (lowercase data; shift is applied at use).
+    pub hint: Option<String>,
+    /// Long-press choices, first is the default highlight. Lowercase.
+    pub choices: Vec<String>,
+}
+
+impl Row {
+    pub(super) fn keys_mut(&mut self) -> impl Iterator<Item = &mut Key> {
+        self.cells.iter_mut().filter_map(|c| match c {
+            Cell::Key(k) => Some(k),
+            Cell::Spacer(_) => None,
+        })
+    }
+}
+
+#[cfg(test)]
+impl Key {
+    /// A bare text key for `token`, for tests.
+    pub(super) fn test(token: &str) -> Self {
+        Key {
+            token: token.to_string(),
+            face: KeyFace::Text(token.to_string()),
+            action: KeyAction::EmitText(token.to_string()),
+            width: 1.0,
+            look: KeyLook::default(),
+            hint: None,
+            choices: Vec::new(),
+        }
+    }
 }
 
 impl View {
