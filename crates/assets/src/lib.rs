@@ -19,6 +19,7 @@ pub mod icons {
         pub const MEDIUM: &[u8] = include_bytes!("../icons/wifi/wifi-medium.svg");
         pub const LOW: &[u8] = include_bytes!("../icons/wifi/wifi-low.svg");
         pub const NONE: &[u8] = include_bytes!("../icons/wifi/wifi-none.svg");
+        pub const CONNECTING: &[u8] = include_bytes!("../icons/wifi/wifi-connecting.svg");
         pub const SLASH: &[u8] = include_bytes!("../icons/wifi/wifi-slash.svg");
         pub const X: &[u8] = include_bytes!("../icons/wifi/wifi-x.svg");
     }
