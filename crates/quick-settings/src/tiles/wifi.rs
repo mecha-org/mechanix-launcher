@@ -1,12 +1,15 @@
 //! Wi-Fi tile presentation driven by NetworkManager events.
 
 use assets::icons::wifi as icons;
-use mecha_wayland::mechanix_widgets::prelude::{Text, TextContextExt};
+use mecha_wayland::mechanix_widgets::prelude::{
+    Text, TextContextExt, TextOverflow, TextVariant, text,
+};
 use mecha_wayland::prelude::*;
 
 use services::{APUpdate, SetWifiEnabled, StateUpdate, WifiState};
 
-use super::{DOT_RADIUS, GAP, build_label, build_tile, load_icon, short_name};
+use super::{DOT_RADIUS, WIDE_GAP, build_tile};
+use crate::util::{load_icon, short_name};
 
 /// Latest Wi-Fi details used to render the tile.
 pub struct Wifi {
@@ -20,8 +23,8 @@ pub struct Wifi {
 /// Atlas sprites shared by the tile's event handlers.
 #[derive(Clone, Copy)]
 struct WifiSprites {
-    x: SpriteId,
-    slash: SpriteId,
+    /// Shown while Wi-Fi is off or on but not connected; only its tint changes.
+    wifi: SpriteId,
     connecting: SpriteId,
     none: SpriteId,
     low: SpriteId,
@@ -40,19 +43,28 @@ impl Widget for Wifi {
     type Builder = WifiBuilder;
 
     fn build(_: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
-        let icon_handle = build_tile(me, s, icons::X, GAP);
+        let icon_handle = build_tile(me, s, icons::HIGH, WIDE_GAP);
         // Load sprites once; event handlers only switch between their IDs.
         let atlas = &mut s.resource_mut::<Atlas>();
         let sprites = WifiSprites {
-            x: load_icon(atlas, icons::X),
-            slash: load_icon(atlas, icons::SLASH),
+            wifi: load_icon(atlas, icons::HIGH),
             connecting: load_icon(atlas, icons::CONNECTING),
             none: load_icon(atlas, icons::NONE),
             low: load_icon(atlas, icons::LOW),
             medium: load_icon(atlas, icons::MEDIUM),
             high: load_icon(atlas, icons::HIGH),
         };
-        let ssid_handle = build_label(me, s, "");
+        // Hidden until connected so the icon sits centred; showing it pushes the icon up.
+        // Same text styling as the Bluetooth tile; ellipsis overflow is a fallback for narrow tiles.
+        let ssid_handle = s.spawn(
+            me,
+            text("")
+                .variant(TextVariant::LabelLarge)
+                .max_lines(1)
+                .overflow(TextOverflow::Ellipsis)
+                .style(LayoutStyle::default().max_width(percent(100.0)).hidden())
+                .color(ColorRole::OnSurfaceVariant),
+        );
         let dot = s.spawn(
             me,
             div().style(
@@ -85,7 +97,10 @@ impl Widget for Wifi {
         s.on::<StateUpdate>(me, move |ctx, e| {
             // A state change can show or hide the cached AP.
             tracing::info!("Wifi state changed {:?}", e.state);
-            ctx.me().state = e.state;
+            let wifi = ctx.me();
+            wifi.state = e.state;
+            // Keep the toggle in sync with the real radio state.
+            wifi.enabled = !matches!(e.state, WifiState::Unavailable | WifiState::Off);
             render(ctx, icon_handle, ssid_handle, dot, sprites);
         });
 
@@ -106,7 +121,6 @@ impl Widget for Wifi {
     }
 }
 
-// make changes to tile
 /// Resolves the latest state and AP details into one tile appearance.
 fn render(
     ctx: &mut Context<'_, Wifi>,
@@ -115,78 +129,56 @@ fn render(
     dot: Handle<Div>,
     sprites: WifiSprites,
 ) {
-    let off_colour = Color::TRANSPARENT;
-    let on_colour = ctx.color(ColorRole::Surface);
     let border_colour = ctx.color(ColorRole::SecondaryFixedDim);
+    let off_icon_colour = ctx.color(ColorRole::OnSecondaryFixedVariant);
+    let on_icon_colour = ctx.color(ColorRole::OnSurface);
 
     let wifi = ctx.me();
-    let sprite;
-    let mut ssid: String = String::new();
-    let dot_enabled;
-    let background;
+    let mut ssid = String::new();
 
     // Connection state takes precedence over any cached SSID or strength.
-    match wifi.state {
-        WifiState::Unavailable => {
-            sprite = sprites.x;
-            dot_enabled = false;
-            background = off_colour;
-        }
-        WifiState::Off => {
-            sprite = sprites.slash;
-            dot_enabled = false;
-            background = off_colour;
-        }
-        WifiState::On => {
-            // The device state is unknown, but Wi-Fi is enabled.
-            sprite = sprites.high;
-            dot_enabled = false;
-            background = on_colour;
-        }
-        WifiState::Disconnected => {
-            // This WILL be the same as ON
-            // ON is a fallback when no device yet but wirelessEnabled is there
-            // Basically, this branch will never run because our network manager
-            // service should never emit On
-            sprite = sprites.high;
-            dot_enabled = false;
-            background = off_colour;
-        }
-        WifiState::Connecting => {
-            sprite = sprites.connecting;
-            dot_enabled = false;
-            background = on_colour;
-        }
-        WifiState::Disconnecting => {
-            sprite = sprites.connecting;
-            dot_enabled = false;
-            background = on_colour;
-        }
+    let (sprite, on, connected) = match wifi.state {
+        WifiState::Unavailable | WifiState::Off => (sprites.wifi, false, false),
+        // Enabled but not connected (On is the fallback before a device is known).
+        WifiState::On | WifiState::Disconnected => (sprites.wifi, true, false),
+        WifiState::Connecting | WifiState::Disconnecting => (sprites.connecting, true, false),
         WifiState::Connected => {
             // Only a connected AP supplies the visible SSID and signal icon.
-            sprite = match wifi.strength {
+            ssid = short_name(&wifi.ssid);
+            let sprite = match wifi.strength {
                 0..25 => sprites.none,
                 25..50 => sprites.low,
                 50..75 => sprites.medium,
                 _ => sprites.high,
             };
-            ssid = short_name(&wifi.ssid);
-            dot_enabled = true;
-            background = on_colour;
+            (sprite, true, true)
         }
     };
 
-    // Apply the appearance together after selecting it above.
-    ctx.at(ssid_handle).unwrap().set_text(ssid);
-    ctx.at(icon_handle).unwrap().set_sprite(sprite);
-    ctx.set_paint(Paint::Quad(
-        Quad::new(background).border(1.0, border_colour),
-    ));
-
-    let dot_colour = if dot_enabled {
+    let background = if on {
+        ctx.color(ColorRole::Surface)
+    } else {
+        Color::TRANSPARENT
+    };
+    let tile = Quad::new(background).border(1.0, border_colour);
+    let icon_colour = if on { on_icon_colour } else { off_icon_colour };
+    let dot_paint = if on {
         Paint::Quad(Quad::new(ctx.color(ColorRole::Primary)).radius(DOT_RADIUS))
     } else {
         Paint::None
     };
-    ctx.at(dot).unwrap().set_paint(dot_colour);
+
+    // Apply the appearance together after selecting it above.
+    ctx.set_paint(Paint::Quad(tile));
+    let mut label = ctx.at(ssid_handle).unwrap();
+    label.set_display(if connected {
+        Display::Flex
+    } else {
+        Display::Hidden
+    });
+    label.set_text(ssid);
+    let mut icon = ctx.at(icon_handle).unwrap();
+    icon.set_sprite(sprite);
+    icon.set_color(icon_colour);
+    ctx.at(dot).unwrap().set_paint(dot_paint);
 }

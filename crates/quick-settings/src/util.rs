@@ -21,14 +21,6 @@ pub fn load_icon_sized(atlas: &mut Atlas, svg: &'static [u8], size: u32) -> Spri
         .expect("embedded icon SVG should render and fit in the atlas")
 }
 
-/// Loads an SVG in full colour, keeping the fills drawn in the file.
-/// Draw it with `image(..)`, not `icon(..)`.
-pub fn load_image(atlas: &mut Atlas, svg: &'static [u8]) -> SpriteId {
-    atlas
-        .insert_svg_image(svg, ICON_SIZE)
-        .expect("embedded icon SVG should render and fit in the atlas")
-}
-
 /// Longest label a tile shows in full; anything longer keeps the first
 /// [`TRUNCATED_LEN`] characters followed by `...`.
 const MAX_LABEL_LEN: usize = 7;

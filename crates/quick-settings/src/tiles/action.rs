@@ -1,9 +1,9 @@
 use mecha_wayland::prelude::*;
 
 use super::{GAP, frame};
-use crate::util::load_image;
+use crate::util::load_icon;
 
-/// Full-colour SVGs for the [`ActionTile`]s.
+/// One-colour SVGs for the [`ActionTile`]s.
 pub mod svg {
     pub const CAMERA: &[u8] = include_bytes!("../../assets/camera.svg");
     pub const DISPLAY: &[u8] = include_bytes!("../../assets/display.svg");
@@ -18,8 +18,8 @@ pub mod svg {
 pub struct ActionTile;
 
 pub struct ActionTileBuilder {
-    /// Full-colour SVG, usually one of [`svg`]. Its own colours are kept and
-    /// do not follow the theme.
+    /// SVG, usually one of [`svg`]. Its colours are dropped and it is tinted
+    /// with `OnSecondaryFixedVariant`.
     pub icon: &'static [u8],
 }
 
@@ -37,8 +37,13 @@ impl Widget for ActionTile {
 
     fn build(b: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
         frame(me, s, GAP);
-        let sprite = load_image(&mut s.resource_mut::<Atlas>(), b.icon);
-        s.spawn(me, image(sprite).style(LayoutStyle::default().shrink(0.0)));
+        let sprite = load_icon(&mut s.resource_mut::<Atlas>(), b.icon);
+        s.spawn(
+            me,
+            icon(sprite)
+                .style(LayoutStyle::default().shrink(0.0))
+                .color(s.color(ColorRole::OnSecondaryFixedVariant)),
+        );
         ActionTile
     }
 }
@@ -50,7 +55,7 @@ mod tests {
     use mecha_wayland::mechanix_widgets::prelude::FontBook;
 
     #[test]
-    fn action_tile_keeps_svg_colours_and_icon_tile_is_tinted() {
+    fn action_tile_icon_is_tinted_with_on_secondary_fixed_variant() {
         let mut app = App::new();
         app.add_module(LayoutModule)
             .add_module(PaintModule)
@@ -60,19 +65,14 @@ mod tests {
         app.insert_resource(atlas);
         app.insert_resource(FontBook::new(font));
         let mic = app.spawn(app.root(), action_tile(svg::MICROPHONE));
-        let wifi = app.spawn(
-            app.root(),
-            WifiBuilder {
-                name: String::new(),
-            },
-        );
+        let wifi = app.spawn(app.root(), WifiBuilder);
         app.tick();
 
         let paint_of = |app: &App, tile: NodeId| {
             let child = app.children(tile).unwrap()[0];
             app.component::<Paint>(child).unwrap().clone()
         };
-        assert!(matches!(paint_of(&app, mic.id()), Paint::Polychrome(_)));
+        assert!(matches!(paint_of(&app, mic.id()), Paint::Monochrome(_)));
         assert!(matches!(paint_of(&app, wifi.id()), Paint::Monochrome(_)));
     }
 }

@@ -1,4 +1,3 @@
-use mecha_wayland::mechanix_widgets::prelude::{Text, text};
 use mecha_wayland::prelude::*;
 
 use crate::util::load_icon;
@@ -54,27 +53,4 @@ pub(super) fn build_tile<W: Widget>(
             .style(LayoutStyle::default().shrink(0.0))
             .color(s.color(ColorRole::OnSurface)),
     )
-}
-
-pub(super) fn build_label<W: Widget>(
-    me: Handle<W>,
-    s: &mut Spawner<'_, W>,
-    value: impl Into<String>,
-) -> Handle<Text> {
-    s.spawn(
-        me,
-        text(value)
-            .size(18.0)
-            .style(LayoutStyle::default().shrink(0.0))
-            .color(ColorRole::OnSurfaceVariant),
-    )
-}
-
-/// Keep short device names intact; abbreviate longer names for the tile.
-pub(crate) fn short_name(name: &str) -> String {
-    if name.chars().count() <= 5 {
-        name.to_string()
-    } else {
-        format!("{}...", name.chars().take(3).collect::<String>())
-    }
 }
