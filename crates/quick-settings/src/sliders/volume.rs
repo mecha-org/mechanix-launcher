@@ -6,11 +6,15 @@ use crate::util::load_icon;
 
 mod svg {
     pub const HIGH: &[u8] = include_bytes!("../../assets/speaker/speaker-high.svg");
+    pub const LOW: &[u8] = include_bytes!("../../assets/speaker/speaker-low.svg");
+    pub const MUTE: &[u8] = include_bytes!("../../assets/speaker/speaker-mute.svg");
 }
 
-const LEVEL_PERCENT: f32 = 70.0;
+const LEVEL_PERCENT: f32 = 70.0; // initial value
 const PADDING_VERTICAL: f32 = 12.0;
 const PADDING_HORIZONTAL: f32 = 32.0;
+
+const HIGH_LEVEL: u32 = 65; // after what value we use the high icon
 
 pub struct VolumeSlider;
 
@@ -24,7 +28,9 @@ impl Widget for VolumeSlider {
     type Builder = VolumeSliderBuilder;
 
     fn build(_: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
-        let icon_sprite = load_icon(&mut s.resource_mut::<Atlas>(), svg::HIGH);
+        let high = load_icon(&mut s.resource_mut::<Atlas>(), svg::HIGH);
+        let low = load_icon(&mut s.resource_mut::<Atlas>(), svg::LOW);
+        let mute = load_icon(&mut s.resource_mut::<Atlas>(), svg::MUTE);
 
         let row = s.spawn(
             me,
@@ -40,9 +46,9 @@ impl Widget for VolumeSlider {
             ),
         );
 
-        s.spawn(
+        let icon_handle = s.spawn(
             row,
-            icon(icon_sprite)
+            icon(high) // default icon
                 .style(LayoutStyle::default().shrink(0.0))
                 .color(s.color(ColorRole::OnSurface)),
         );
@@ -73,12 +79,31 @@ impl Widget for VolumeSlider {
         });
 
         s.on::<VolumeStateEvent>(slider_handle, move |ctx, e| {
-            if let VolumeState::Ready { volume_percent, .. } = e.0 {
-                println!("Volume changed to: {}", volume_percent);
-                let Some(mut slider) = ctx.at(slider_handle) else {
-                    return;
+            if let VolumeState::Ready {
+                volume_percent,
+                muted,
+            } = e.0
+            {
+                println!(
+                    "[volume] state changed to: {} muted: {}",
+                    volume_percent, muted
+                );
+
+                if let Some(mut slider) = ctx.at(slider_handle) {
+                    slider.set_value(volume_percent.min(100) as f32);
                 };
-                slider.set_value(volume_percent.min(100) as f32);
+
+                // TODO: check if we're already muted and if our icon is
+                // already set to high or low, saves resetting it
+                if let Some(mut icon_handler) = ctx.at(icon_handle) {
+                    if muted {
+                        icon_handler.set_sprite(mute);
+                    } else if volume_percent > HIGH_LEVEL {
+                        icon_handler.set_sprite(high);
+                    } else {
+                        icon_handler.set_sprite(low);
+                    }
+                }
             }
         });
 
