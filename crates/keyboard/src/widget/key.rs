@@ -101,6 +101,8 @@ pub(crate) struct Key {
     /// What the pop-up shows while this key is pressed; `None` for keys that
     /// don't type a visible character.
     pub(crate) popup_text: Option<String>,
+    /// Corner radius at the current scale (a rescale updates it).
+    pub(crate) radius: f32,
 }
 
 impl Widget for Key {
@@ -182,6 +184,7 @@ impl Widget for Key {
             let (bg_role, fg_role) = key_roles(look, kind, state);
             let bg = ctx.color(bg_role);
             let fg = ctx.color(fg_role);
+            let radius = ctx.me().radius;
             ctx.set_paint(Paint::Quad(Quad::new(bg).radius(radius)));
             set_label_color(ctx, label, fg);
             if let Some(h) = lock_bar {
@@ -204,6 +207,7 @@ impl Widget for Key {
                     KeyFeedback::Released { .. } => (bg, fg),
                 };
                 set_label_color(ctx, label, ink);
+                let radius = ctx.me().radius;
                 ctx.set_paint(Paint::Quad(Quad::new(fill).radius(radius)));
             });
         }
@@ -213,6 +217,7 @@ impl Widget for Key {
             look,
             lock_bar,
             popup_text: popup_text(&b.key),
+            radius,
         }
     }
 }

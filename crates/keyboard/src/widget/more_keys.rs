@@ -52,13 +52,15 @@ impl Build for MoreKeysBuilder {
 pub(crate) struct MoreKeys {
     cells: Vec<(Handle<Div>, Handle<Text>)>,
     highlighted: Option<usize>,
+    /// Corner radius at the current scale (a rescale updates it).
+    pub(crate) radius: f32,
 }
 
 impl Widget for MoreKeys {
     type Builder = MoreKeysBuilder;
     fn build(b: MoreKeysBuilder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
         *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default().absolute().hidden();
-        let (font, font_size, radius) = (b.font, b.font_size, b.radius);
+        let (font, font_size) = (b.font, b.font_size);
         let colors = Colors {
             cell: key_roles(b.look, KeyKind::Normal, KeyState::Normal),
             lit: key_roles(b.look, KeyKind::Normal, KeyState::Latched),
@@ -69,15 +71,19 @@ impl Widget for MoreKeys {
                 cells,
                 highlighted,
             } => {
-                let look = (font, font_size, radius, colors);
+                let look = (font, font_size, ctx.me().radius, colors);
                 open(ctx, *rect, cells, *highlighted, look);
             }
-            ChoicesFeedback::Highlight(h) => highlight(ctx, *h, radius, colors),
+            ChoicesFeedback::Highlight(h) => {
+                let radius = ctx.me().radius;
+                highlight(ctx, *h, radius, colors)
+            }
             ChoicesFeedback::Close => close(ctx),
         });
         MoreKeys {
             cells: Vec::new(),
             highlighted: None,
+            radius: b.radius,
         }
     }
 }

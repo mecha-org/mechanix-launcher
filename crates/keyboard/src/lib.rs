@@ -17,6 +17,7 @@ mod modifiers;
 mod module;
 mod predict;
 mod protocol;
+mod scale;
 mod touch;
 mod view;
 mod visibility;

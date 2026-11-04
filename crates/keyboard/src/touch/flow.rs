@@ -338,7 +338,7 @@ mod tests {
             let list: Vec<String> = self.choices[index].iter().map(|c| c.to_string()).collect();
             let key = self.geoms()[index].rect;
             (!list.is_empty())
-                .then(|| ChoicesRow::open(key, Rect::new(0.0, -60.0, 400.0, 100.0), list))
+                .then(|| ChoicesRow::open(key, Rect::new(0.0, -60.0, 400.0, 100.0), 4.0, list))
         }
         fn tracker(&mut self) -> &mut TouchTracker {
             &mut self.tracker

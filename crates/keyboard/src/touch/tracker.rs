@@ -262,6 +262,7 @@ mod tests {
         ChoicesRow::open(
             Rect::new(0.0, 100.0, 40.0, 40.0),
             Rect::new(0.0, 0.0, 400.0, 200.0),
+            4.0,
             vec!["1".into(), "é".into()],
         )
     }

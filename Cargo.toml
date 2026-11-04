@@ -58,3 +58,4 @@ assets = { path = "crates/assets" }
 # directory: ../mecha-wayland
 # [patch."https://github.com/mecha-org/mecha-wayland"]
 # mecha-wayland = { path = "../mecha-wayland" }
+# wayland = { path = "../mecha-wayland/crates/wayland" }  # the keyboard's mw-wayland

@@ -10,6 +10,7 @@ use crate::layout::tokens::{Font, Fonts};
 use crate::layout::{Cell, Family, KeyAction, Keymap, Modifier, Page};
 use crate::modifiers::shift::{self, HOLD_LOCK, Shift};
 use crate::predict::TypingContext;
+use crate::scale::KeyboardGeometry;
 use crate::touch::long_press::LONG_PRESS;
 use crate::touch::{self, KeyEntry, TouchState, TouchTracker, letter_views};
 use crate::view::{BASE_VIEW, SwitchView, switch_view, view_for};
@@ -17,7 +18,7 @@ use crate::visibility::{ApplyKeyboardVisibility, KeyboardVisibilityExt};
 use crate::widget::key::{Key, KeyBuilder};
 use crate::widget::more_keys::{MoreKeys, MoreKeysBuilder};
 use crate::widget::popup::{KeyPopup, KeyPopupBuilder};
-use crate::widget::surface::{popup_headroom, row_weight, view_height};
+use crate::widget::surface::{popup_headroom, row_weights, view_height_of};
 
 /// One spawned view: its keymap name and the node toggled
 /// `Display::Hidden`/`Flex` on switch.
@@ -28,6 +29,10 @@ pub(crate) struct ViewNode {
     pub(crate) node: Handle<Div>,
     /// Height the view takes when shown, padding included.
     pub(crate) height: f32,
+    /// Each row's height weight, for re-laying the view out.
+    pub(crate) weights: Vec<f32>,
+    /// Each row's node, whose gap follows the output scale.
+    pub(crate) rows: Vec<Handle<Div>>,
 }
 
 /// The on-screen keyboard: every view, the index of the one currently shown,
@@ -66,6 +71,8 @@ pub(crate) struct Keyboard {
     /// Height of the strip above the keys the pop-up and choices row may
     /// rise into.
     pub(crate) headroom: f32,
+    /// Gap between the choices row and its key, at the current scale.
+    pub(crate) popup_gap: f32,
 }
 
 impl Keyboard {
@@ -91,7 +98,9 @@ impl Widget for Keyboard {
         // Keyboard container: a column as wide as the window, as tall as the
         // shown view (the window puts it on the bottom), surface background.
         // Its gap only separates views, and just one view is ever shown.
-        let style = b.keymap.keyboard;
+        let geometry = *s.resource::<KeyboardGeometry>();
+        let style = geometry.style();
+        let popup_gap = geometry.popup_gap();
         *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
             .column()
             .width(percent(100.0))
@@ -119,7 +128,8 @@ impl Widget for Keyboard {
         let mut keys = Vec::with_capacity(b.keymap.views.len());
 
         for (vi, view) in b.keymap.views.iter().enumerate() {
-            let height = view_height(&style, view);
+            let weights = row_weights(view);
+            let height = view_height_of(&style, &weights);
             let view_style = LayoutStyle::default()
                 .column()
                 .size(percent(100.0), px(height - 2.0 * style.padding))
@@ -136,10 +146,12 @@ impl Widget for Keyboard {
                 page: view.page,
                 node: view_div,
                 height,
+                weights: weights.clone(),
+                rows: Vec::with_capacity(view.rows.len()),
             });
             let mut view_keys = Vec::new();
 
-            for row in &view.rows {
+            for (row, &weight) in view.rows.iter().zip(&weights) {
                 // Rows share the view's height by weight.
                 let row_div = s.spawn(
                     view_div,
@@ -148,10 +160,11 @@ impl Widget for Keyboard {
                             .row()
                             .width(percent(100.0))
                             .flex_basis(px(0.0))
-                            .grow(row_weight(row.height))
+                            .grow(weight)
                             .gap(px(style.gap)),
                     ),
                 );
+                views.last_mut().unwrap().rows.push(row_div);
 
                 for cell in &row.cells {
                     // A spacer is blank width; it spawns no key, so it is
@@ -203,7 +216,8 @@ impl Widget for Keyboard {
                 font: b.fonts.id(style.font),
                 font_size: style.font_size,
                 radius: style.radius,
-                headroom: popup_headroom(&style),
+                headroom: popup_headroom(&style, popup_gap),
+                gap: popup_gap,
             },
         );
 
@@ -266,7 +280,8 @@ impl Widget for Keyboard {
             popup,
             choices_row,
             long_press_timer,
-            headroom: popup_headroom(&style),
+            headroom: popup_headroom(&style, popup_gap),
+            popup_gap,
         }
     }
 }

@@ -66,7 +66,7 @@ impl Board for Kb<'_, '_> {
     fn choices_row(&mut self, index: usize) -> Option<ChoicesRow> {
         let me = self.0.me();
         let choices = me.keys[me.current_view].get(index)?.choices.clone();
-        let headroom = me.headroom;
+        let (headroom, gap) = (me.headroom, me.popup_gap);
         if choices.is_empty() {
             return None;
         }
@@ -79,7 +79,7 @@ impl Board for Kb<'_, '_> {
             container.size.width,
             container.size.height + headroom,
         );
-        Some(ChoicesRow::open(key.rect, bounds, choices))
+        Some(ChoicesRow::open(key.rect, bounds, gap, choices))
     }
     fn tracker(&mut self) -> &mut TouchTracker {
         &mut self.0.me().tracker
@@ -374,6 +374,7 @@ mod tests {
         let row = ChoicesRow::open(
             Rect::new(0.0, 100.0, 40.0, 40.0),
             Rect::new(0.0, 0.0, 400.0, 200.0),
+            4.0,
             vec!["1".into()],
         );
         t.long_pressed(A, row);

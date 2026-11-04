@@ -1,4 +1,6 @@
-# config for the entire keyboard layout
+# config for the entire keyboard layout. Geometry (width, height, padding, gap,
+# row-gap, radius) is logical px at output scale 2 and is rescaled at any other
+# scale so the keyboard keeps one physical size; font sizes stay logical.
 keyboard:
   mode: dark
   background: surface-container-low
