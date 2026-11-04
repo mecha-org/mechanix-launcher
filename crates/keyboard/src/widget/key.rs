@@ -5,10 +5,11 @@
 
 use mecha_wayland::prelude::*;
 
-use crate::latch::LatchedState;
 use crate::layout::icons::Icons;
 use crate::layout::style::{KeyLook, KeyState};
 use crate::layout::{KeyAction, KeyFace};
+use crate::modifiers::latch::LatchedState;
+use crate::modifiers::shift::{Shift, ShiftState};
 use crate::touch::{KeyFeedback, popup_text};
 use crate::zone::ExclusiveZone;
 
@@ -99,6 +100,8 @@ impl Build for KeyBuilder {
 pub(crate) struct Key {
     pub(crate) label: Label,
     pub(crate) look: KeyLook,
+    /// The caps-lock underline on a Shift key, shown only while locked.
+    pub(crate) lock_bar: Option<Handle<Div>>,
     /// What the pop-up shows while this key is pressed; `None` for keys that
     /// don't type a visible character.
     pub(crate) popup_text: Option<String>,
@@ -151,22 +154,44 @@ impl Widget for Key {
             _ => None,
         };
 
+        // Caps-lock marker: a 2 px bar along the bottom edge, hidden until locked.
+        let lock_bar = matches!(b.key.action, KeyAction::Shift).then(|| {
+            let color = s.color(ColorRole::OnPrimary);
+            s.spawn(
+                me,
+                div().background(color).style(
+                    LayoutStyle::default()
+                        .absolute()
+                        .inset(Insets::new(auto(), percent(30.0), px(4.0), percent(30.0)))
+                        .height(px(2.0))
+                        .hidden(),
+                ),
+            )
+        });
+
         let latch = match b.key.action {
             KeyAction::LatchModifier(m) => Some(m),
             _ => None,
         };
         let zone = matches!(b.key.action, KeyAction::ToggleExclusiveZone);
-        // Latch and zone keys show their on state, so a press doesn't flash them.
-        let is_latch = latch.is_some() || zone;
+        let shift = matches!(b.key.action, KeyAction::Shift);
+        // Latch, zone and shift keys show their on state, so a press doesn't
+        // flash them.
+        let is_latch = latch.is_some() || zone || shift;
         s.on_theme(me, move |ctx| {
             let lit = latch.is_some_and(|m| ctx.resource::<LatchedState>().get(m))
-                || (zone && ctx.resource::<ExclusiveZone>().on);
+                || (zone && ctx.resource::<ExclusiveZone>().on)
+                || (shift && ctx.resource::<Shift>().state() != ShiftState::Off);
             let state = KeyState::latched_if(lit);
             let (bg_role, fg_role) = key_roles(look, kind, state);
             let bg = ctx.color(bg_role);
             let fg = ctx.color(fg_role);
             ctx.set_paint(Paint::Quad(Quad::new(bg).radius(radius)));
             set_label_color(ctx, label, fg);
+            if let Some(h) = lock_bar {
+                let c = ctx.color(ColorRole::OnPrimary);
+                ctx.at(h).unwrap().set_paint(Paint::Quad(Quad::new(c)));
+            }
             if let Some(h) = hint {
                 let c = ctx.color(ColorRole::OnSecondaryContainer);
                 ctx.at(h).unwrap().set_color(c);
@@ -190,6 +215,7 @@ impl Widget for Key {
         Key {
             label,
             look,
+            lock_bar,
             popup_text: popup_text(&b.key),
         }
     }

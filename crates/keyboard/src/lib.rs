@@ -11,8 +11,8 @@
 
 mod field;
 mod input;
-mod latch;
 mod layout;
+mod modifiers;
 mod module;
 mod predict;
 mod protocol;

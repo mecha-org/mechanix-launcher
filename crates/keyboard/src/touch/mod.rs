@@ -54,7 +54,7 @@ impl KeyEntry {
 }
 
 /// The single character a key's action types, if it types exactly one.
-fn single_char(action: &KeyAction) -> Option<char> {
+pub(crate) fn single_char(action: &KeyAction) -> Option<char> {
     let text = match action {
         KeyAction::EmitKeysym(ks) => keysym_text(*ks)?,
         KeyAction::EmitText(t) => t.clone(),

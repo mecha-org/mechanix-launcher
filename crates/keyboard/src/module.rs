@@ -2,10 +2,11 @@
 
 use mecha_wayland::prelude::*;
 
-use crate::latch::LatchedState;
 use crate::layout;
 use crate::layout::icons::Icons;
 use crate::layout::tokens::Fonts;
+use crate::modifiers::latch::LatchedState;
+use crate::modifiers::shift::Shift;
 use crate::protocol::input_method::InputMethodModule;
 use crate::protocol::virtual_keyboard::VirtualKeyboardModule;
 use crate::view::on_text_input_focused;
@@ -55,6 +56,7 @@ pub fn spawn_ui(app: &mut App, bottom_gap: f32) {
     let keymap = layout::load_keymap();
 
     app.insert_resource(LatchedState::default());
+    app.insert_resource(Shift::default());
     app.insert_resource(crate::predict::TypingContext::default());
     app.insert_resource(crate::predict::Prediction::from_config(&keymap.prediction));
     app.insert_resource(ExclusiveZone::default());

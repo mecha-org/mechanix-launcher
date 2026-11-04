@@ -8,6 +8,7 @@ use mecha_wayland::prelude::*;
 use crate::layout::style::KeyState;
 use crate::layout::tokens::{Font, Fonts};
 use crate::layout::{Cell, Family, KeyAction, Keymap, Modifier, Page};
+use crate::modifiers::shift::{self, HOLD_LOCK, Shift};
 use crate::predict::TypingContext;
 use crate::touch::{self, KeyEntry, TouchState, TouchTracker, letter_views};
 use crate::view::{BASE_VIEW, SwitchView, switch_view, view_for};
@@ -40,6 +41,10 @@ pub(crate) struct Keyboard {
     pub(crate) latch_keys: Vec<(Modifier, Handle<Key>)>,
     /// Every exclusive-zone toggle key across all views, for on-state repaint.
     pub(crate) zone_keys: Vec<Handle<Key>>,
+    /// Every Shift key across all views, for repaint on shift state change.
+    pub(crate) shift_keys: Vec<Handle<Key>>,
+    /// The hold-to-lock timer on ⇧, started while a Shift key is pressed.
+    pub(crate) shift_timer: TimerId,
     /// Key corner radius, for repainting latch keys.
     pub(crate) radius: f32,
     /// Every key, per view, in keymap order: what the input layer resolves
@@ -107,6 +112,7 @@ impl Widget for Keyboard {
         let mut views = Vec::with_capacity(b.keymap.views.len());
         let mut latch_keys = Vec::new();
         let mut zone_keys = Vec::new();
+        let mut shift_keys = Vec::new();
         let mut keys = Vec::with_capacity(b.keymap.views.len());
 
         for (vi, view) in b.keymap.views.iter().enumerate() {
@@ -173,6 +179,7 @@ impl Widget for Keyboard {
                     match key.action {
                         KeyAction::LatchModifier(m) => latch_keys.push((m, key_handle)),
                         KeyAction::ToggleExclusiveZone => zone_keys.push(key_handle),
+                        KeyAction::Shift => shift_keys.push(key_handle),
                         _ => {}
                     }
 
@@ -194,12 +201,16 @@ impl Widget for Keyboard {
             },
         );
 
+        let shift_timer = s.add_timeout(HOLD_LOCK, |ctx, _| shift::held(ctx));
+
         touch::attach(s, me);
         // A focused field asked for this view: the word typed belonged to
         // the previous field, so drop it rather than finish (and record) it,
         // and cancel any touch whose key the switch hid.
         s.on::<SwitchView>(me, |ctx, event| {
             ctx.resource_mut::<TypingContext>().clear();
+            ctx.resource_mut::<Shift>().reset();
+            shift::refresh(ctx);
             let old = ctx.me().current_view;
             ctx.me().family = event.field.family;
             let me = ctx.me();
@@ -216,6 +227,8 @@ impl Widget for Keyboard {
             family: Family::Text,
             latch_keys,
             zone_keys,
+            shift_keys,
+            shift_timer,
             radius: style.radius,
             letter_views: letter_views(&b.keymap),
             keys,

@@ -23,6 +23,7 @@ use super::tracker::{TouchOut, TouchTracker};
 use crate::field::Field;
 use crate::input::{dispatch, hold, release, repeats};
 use crate::layout::KeyAction;
+use crate::modifiers::shift;
 use crate::predict::{LetterPrior, Prediction, TypingContext};
 use crate::widget::keyboard::Keyboard;
 
@@ -141,7 +142,7 @@ fn key_geoms(ctx: &mut Context<'_, Keyboard>) -> Vec<KeyGeom> {
 /// the active contact if acting switched the view.
 fn run(ctx: &mut Context<'_, Keyboard>, out: Vec<TouchOut>, time: u32) {
     let view = ctx.me().current_view;
-    apply(ctx, view, out);
+    apply(ctx, view, out, time);
     settle(ctx, view, time);
 }
 
@@ -151,7 +152,7 @@ fn settle(ctx: &mut Context<'_, Keyboard>, view: usize, time: u32) {
     let me = ctx.me();
     let now = me.current_view;
     let out = finish_stale(&mut me.tracker, view, now, time);
-    apply(ctx, view, out);
+    apply(ctx, view, out, time);
 }
 
 /// The outputs that end `tracker`'s active contact if its view `then` is no
@@ -164,14 +165,24 @@ fn finish_stale(tracker: &mut TouchTracker, then: usize, now: usize, time: u32) 
 }
 
 /// Act on the tracker's outputs, in order; indices refer to `view`.
-fn apply(ctx: &mut Context<'_, Keyboard>, view: usize, out: Vec<TouchOut>) {
+fn apply(ctx: &mut Context<'_, Keyboard>, view: usize, out: Vec<TouchOut>, time: u32) {
     for o in out {
         match o {
-            TouchOut::Pressed(i) => feedback(ctx, view, i, |key| KeyFeedback::Pressed { key }),
-            TouchOut::Unpressed(i) => feedback(ctx, view, i, |key| KeyFeedback::Released { key }),
+            TouchOut::Pressed(i) => {
+                if let Some(KeyAction::Shift) = entry_action(ctx, view, i) {
+                    shift::pressed(ctx);
+                }
+                feedback(ctx, view, i, |key| KeyFeedback::Pressed { key });
+            }
+            TouchOut::Unpressed(i) => {
+                if let Some(KeyAction::Shift) = entry_action(ctx, view, i) {
+                    shift::unpressed(ctx);
+                }
+                feedback(ctx, view, i, |key| KeyFeedback::Released { key });
+            }
             TouchOut::Commit(i) => {
                 if let Some(action) = entry_action(ctx, view, i) {
-                    dispatch(ctx, &action);
+                    dispatch(ctx, &action, time);
                 }
             }
             TouchOut::Hold(i) => {
