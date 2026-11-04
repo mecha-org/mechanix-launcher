@@ -1,18 +1,23 @@
+//! Wi-Fi tile presentation driven by NetworkManager events.
+
 use assets::icons::wifi as icons;
 use mecha_wayland::mechanix_widgets::prelude::{Text, TextContextExt};
 use mecha_wayland::prelude::*;
 
-use services::{APUpdate, StateUpdate, WifiState};
+use services::{APUpdate, SetWifiEnabled, StateUpdate, WifiState};
 
 use super::{DOT_RADIUS, GAP, build_label, build_tile, load_icon, short_name};
 
+/// Latest Wi-Fi details used to render the tile.
 pub struct Wifi {
+    enabled: bool,
     state: WifiState,
     ssid: String,
     strength: u8,
     // TODO: maybe store sprites in the widget itself ?
 }
 
+/// Atlas sprites shared by the tile's event handlers.
 #[derive(Clone, Copy)]
 struct WifiSprites {
     x: SpriteId,
@@ -24,6 +29,7 @@ struct WifiSprites {
     high: SpriteId,
 }
 
+/// Builds the Wi-Fi tile and subscribes it to updates.
 pub struct WifiBuilder;
 
 impl Build for WifiBuilder {
@@ -35,6 +41,7 @@ impl Widget for Wifi {
 
     fn build(_: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
         let icon_handle = build_tile(me, s, icons::X, GAP);
+        // Load sprites once; event handlers only switch between their IDs.
         let atlas = &mut s.resource_mut::<Atlas>();
         let sprites = WifiSprites {
             x: load_icon(atlas, icons::X),
@@ -57,6 +64,7 @@ impl Widget for Wifi {
         );
 
         s.on::<APUpdate>(me, move |ctx, e| {
+            // Cache AP details, then render using the current connection state.
             let label = e
                 .ssid
                 .as_deref()
@@ -75,12 +83,22 @@ impl Widget for Wifi {
         });
 
         s.on::<StateUpdate>(me, move |ctx, e| {
+            // A state change can show or hide the cached AP.
             tracing::info!("Wifi state changed {:?}", e.state);
             ctx.me().state = e.state;
             render(ctx, icon_handle, ssid_handle, dot, sprites);
         });
 
+        // Send the toggle request; the service reports the resulting state.
+        s.on::<Clicked>(me, |ctx, _| {
+            let wifi = ctx.me();
+            wifi.enabled = !wifi.enabled;
+            let enabled = wifi.enabled;
+            ctx.signal(SetWifiEnabled(enabled));
+        });
+
         Wifi {
+            enabled: false,
             state: WifiState::Unavailable,
             ssid: "".to_string(),
             strength: 0,
@@ -89,6 +107,7 @@ impl Widget for Wifi {
 }
 
 // make changes to tile
+/// Resolves the latest state and AP details into one tile appearance.
 fn render(
     ctx: &mut Context<'_, Wifi>,
     icon_handle: Handle<Icon>,
@@ -106,6 +125,7 @@ fn render(
     let dot_enabled;
     let background;
 
+    // Connection state takes precedence over any cached SSID or strength.
     match wifi.state {
         WifiState::Unavailable => {
             sprite = sprites.x;
@@ -118,6 +138,7 @@ fn render(
             background = off_colour;
         }
         WifiState::On => {
+            // The device state is unknown, but Wi-Fi is enabled.
             sprite = sprites.high;
             dot_enabled = false;
             background = on_colour;
@@ -142,6 +163,7 @@ fn render(
             background = on_colour;
         }
         WifiState::Connected => {
+            // Only a connected AP supplies the visible SSID and signal icon.
             sprite = match wifi.strength {
                 0..25 => sprites.none,
                 25..50 => sprites.low,
@@ -154,6 +176,7 @@ fn render(
         }
     };
 
+    // Apply the appearance together after selecting it above.
     ctx.at(ssid_handle).unwrap().set_text(ssid);
     ctx.at(icon_handle).unwrap().set_sprite(sprite);
     ctx.set_paint(Paint::Quad(
