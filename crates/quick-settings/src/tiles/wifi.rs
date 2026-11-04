@@ -1,14 +1,16 @@
 use assets::icons::wifi as icons;
-use mecha_wayland::mechanix_widgets::prelude::{Text, TextContextExt, text};
+use mecha_wayland::mechanix_widgets::prelude::{Text, TextContextExt};
 use mecha_wayland::prelude::*;
 
-use super::{DOT_RADIUS, GAP, build_label, build_tile, load_icon};
 use services::{APUpdate, StateUpdate, WifiState};
+
+use super::{DOT_RADIUS, GAP, build_label, build_tile, load_icon, short_name};
 
 pub struct Wifi {
     state: WifiState,
     ssid: String,
     strength: u8,
+    // TODO: maybe store sprites in the widget itself ?
 }
 
 #[derive(Clone, Copy)]
@@ -54,10 +56,6 @@ impl Widget for Wifi {
             ),
         );
 
-        // temporarily draw the dot immediately
-        *s.component_mut::<Paint>(dot).unwrap() =
-            Paint::Quad(Quad::new(s.color(ColorRole::Primary)).radius(5.0));
-
         s.on::<APUpdate>(me, move |ctx, e| {
             let label = e
                 .ssid
@@ -73,7 +71,13 @@ impl Widget for Wifi {
             ctx.me().ssid = label;
             ctx.me().strength = e.strength;
 
-            render(ctx, icon_handle, ssid_handle, dot);
+            render(ctx, icon_handle, ssid_handle, dot, sprites);
+        });
+
+        s.on::<StateUpdate>(me, move |ctx, e| {
+            tracing::info!("Wifi state changed {:?}", e.state);
+            ctx.me().state = e.state;
+            render(ctx, icon_handle, ssid_handle, dot, sprites);
         });
 
         Wifi {
@@ -85,10 +89,81 @@ impl Widget for Wifi {
 }
 
 // make changes to tile
-fn render<W: Widget>(
-    ctx: &mut Context<'_, W>,
+fn render(
+    ctx: &mut Context<'_, Wifi>,
     icon_handle: Handle<Icon>,
     ssid_handle: Handle<Text>,
     dot: Handle<Div>,
+    sprites: WifiSprites,
 ) {
+    let off_colour = Color::TRANSPARENT;
+    let on_colour = ctx.color(ColorRole::Surface);
+    let border_colour = ctx.color(ColorRole::SecondaryFixedDim);
+
+    let wifi = ctx.me();
+    let sprite;
+    let mut ssid: String = String::new();
+    let dot_enabled;
+    let background;
+
+    match wifi.state {
+        WifiState::Unavailable => {
+            sprite = sprites.x;
+            dot_enabled = false;
+            background = off_colour;
+        }
+        WifiState::Off => {
+            sprite = sprites.slash;
+            dot_enabled = false;
+            background = off_colour;
+        }
+        WifiState::On => {
+            sprite = sprites.high;
+            dot_enabled = false;
+            background = on_colour;
+        }
+        WifiState::Disconnected => {
+            // This WILL be the same as ON
+            // ON is a fallback when no device yet but wirelessEnabled is there
+            // Basically, this branch will never run because our network manager
+            // service should never emit On
+            sprite = sprites.high;
+            dot_enabled = false;
+            background = off_colour;
+        }
+        WifiState::Connecting => {
+            sprite = sprites.connecting;
+            dot_enabled = false;
+            background = on_colour;
+        }
+        WifiState::Disconnecting => {
+            sprite = sprites.connecting;
+            dot_enabled = false;
+            background = on_colour;
+        }
+        WifiState::Connected => {
+            sprite = match wifi.strength {
+                0..25 => sprites.none,
+                25..50 => sprites.low,
+                50..75 => sprites.medium,
+                _ => sprites.high,
+            };
+            ssid = short_name(&wifi.ssid);
+            dot_enabled = true;
+            background = on_colour;
+        }
+    };
+
+    ctx.at(ssid_handle).unwrap().set_text(ssid);
+    ctx.at(icon_handle).unwrap().set_sprite(sprite);
+    ctx.set_paint(Paint::Quad(
+        Quad::new(background).border(1.0, border_colour),
+    ));
+
+    let dot_colour = if dot_enabled {
+        Paint::Quad(Quad::new(ctx.color(ColorRole::Primary)).radius(DOT_RADIUS / 2.0))
+    } else {
+        Paint::None
+    };
+    ctx.at(dot).unwrap().set_paint(dot_colour);
 }
