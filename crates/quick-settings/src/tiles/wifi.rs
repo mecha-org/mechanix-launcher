@@ -1,11 +1,13 @@
 use assets::icons::wifi as icons;
-use mecha_wayland::mechanix_widgets::prelude::{Text, text};
+use mecha_wayland::mechanix_widgets::prelude::{Text, TextContextExt, text};
 use mecha_wayland::prelude::*;
 
 use super::{DOT_RADIUS, GAP, build_label, build_tile};
+use services::{APUpdate, StateUpdate, WifiState};
 
 pub struct Wifi {
-    ssid: Handle<Text>,
+    state: WifiState,
+    ssid: String,
     strength: u8,
 }
 
@@ -20,8 +22,7 @@ impl Widget for Wifi {
 
     fn build(_: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
         build_tile(me, s, icons::HIGH, GAP);
-        build_label(me, s, "Placeholder SSID");
-        let ssid = build_label(me, s, "");
+        let ssid_handle = build_label(me, s, "");
         let dot = s.spawn(
             me,
             div().style(
@@ -36,8 +37,25 @@ impl Widget for Wifi {
         *s.component_mut::<Paint>(dot).unwrap() =
             Paint::Quad(Quad::new(s.color(ColorRole::Primary)).radius(5.0));
 
+        s.on::<APUpdate>(me, |ctx, e| {
+            let label = e
+                .ssid
+                .as_deref()
+                .map(String::from_utf8_lossy)
+                .unwrap_or_default()
+                .into_owned(); // TODO: make sure this is Cow::Owned, otherwise this is a needless clone
+            tracing::info!(
+                "Received Access point update, SSID: {} strength: {}",
+                &label,
+                e.strength
+            );
+            ctx.me().ssid = label;
+            ctx.me().strength = e.strength;
+        });
+
         Wifi {
-            ssid: ssid,
+            state: WifiState::Unavailable,
+            ssid: "".to_string(),
             strength: 0,
         }
     }

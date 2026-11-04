@@ -796,6 +796,7 @@ dependencies = [
  "mecha-wayland",
  "screen",
  "services",
+ "tracing",
 ]
 
 [[package]]
