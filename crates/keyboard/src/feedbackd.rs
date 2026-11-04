@@ -11,7 +11,7 @@ const FEEDBACKD_INTERFACE: &str = "org.sigxcpu.Feedback";
 const APP_ID: &str = "mechanix.keyboard";
 const BUTTON_PRESSED: &str = "button-pressed";
 /// Play the event's feedback once.
-const ONCE: i32 = 0;
+const ONCE: i32 = -1;
 
 /// The `TriggerFeedback` call, built once and resent on every press; `None`
 /// when the host has no session bus (such as a headless test).
