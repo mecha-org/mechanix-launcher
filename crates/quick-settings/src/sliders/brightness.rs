@@ -57,7 +57,8 @@ impl Widget for BrightnessSlider {
                 .tick_height(40.0)
                 .tick_gap(4.0),
         );
-
+        // Sent on every step change; the display service coalesces these so
+        // only one D-Bus write is in flight and stale values are dropped.
         s.on::<SliderChange>(slider_handle, |ctx, event| {
             ctx.signal(SetBrightness(event.value));
         });
@@ -65,6 +66,10 @@ impl Widget for BrightnessSlider {
         s.on::<BrightnessChanged>(me, |ctx, event| {
             let slider = ctx.me().slider;
             if let Some(mut slider) = ctx.at(slider) {
+                // Don't yank the thumb while the user is moving it.
+                if slider.me().is_dragging() {
+                    return;
+                }
                 slider.set_value(event.value);
             }
         });

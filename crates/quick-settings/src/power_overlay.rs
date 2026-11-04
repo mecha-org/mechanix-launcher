@@ -190,7 +190,9 @@ mod tests {
         let mut app = App::new();
         app.add_module(LayoutModule)
             .add_module(PaintModule)
-            .add_module(MechanixTheme::dark());
+            .add_module(MechanixTheme::dark())
+            .add_module(RingModule::default())
+            .add_module(TimerModule);
         let mut atlas = Atlas::new();
         let font = atlas.add_font(assets::fonts::GEIST_MONO).unwrap();
         app.insert_resource(atlas);

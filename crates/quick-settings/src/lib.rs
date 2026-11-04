@@ -20,9 +20,9 @@ use sliders::SlidersBuilder;
 /// brightness and logind power). It spawns no window; place the panel with
 /// [`QuickSettingsScreen`].
 ///
-/// Expects the host to have installed `RingModule` and
-/// `DBusModule::new().system()`, and to have inserted the [`Atlas`] and
-/// `FontBook`.
+/// Expects the host to have installed `RingModule`, `TimerModule` (for the
+/// header's date) and `DBusModule::new().system()`, and to have inserted the
+/// [`Atlas`] and `FontBook`.
 pub struct QuickSettingsModule;
 
 impl Module for QuickSettingsModule {
@@ -89,7 +89,7 @@ mod tests {
     use super::*;
     use crate::power_overlay::PowerOverlay;
     use crate::quick_settings::QuickSettings;
-    use mecha_wayland::mechanix_widgets::prelude::FontBook;
+    use mecha_wayland::mechanix_widgets::prelude::{Clock, ClockInterval, FontBook, Text};
 
     #[test]
     fn screen_builds_panel_and_overlay_without_a_window() {
@@ -97,7 +97,9 @@ mod tests {
         app.add_module(LayoutModule)
             .add_module(WindowModule)
             .add_module(PaintModule)
-            .add_module(MechanixTheme::dark());
+            .add_module(MechanixTheme::dark())
+            .add_module(RingModule::default())
+            .add_module(TimerModule);
         let mut atlas = Atlas::new();
         let font = atlas.add_font(assets::fonts::GEIST_MONO).unwrap();
         app.insert_resource(atlas);
@@ -111,5 +113,20 @@ mod tests {
         assert_eq!(app.widgets::<QuickSettings>().count(), 1);
         assert_eq!(app.widgets::<PowerOverlay>().count(), 1);
         assert_eq!(app.resource::<Windows>().iter().count(), 0);
+
+        let (interval, date_text) = {
+            let (_, date) = app
+                .widgets::<Clock>()
+                .next()
+                .expect("header shows the date");
+            (date.interval(), date.text())
+        };
+        assert_eq!(interval, ClockInterval::Second);
+        let native = app.widget::<Text>(date_text).unwrap().native();
+        let label = &app
+            .widget::<mecha_wayland::prelude::Text>(native)
+            .unwrap()
+            .string;
+        assert!(label.starts_with("Today, "), "{label}");
     }
 }

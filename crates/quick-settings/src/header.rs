@@ -1,11 +1,12 @@
-use mecha_wayland::mechanix_widgets::prelude::{ButtonVariant, button, text};
+use mecha_wayland::mechanix_widgets::prelude::{ButtonVariant, ClockInterval, button, clock};
 use mecha_wayland::prelude::*;
 
 use crate::power_overlay::{OpenPowerOverlay, POWER_ICON};
 use crate::util::{full_width, load_icon_sized};
 
 pub const HEADER_HEIGHT: f32 = 80.0;
-const DATE: &str = "Today,19 Oct";
+/// Today's date with weekday, e.g. "Monday,2 Nov".
+const DATE_FORMAT: &str = "%A,%-d %b";
 const POWER_ICON_SIZE: u32 = 20;
 
 pub struct Header;
@@ -26,9 +27,11 @@ impl Widget for Header {
             .justify(Justify::SpaceBetween)
             .padding(Insets::symmetric(px(20.0), px(0.0)));
 
+        // Ticks every second.
         s.spawn(
             me,
-            text(DATE)
+            clock(DATE_FORMAT)
+                .interval(ClockInterval::Second)
                 .variant(TextVariant::TitleSmall)
                 .color(ColorRole::OnSurfaceVariant),
         );

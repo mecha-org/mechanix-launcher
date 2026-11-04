@@ -135,7 +135,10 @@ mod tests {
                 app.descendants(app.root()).collect::<Vec<_>>(),
             );
             app.tick();
-            let display = app.component::<LayoutStyle>(text_handle.id()).unwrap().display;
+            let display = app
+                .component::<LayoutStyle>(text_handle.id())
+                .unwrap()
+                .display;
             match label {
                 Some(label) => {
                     assert_eq!(display, Display::Flex);
