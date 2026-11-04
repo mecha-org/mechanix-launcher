@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use tracing::warn;
 use yaml_serde::from_str;
 
-use super::keymap::{Family, KeyFace, Page, View};
+use super::keymap::{KeyFace, View};
 use serde::Deserialize;
 
 static MORE_KEYS_YAML: &str = include_str!("../../resources/more_keys.yaml");
@@ -125,6 +125,7 @@ pub(crate) fn attach(view: &mut View, set: &MoreKeySet) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::keymap::{Family, Page};
 
     fn set(name: &str) -> MoreKeySet {
         MoreKeys::bundled().set(name).expect("set exists").clone()
