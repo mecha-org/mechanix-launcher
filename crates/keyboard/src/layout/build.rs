@@ -464,6 +464,23 @@ mod tests {
     }
 
     #[test]
+    fn inline_layout_with_shift_action_drives_shift_state() {
+        use crate::modifiers::shift::{ShiftState, cased, shiftable_letter};
+        let km = keymap(&format!(
+            "{HEAD}views: {{ v: [\"q 1 S\"] }}\nbuttons:\n  S:\n    action: shift\n    icon: key-shift-symbolic\n"
+        ));
+        let keys: Vec<_> = km.view("v").unwrap().keys().collect();
+        assert!(matches!(keys[2].action, KeyAction::Shift));
+        // Letters follow shift; digits and the shift key do not.
+        assert_eq!(shiftable_letter(&keys[0].action), Some('q'));
+        assert_eq!(shiftable_letter(&keys[1].action), None);
+        assert_eq!(shiftable_letter(&keys[2].action), None);
+        assert_eq!(cased('q', ShiftState::Off), 'q');
+        assert_eq!(cased('q', ShiftState::OneShot), 'Q');
+        assert_eq!(cased('q', ShiftState::Locked), 'Q');
+    }
+
+    #[test]
     fn shift_action_resolves() {
         let b = button(|b| b.action = Some(ActionSpec::Named("shift".into())));
         assert!(matches!(resolve_action("x", Some(&b)), KeyAction::Shift));

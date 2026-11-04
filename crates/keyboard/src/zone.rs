@@ -6,7 +6,7 @@
 
 use mecha_wayland::prelude::*;
 
-use crate::latch::repaint_function_key;
+use crate::modifiers::latch::repaint_function_key;
 use crate::visibility::KeyboardVisibilityExt;
 use crate::widget::keyboard::Keyboard;
 use crate::widget::surface::KeyboardSurface;
