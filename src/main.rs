@@ -307,6 +307,8 @@ mod tests {
     fn launcher() -> App {
         let mut app = App::new();
         app.add_module(LayoutModule)
+            .add_module(RingModule::default())
+            .add_module(TimerModule)
             .add_module(PaintModule)
             .add_module(WindowModule)
             .add_module(InteractivityModule)

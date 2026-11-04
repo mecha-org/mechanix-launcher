@@ -24,6 +24,7 @@ impl Module for DisplayModule {
             owner_changed,
             read: None,
             write: None,
+            pending: None,
         });
         app.system(backend::on_reply)
             .system(backend::on_set_brightness)

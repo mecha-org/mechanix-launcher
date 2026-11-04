@@ -1,8 +1,8 @@
 use mecha_wayland::mechanix_widgets::prelude::{Text, TextContextExt};
 use mecha_wayland::prelude::*;
 
-use super::{build_label, build_tile};
-use crate::util::load_icon;
+use super::{GAP, build_label, build_tile};
+use crate::util::{load_icon, short_name};
 use services::{APUpdate, SetWifiEnabled, StateUpdate, WifiState};
 
 // Inclusive lower bounds for the signal-strength icons (0–100%).
@@ -61,7 +61,7 @@ impl Widget for Wifi {
         let icon_x = load_icon(&mut s.resource_mut::<Atlas>(), svg::X);
         let icon_airplane = load_icon(&mut s.resource_mut::<Atlas>(), svg::AIRPLANE);
 
-        let icon = build_tile(me, s, svg::X);
+        let icon = build_tile(me, s, svg::X, GAP);
         let name = build_label(me, s, "");
         let dot = s.spawn(
             me,
@@ -208,19 +208,12 @@ impl WifiContext for Context<'_, Wifi> {
             WifiState::Disconnecting => icon_low,
         };
         let label = match state {
-            WifiState::Connected => ssid
-                .as_deref()
-                .map(String::from_utf8_lossy)
-                .map(|ssid| ssid.into_owned())
-                .unwrap_or_default(),
-            WifiState::Disconnecting => ssid
-                .as_deref()
-                .or(last_ssid.as_deref())
-                .map(String::from_utf8_lossy)
-                .map(|ssid| ssid.into_owned())
-                .unwrap_or_default(),
-            _ => String::new(),
-        };
+            WifiState::Connected => ssid.as_deref(),
+            WifiState::Disconnecting => ssid.as_deref().or(last_ssid.as_deref()),
+            _ => None,
+        }
+        .map(|ssid| short_name(&String::from_utf8_lossy(ssid)))
+        .unwrap_or_default();
         // The tint follows the real state. Only the dot is optimistic: a click
         // turns it off until the next StateUpdate clears the flag.
         let state_enabled = matches!(

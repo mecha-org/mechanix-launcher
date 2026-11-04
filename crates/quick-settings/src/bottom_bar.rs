@@ -1,9 +1,6 @@
 use mecha_wayland::prelude::*;
 
-use crate::tiles::{
-    BatteryBuilder, BluetoothBuilder, CameraBuilder, DisplayTileBuilder, MicrophoneBuilder,
-    RecordBuilder, RotateBuilder, SettingsBuilder, TILE_HEIGHT, TerminalBuilder, WifiBuilder,
-};
+use crate::tiles::{BatteryBuilder, BluetoothBuilder, TILE_HEIGHT, WifiBuilder, action_tile, svg};
 
 const BOTTOM_BAR_HEIGHT: f32 = TILE_HEIGHT * 2.0;
 
@@ -36,15 +33,15 @@ impl Widget for BottomBar {
             },
         );
         s.spawn(top, BluetoothBuilder);
-        s.spawn(top, DisplayTileBuilder);
-        s.spawn(top, TerminalBuilder);
-        s.spawn(top, MicrophoneBuilder);
+        s.spawn(top, action_tile(svg::DISPLAY));
+        s.spawn(top, action_tile(svg::TERMINAL));
+        s.spawn(top, action_tile(svg::MICROPHONE));
 
         let bottom = s.spawn(me, div().style(row));
-        s.spawn(bottom, RecordBuilder);
-        s.spawn(bottom, SettingsBuilder);
-        s.spawn(bottom, CameraBuilder);
-        s.spawn(bottom, RotateBuilder);
+        s.spawn(bottom, action_tile(svg::RECORD));
+        s.spawn(bottom, action_tile(svg::SETTINGS));
+        s.spawn(bottom, action_tile(svg::CAMERA));
+        s.spawn(bottom, action_tile(svg::ROTATE));
         s.spawn(bottom, BatteryBuilder);
 
         BottomBar
@@ -103,13 +100,13 @@ mod tests {
         let dot_handle = bluetooth.dot;
 
         for (state, label, is_on) in [
-            (BluetoothState::On, "On", true),
+            (BluetoothState::On, None, true),
             (
                 BluetoothState::Connected {
                     count: 1,
                     name: Some("Headphones".into()),
                 },
-                "Hea...",
+                Some("Headp..."),
                 true,
             ),
             (
@@ -117,7 +114,7 @@ mod tests {
                     count: 1,
                     name: None,
                 },
-                "Connected",
+                Some("Connected"),
                 true,
             ),
             (
@@ -125,18 +122,28 @@ mod tests {
                     count: 2,
                     name: None,
                 },
-                "2 devices",
+                Some("2 devices"),
                 true,
             ),
-            (BluetoothState::Off, "Off", false),
+            (BluetoothState::Off, None, false),
         ] {
             app.emit(
                 BluetoothStateChanged { state },
                 app.descendants(app.root()).collect::<Vec<_>>(),
             );
             app.tick();
-            let native = app.widget::<Text>(text_handle).unwrap().native();
-            assert_eq!(app.widget::<NativeText>(native).unwrap().string, label);
+            let display = app
+                .component::<LayoutStyle>(text_handle.id())
+                .unwrap()
+                .display;
+            match label {
+                Some(label) => {
+                    assert_eq!(display, Display::Flex);
+                    let native = app.widget::<Text>(text_handle).unwrap().native();
+                    assert_eq!(app.widget::<NativeText>(native).unwrap().string, label);
+                }
+                None => assert_eq!(display, Display::Hidden),
+            }
             let dot_paint = app.component::<Paint>(dot_handle.id()).unwrap();
             if is_on {
                 assert!(matches!(dot_paint, Paint::Quad(_)));

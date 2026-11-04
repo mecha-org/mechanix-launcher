@@ -1,8 +1,10 @@
-use mecha_wayland::mechanix_widgets::prelude::{Text, TextContextExt, TextOverflow, text};
+use mecha_wayland::mechanix_widgets::prelude::{
+    Text, TextContextExt, TextOverflow, TextVariant, text,
+};
 use mecha_wayland::prelude::*;
 
-use super::build_tile;
-use crate::util::load_icon;
+use super::{WIDE_GAP, build_tile};
+use crate::util::{load_icon, short_name};
 use services::{BluetoothState, BluetoothStateChanged, ToggleBluetooth};
 
 use assets::icons::bluetooth as svg;
@@ -26,19 +28,22 @@ impl Widget for Bluetooth {
     type Builder = BluetoothBuilder;
 
     fn build(_: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
+        // Off and On (not connected) share the plain glyph; only a connection changes it.
         let icon_on = load_icon(&mut s.resource_mut::<Atlas>(), svg::DEFAULT);
-        let icon_off = load_icon(&mut s.resource_mut::<Atlas>(), svg::SLASH);
+        let icon_off = icon_on;
         let icon_connected = load_icon(&mut s.resource_mut::<Atlas>(), svg::CONNECTED);
 
-        let icon = build_tile(me, s, svg::SLASH);
+        let icon = build_tile(me, s, svg::DEFAULT, WIDE_GAP);
+
+        // Only shown while connected, so the icon sits centred otherwise.
         // `short_name` abbreviates device names; ellipsis overflow is a fallback for narrow tiles.
         let name = s.spawn(
             me,
-            text("Off")
-                .size(18.0)
+            text("")
+                .variant(TextVariant::LabelLarge)
                 .max_lines(1)
                 .overflow(TextOverflow::Ellipsis)
-                .style(LayoutStyle::default().max_width(percent(100.0)))
+                .style(LayoutStyle::default().max_width(percent(100.0)).hidden())
                 .color(ColorRole::OnSurfaceVariant),
         );
         let dot = s.spawn(
@@ -70,15 +75,6 @@ impl Widget for Bluetooth {
     }
 }
 
-/// Keep short device names intact; abbreviate longer names for the tile.
-fn short_name(name: &str) -> String {
-    if name.chars().count() <= 5 {
-        name.to_string()
-    } else {
-        format!("{}...", name.chars().take(3).collect::<String>())
-    }
-}
-
 pub trait BluetoothContext {
     fn set_state(&mut self, state: BluetoothState);
 }
@@ -107,16 +103,16 @@ impl BluetoothContext for Context<'_, Bluetooth> {
         self.set_paint(Paint::Quad(Quad::new(bg_color).border(1.0, border_color)));
 
         let (sprite, text) = match state {
-            BluetoothState::Off => (icon_off, "Off".to_string()),
+            BluetoothState::Off => (icon_off, None),
             BluetoothState::Connected { count, name } => (
                 icon_connected,
-                match name {
+                Some(match name {
                     Some(name) if count == 1 => short_name(&name),
                     _ if count <= 1 => "Connected".to_string(),
                     _ => format!("{count} devices"),
-                },
+                }),
             ),
-            BluetoothState::On => (icon_on, "On".to_string()),
+            BluetoothState::On => (icon_on, None),
         };
 
         let icon_handle = self.me().icon;
@@ -128,24 +124,16 @@ impl BluetoothContext for Context<'_, Bluetooth> {
             ic.set_color(icon_color);
         }
         if let Some(mut txt) = self.at(text_handle) {
-            txt.set_text(text);
+            txt.set_display(if text.is_some() {
+                Display::Flex
+            } else {
+                Display::Hidden
+            });
+            txt.set_text(text.unwrap_or_default());
             txt.set_color(text_color);
         }
         if let Some(mut dt) = self.at(dot_handle) {
             dt.set_paint(dot_paint);
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::short_name;
-
-    #[test]
-    fn device_names_are_shortened_after_five_characters() {
-        assert_eq!(short_name("Buds"), "Buds");
-        assert_eq!(short_name("Pixel"), "Pixel");
-        assert_eq!(short_name("Headphones"), "Hea...");
-        assert_eq!(short_name("Ünïcødé"), "Ünï...");
     }
 }

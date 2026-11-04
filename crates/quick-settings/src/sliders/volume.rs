@@ -1,7 +1,5 @@
 use mecha_pulseaudio::*;
-use mecha_wayland::mechanix_widgets::prelude::{
-    ButtonContextExt, ButtonVariant, SliderChange, SliderContextExt, button, slider,
-};
+use mecha_wayland::mechanix_widgets::prelude::{SliderChange, SliderContextExt, slider};
 use mecha_wayland::prelude::*;
 
 use crate::util::load_icon;
@@ -13,9 +11,9 @@ mod svg {
 }
 
 const LEVEL_PERCENT: f32 = 70.0; // initial value
-const PADDING_VERTICAL: f32 = 12.0;
-const PADDING_HORIZONTAL: f32 = 32.0;
-const SLIDER_BUTTON_DIMENSIONS: f32 = 48.0;
+
+const ICON_SIZE: f32 = 24.0;
+const SLIDER_LENGTH_PERCENT: f32 = 80.0;
 
 const HIGH_LEVEL: u32 = 65; // after what value we use the high icon
 
@@ -31,6 +29,8 @@ impl Widget for VolumeSlider {
     type Builder = VolumeSliderBuilder;
 
     fn build(_: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
+        *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default().width(percent(100.0));
+
         let high = load_icon(&mut s.resource_mut::<Atlas>(), svg::HIGH);
         let low = load_icon(&mut s.resource_mut::<Atlas>(), svg::LOW);
         let mute = load_icon(&mut s.resource_mut::<Atlas>(), svg::MUTE);
@@ -40,29 +40,18 @@ impl Widget for VolumeSlider {
             div().style(
                 LayoutStyle::default()
                     .row()
+                    .width(percent(100.0))
                     .center()
-                    .gap(px(Spacing::Space200.dp()))
-                    .padding(Insets::symmetric(
-                        px(PADDING_HORIZONTAL),
-                        px(PADDING_VERTICAL),
-                    )),
+                    .gap(px(Spacing::Space200.dp())),
             ),
         );
 
         let icon_handle = s.spawn(
             row,
-            button()
-                .variant(ButtonVariant::Text)
-                .icon(high)
-                .text_color(ColorRole::OnSurface)
-                .width(px(SLIDER_BUTTON_DIMENSIONS))
-                .height(px(SLIDER_BUTTON_DIMENSIONS))
-                .radius(Corners::all(SLIDER_BUTTON_DIMENSIONS / 2.0))
-                .hover_background(s.color(ColorRole::SecondaryContainer))
-                .pressed_background(s.color(ColorRole::OnSecondaryContainer))
-                // the artwork is a little too low and far too right within the
-                // button
-                .padding(Insets::new(px(0.0), px(12.0), px(12.0), px(0.0))),
+            icon(high) // default icon
+                .style(LayoutStyle::default().shrink(0.0))
+                .size(Size::new(ICON_SIZE, ICON_SIZE))
+                .color(s.color(ColorRole::OnSurface)),
         );
 
         let slider_handle = s.spawn(
@@ -70,7 +59,7 @@ impl Widget for VolumeSlider {
             slider()
                 .value(LEVEL_PERCENT)
                 .range(0.0, 100.0)
-                .steps(68)
+                .length(percent(SLIDER_LENGTH_PERCENT))
                 .tick_height(40.0)
                 .tick_gap(4.0),
         );
@@ -82,10 +71,7 @@ impl Widget for VolumeSlider {
         });
 
         s.on::<SliderChange>(slider_handle, |ctx, e| {
-            println!(
-                "[volume] slider changed: value = {:.2}, step_index = {}",
-                e.value, e.step_index
-            );
+            println!("[volume] slider changed: value = {:.2}", e.value);
 
             ctx.signal(SetVolume(if e.value > 100.0 {
                 100
@@ -113,7 +99,7 @@ impl Widget for VolumeSlider {
 
                 // TODO: check if we're already muted and if our icon is
                 // already set to high or low, saves resetting it
-                if let Some(mut button) = ctx.at(icon_handle) {
+                if let Some(mut icon) = ctx.at(icon_handle) {
                     let sprite = if muted {
                         mute
                     } else if volume_percent > HIGH_LEVEL {
@@ -121,7 +107,9 @@ impl Widget for VolumeSlider {
                     } else {
                         low
                     };
-                    button.set_icon(sprite);
+                    icon.set_sprite(sprite);
+                    // set_sprite resets to the sprite's natural size
+                    icon.set_size(Size::new(ICON_SIZE, ICON_SIZE));
                 }
             }
         });

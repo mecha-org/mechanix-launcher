@@ -8,10 +8,14 @@ pub(super) struct DisplayStatus {
     pub(super) owner_changed: MatchId,
     pub(super) read: Option<CallId>,
     pub(super) write: Option<CallId>,
+    /// Latest value requested while `write` was in flight. Only the newest
+    /// is kept, so a fast drag never queues a backlog of stale writes.
+    pub(super) pending: Option<u8>,
 }
 impl Resource for DisplayStatus {}
 
-pub const MIN_BRIGHTNESS: f32 = 0.0;
+/// Lowest brightness the launcher will set, so the screen never goes fully dark.
+pub const MIN_BRIGHTNESS: f32 = 4.0;
 pub const MAX_BRIGHTNESS: f32 = 254.0;
 
 /// Display brightness as a slider value in `MIN_BRIGHTNESS..=MAX_BRIGHTNESS`.
@@ -38,15 +42,24 @@ pub(super) fn on_set_brightness(app: &mut App, signal: &SetBrightness) {
         return;
     }
     let value = signal.0.clamp(MIN_BRIGHTNESS, MAX_BRIGHTNESS).round() as u8;
+    let mut status = app.resource_mut::<DisplayStatus>();
+    // A read started before the user's change must not reset the slider.
+    status.read = None;
+    if status.write.is_some() {
+        status.pending = Some(value);
+        return;
+    }
+    drop(status);
+    write_brightness(app, value);
+}
+
+fn write_brightness(app: &mut App, value: u8) {
     let call = app
         .resource_mut::<DBus>()
         .system()
         .object(DISPLAY, PATH)
         .call(INTERFACE, "SetBrightness", &(value,));
-    let mut status = app.resource_mut::<DisplayStatus>();
-    // A read started before the user's change must not reset the slider.
-    status.read = None;
-    status.write = Some(call);
+    app.resource_mut::<DisplayStatus>().write = Some(call);
 }
 
 pub(super) fn on_reply(app: &mut App, event: &MethodReply) {
@@ -74,8 +87,14 @@ pub(super) fn on_reply(app: &mut App, event: &MethodReply) {
             Err(error) => eprintln!("[display] GetBrightness failed: {error}"),
         }
     } else if status.write == Some(event.call) {
-        app.resource_mut::<DisplayStatus>().write = None;
-        if let Err(error) = &event.result {
+        let pending = {
+            let mut status = app.resource_mut::<DisplayStatus>();
+            status.write = None;
+            status.pending.take()
+        };
+        if let Some(value) = pending {
+            write_brightness(app, value);
+        } else if let Err(error) = &event.result {
             eprintln!("[display] SetBrightness failed: {error:?}");
             read_brightness(app);
         }
@@ -99,6 +118,7 @@ pub(super) fn on_owner_changed(app: &mut App, event: &SignalReceived) {
     let mut status = app.resource_mut::<DisplayStatus>();
     status.read = None;
     status.write = None;
+    status.pending = None;
     if !new_owner.is_empty() {
         read_brightness(app);
     }
@@ -109,5 +129,6 @@ pub(super) fn on_disconnect(app: &mut App, event: &BusDisconnected) {
         let mut status = app.resource_mut::<DisplayStatus>();
         status.read = None;
         status.write = None;
+        status.pending = None;
     }
 }

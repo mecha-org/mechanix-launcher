@@ -7,7 +7,8 @@ use crate::{BluetoothModule, NetworkManagerModule, UpowerModule, status_bar};
 /// `services` and shared with other screens.
 /// It spawns no window; place the bar with [`StatusBarScreen`].
 ///
-/// Expects the host to have installed D-Bus and to have inserted the
+/// Expects the host to have installed D-Bus, `RingModule` and `TimerModule`
+/// (for the clock), and to have inserted the
 /// [`Atlas`], `FontBook` and [`StatusIcons`](crate::StatusIcons).
 ///
 /// Build the status bar before adding this module (for example, add the
@@ -47,6 +48,8 @@ mod tests {
             .add_module(WindowModule)
             .add_module(PaintModule)
             .add_module(MechanixTheme::dark())
+            .add_module(RingModule::default())
+            .add_module(TimerModule)
             .insert_resource(Atlas::new());
         let font = app
             .resource_mut::<Atlas>()

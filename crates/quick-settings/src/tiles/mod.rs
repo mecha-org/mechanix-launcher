@@ -3,36 +3,25 @@ use mecha_wayland::prelude::*;
 
 use crate::util::load_icon;
 
+pub mod action;
 pub mod battery;
 pub mod bluetooth;
-pub mod camera;
-pub mod display;
-pub mod microphone;
-pub mod record;
-pub mod rotate;
-pub mod settings;
-pub mod terminal;
 pub mod wifi;
 
+pub use action::{action_tile, svg};
 pub use battery::BatteryBuilder;
 pub use bluetooth::BluetoothBuilder;
-pub use camera::CameraBuilder;
-pub use display::DisplayTileBuilder;
-pub use microphone::MicrophoneBuilder;
-pub use record::RecordBuilder;
-pub use rotate::RotateBuilder;
-pub use settings::SettingsBuilder;
-pub use terminal::TerminalBuilder;
 pub use wifi::WifiBuilder;
 
 pub(crate) const TILE_HEIGHT: f32 = 106.0;
 
-/// Shared appearance only; each tile owns its children and future behavior.
-pub(super) fn build_tile<W: Widget>(
-    me: Handle<W>,
-    s: &mut Spawner<'_, W>,
-    svg: &[u8],
-) -> Handle<Icon> {
+/// Default space between a tile's icon and its label.
+pub(super) const GAP: f32 = 12.0;
+/// Wider icon/label space used by Bluetooth and Battery.
+pub(super) const WIDE_GAP: f32 = 20.0;
+
+/// Applies the frame every tile shares (size, column layout, border) to `me`.
+pub(super) fn frame<W: Widget>(me: Handle<W>, s: &mut Spawner<'_, W>, gap: f32) {
     *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
         .height(px(TILE_HEIGHT))
         .flex_basis(px(0.0))
@@ -42,10 +31,21 @@ pub(super) fn build_tile<W: Widget>(
         .max_width(percent(20.0))
         .column()
         .center()
-        .gap(px(12.0));
+        .gap(px(gap));
     *s.component_mut::<Paint>(me).unwrap() = Paint::Quad(
         Quad::new(Color::TRANSPARENT).border(1.0, s.color(ColorRole::SecondaryFixedDim)),
     );
+}
+
+/// Frames `me` as a tile and adds a one-colour icon tinted with OnSurface.
+/// The returned `Icon` can be updated with `set_sprite` / `set_color`.
+pub(super) fn build_tile<W: Widget>(
+    me: Handle<W>,
+    s: &mut Spawner<'_, W>,
+    svg: &'static [u8],
+    gap: f32,
+) -> Handle<Icon> {
+    frame(me, s, gap);
     let sprite = load_icon(&mut s.resource_mut::<Atlas>(), svg);
     s.spawn(
         me,
