@@ -15,6 +15,7 @@ mod svg {
 const LEVEL_PERCENT: f32 = 70.0; // initial value
 const PADDING_VERTICAL: f32 = 12.0;
 const PADDING_HORIZONTAL: f32 = 32.0;
+const SLIDER_BUTTON_DIMENSIONS: f32 = 48.0;
 
 const HIGH_LEVEL: u32 = 65; // after what value we use the high icon
 
@@ -54,8 +55,9 @@ impl Widget for VolumeSlider {
                 .variant(ButtonVariant::Text)
                 .icon(high)
                 .text_color(ColorRole::OnSurface)
-                .width(px(48.0))
-                .height(px(48.0))
+                .width(px(SLIDER_BUTTON_DIMENSIONS))
+                .height(px(SLIDER_BUTTON_DIMENSIONS))
+                .radius(Corners::all(SLIDER_BUTTON_DIMENSIONS / 2.0))
                 .hover_background(s.color(ColorRole::SecondaryContainer))
                 .pressed_background(s.color(ColorRole::OnSecondaryContainer))
                 // the artwork is a little too low and far too right within the
