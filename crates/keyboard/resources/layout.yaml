@@ -176,7 +176,7 @@ buttons:
     to_phone_symbols:
         key_style: function
         action: { page: phone_symbols }
-        label: "＊#"
+        label: "*#"
     to_phone:
         key_style: function
         action: { page: letters }
@@ -225,7 +225,7 @@ buttons:
         label: "Wait"
         text: ";"
     star:
-        label: "＊"
+        label: "*"
         text: "*"
     Esc:
         key_style: strip
