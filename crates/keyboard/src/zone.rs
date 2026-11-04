@@ -1,20 +1,17 @@
 //! The keyboard's exclusive zone: off, the shown keyboard sits over apps; on,
-//! it reserves its height so apps shrink above it. On by default, flipped by
-//! a `toggle_exclusive_zone` key, which shows the on state in its latched
-//! colours. The host suspends it while its home screen is up, and a hidden
+//! it reserves its height so apps shrink above it. On by default; no key flips
+//! it now, but the setting stays so one can return. The host suspends it while its home screen is up, and a hidden
 //! keyboard has none.
 
 use mecha_wayland::prelude::*;
 
-use crate::modifiers::latch::repaint_function_key;
 use crate::visibility::KeyboardVisibilityExt;
-use crate::widget::keyboard::Keyboard;
 use crate::widget::surface::KeyboardSurface;
 
 /// Whether the keyboard reserves its height. Starts on, not suspended.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ExclusiveZone {
-    /// The user's choice, from the toggle key.
+    /// The user's choice.
     pub(crate) on: bool,
     /// Held off by the host, e.g. while its home screen is up.
     pub(crate) suspended: bool,
@@ -112,24 +109,6 @@ pub(crate) fn apply_visibility(
         s.set_input_region(surface.window, Some(&[surface.input_rect()]), wl);
     }
     exists
-}
-
-/// Flip the zone, send it to the surface and repaint every zone key.
-pub(crate) fn toggle_exclusive_zone(ctx: &mut Context<'_, Keyboard>) {
-    let on = !ctx.resource::<ExclusiveZone>().on;
-    ctx.resource_mut::<ExclusiveZone>().on = on;
-    let zone = *ctx.resource::<ExclusiveZone>();
-    let visible = ctx.keyboard_visible();
-    let surface = *ctx.resource::<KeyboardSurface>();
-    {
-        let (mut surfaces, mut wl) = ctx.fetch::<(ResMut<Surfaces>, ResMut<Wayland>)>();
-        send_zone(zone, visible, surface, &mut surfaces, &mut wl);
-    }
-    let radius = ctx.me().radius;
-    for k in ctx.me().zone_keys.clone() {
-        repaint_function_key(ctx, k, on, radius);
-    }
-    tracing::info!(on, "keyboard exclusive zone");
 }
 
 #[cfg(test)]

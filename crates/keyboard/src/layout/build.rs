@@ -137,7 +137,7 @@ impl View {
             rows: out_rows,
         };
         let set_name = match spec {
-            ViewSpec::Rows(_) => more_keys::default_set(family, page),
+            ViewSpec::Rows(_) => None,
             ViewSpec::Map(m) => m.more_keys.as_deref(),
         };
         if let Some(set_name) = set_name {
@@ -214,10 +214,7 @@ fn types_digit(action: &KeyAction) -> bool {
             chars.next().filter(|_| chars.next().is_none())
         }
         KeyAction::SetView(_)
-        | KeyAction::ToggleView { .. }
         | KeyAction::LatchModifier(_)
-        | KeyAction::HideKeyboard
-        | KeyAction::ToggleExclusiveZone
         | KeyAction::Page(_)
         | KeyAction::Shift
         | KeyAction::Unhandled(_) => None,
@@ -254,19 +251,9 @@ fn resolve_action(token: &str, button: Option<&Button>) -> KeyAction {
                     return KeyAction::Unhandled(token.to_string());
                 }
             },
-            Some(ActionSpec::Named(a)) if a == "hide_keyboard" => return KeyAction::HideKeyboard,
-            Some(ActionSpec::Named(a)) if a == "toggle_exclusive_zone" => {
-                return KeyAction::ToggleExclusiveZone;
-            }
             Some(ActionSpec::Named(a)) => return KeyAction::Unhandled(a.clone()),
             Some(ActionSpec::SetView { set_view }) => {
                 return KeyAction::SetView(set_view.clone());
-            }
-            Some(ActionSpec::Locking { locking }) => {
-                return KeyAction::ToggleView {
-                    lock: locking.lock_view.clone(),
-                    unlock: locking.unlock_view.clone(),
-                };
             }
             Some(ActionSpec::Other(_)) => return KeyAction::Unhandled(token.to_string()),
             None => {}
@@ -326,7 +313,6 @@ fn resolve_outline(layout: &Layout, button: Option<&Button>) -> Outline {
 mod tests {
     use super::*;
     use crate::layout::FALLBACK_LAYOUT;
-    use crate::layout::spec::LockingSpec;
 
     /// A `Button` with only the fields a test cares about set.
     fn button(f: impl FnOnce(&mut Button)) -> Button {
@@ -507,19 +493,6 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_actions_resolve_by_name() {
-        let named = |n: &str| button(|b| b.action = Some(ActionSpec::Named(n.into())));
-        assert!(matches!(
-            resolve_action("hide", Some(&named("hide_keyboard"))),
-            KeyAction::HideKeyboard
-        ));
-        assert!(matches!(
-            resolve_action("zone", Some(&named("toggle_exclusive_zone"))),
-            KeyAction::ToggleExclusiveZone
-        ));
-    }
-
-    #[test]
     fn erase_action_maps_to_backspace() {
         let b = button(|b| b.action = Some(ActionSpec::Named("erase".into())));
         let want = xkb::keysym_from_name("BackSpace", xkb::KEYSYM_NO_FLAGS);
@@ -544,22 +517,6 @@ mod tests {
         assert!(matches!(
             resolve_action("show_symbols", Some(&b)),
             KeyAction::SetView(v) if v == "symbols"
-        ))
-    }
-
-    #[test]
-    fn locking_action_resolves_to_toggleview() {
-        let b = button(|b| {
-            b.action = Some(ActionSpec::Locking {
-                locking: LockingSpec {
-                    lock_view: "upper".into(),
-                    unlock_view: "base".into(),
-                },
-            })
-        });
-        assert!(matches!(
-            resolve_action("Shift_L", Some(&b)),
-            KeyAction::ToggleView { lock, unlock } if lock == "upper" && unlock == "base"
         ))
     }
 
@@ -604,25 +561,6 @@ mod tests {
     }
 
     #[test]
-    fn fallback_bottom_rows_have_hide_and_zone_keys() {
-        let layout: Layout = yaml_serde::from_str(FALLBACK_LAYOUT).expect("fallback parses");
-        let keymap = Keymap::from_layout(&layout);
-        for name in ["base", "upper", "numbers", "symbols"] {
-            let view = keymap.view(name).expect("view exists");
-            assert!(
-                view.keys()
-                    .any(|k| matches!(k.action, KeyAction::HideKeyboard)),
-                "{name} has a hide key"
-            );
-            assert!(
-                view.keys()
-                    .any(|k| matches!(k.action, KeyAction::ToggleExclusiveZone)),
-                "{name} has an exclusive-zone key"
-            );
-        }
-    }
-
-    #[test]
     fn views_get_long_press_data_by_set() {
         let layout: Layout = yaml_serde::from_str(FALLBACK_LAYOUT).expect("fallback parses");
         let keymap = Keymap::from_layout(&layout);
@@ -654,15 +592,17 @@ mod tests {
         let layout: Layout = yaml_serde::from_str(FALLBACK_LAYOUT).expect("fallback parses");
         let keymap = Keymap::from_layout(&layout);
 
-        let has_set_view = keymap
-            .keys()
-            .any(|k| matches!(&k.action, KeyAction::SetView(v) if v == "symbols"));
-        assert!(has_set_view, "a `set_view: symbols` key should be SetView");
+        assert!(
+            keymap
+                .keys()
+                .any(|k| matches!(k.action, KeyAction::Page(Page::Symbols))),
+            "?123 should be Page(Symbols)"
+        );
 
-        let has_toggle = keymap.keys().any(|k| {
-            matches!(&k.action, KeyAction::ToggleView { lock, unlock } if lock == "upper" && unlock == "base")
-        });
-        assert!(has_toggle, "Shift_L should be ToggleView upper/base");
+        assert!(
+            keymap.keys().any(|k| matches!(k.action, KeyAction::Shift)),
+            "a shift key should be KeyAction::Shift"
+        );
     }
 
     #[test]
@@ -677,10 +617,271 @@ mod tests {
             .keys()
             .filter(|k| matches!(k.action, KeyAction::EmitKeysym(_) | KeyAction::EmitText(_)))
             .count();
-        // 26 letters plus `. space ⌫ DONE`; `,` lives in the numbers view.
+        // 26 letters plus `, . space ⌫ ⏎`.
         assert!(
             typeable >= 30,
             "base view should have many typeable keys, got {typeable}"
         );
+    }
+
+    // ── the bundled AOSP layout ─────────────────────────────────────────
+
+    fn bundled() -> Keymap {
+        let layout: Layout = yaml_serde::from_str(FALLBACK_LAYOUT).expect("bundled parses");
+        Keymap::from_layout(&layout)
+    }
+
+    fn is_keysym(action: &KeyAction, name: &str) -> bool {
+        let want = xkb::keysym_from_name(name, xkb::KEYSYM_NO_FLAGS);
+        matches!(action, KeyAction::EmitKeysym(ks) if *ks == want)
+    }
+
+    /// The rows of a view without the terminal strip (`height < 1`).
+    fn key_rows(view: &View) -> Vec<&Row> {
+        view.rows.iter().filter(|r| r.height >= 1.0).collect()
+    }
+
+    #[test]
+    fn every_view_obeys_the_fixed_key_rule() {
+        let km = bundled();
+        assert!(km.views.len() >= 12, "all pages are present");
+        for view in &km.views {
+            let rows = key_rows(view);
+            let third = rows
+                .get(2)
+                .unwrap_or_else(|| panic!("{} has a third row", view.name));
+            let last = third.keys().last().unwrap();
+            assert!(
+                is_keysym(&last.action, "BackSpace"),
+                "{}: third row ends in {:?}",
+                view.name,
+                last.token
+            );
+            let last = rows.last().unwrap().keys().last().unwrap();
+            assert!(
+                is_keysym(&last.action, "Return"),
+                "{}: bottom row ends in {:?}",
+                view.name,
+                last.token
+            );
+        }
+    }
+
+    #[test]
+    fn every_family_has_a_letters_page() {
+        let km = bundled();
+        for family in [
+            Family::Text,
+            Family::Email,
+            Family::Url,
+            Family::Password,
+            Family::Number,
+            Family::Phone,
+            Family::Terminal,
+        ] {
+            assert!(
+                km.views
+                    .iter()
+                    .any(|v| v.family == family && v.page == Page::Letters),
+                "no letters page for {family:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_letters_have_no_digit_row_and_an_eight_key_strip() {
+        let km = bundled();
+        let v = km.view("terminal").unwrap();
+        assert_eq!(v.rows[0].height, 0.75);
+        assert_eq!(
+            tokens(&v.rows[0]),
+            ["Esc", "Tab", "Ctrl", "Alt", "←", "↓", "↑", "→"]
+        );
+        assert_eq!(tokens(&v.rows[1])[0], "q");
+        assert!(
+            v.keys()
+                .all(|k| !matches!(k.token.as_str(), "1" | "2" | "8"))
+        );
+        // Page keys stay in the family and keep the strip.
+        for name in ["terminal_symbols", "terminal_more_symbols"] {
+            let v = km.view(name).unwrap();
+            assert_eq!(v.family, Family::Terminal);
+            assert_eq!(v.rows[0].height, 0.75, "{name} keeps the strip");
+            assert_eq!(v.rows[0].keys().count(), 8);
+        }
+    }
+
+    #[test]
+    fn terminal_bottom_rows_match_the_spec() {
+        let km = bundled();
+        let bottom = |n: &str| {
+            let v = km.view(n).unwrap();
+            tokens(v.rows.last().unwrap())
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            bottom("terminal"),
+            ["to_symbols", "slash", "dot", "space", "minus", "Return"]
+        );
+        assert_eq!(
+            bottom("terminal_symbols"),
+            [
+                "to_letters",
+                "/",
+                "_",
+                "space_short",
+                "|",
+                "minus",
+                "Return"
+            ]
+        );
+        assert_eq!(
+            bottom("terminal_more_symbols"),
+            [
+                "to_letters",
+                "/",
+                "<",
+                "space_short",
+                ">",
+                "minus",
+                "Return"
+            ]
+        );
+    }
+
+    #[test]
+    fn email_bottom_row_is_at_dot_com() {
+        let km = bundled();
+        let v = km.view("email").unwrap();
+        assert_eq!(
+            tokens(v.rows.last().unwrap()),
+            ["to_symbols", "at", "dot_com", "space", "period", "Return"]
+        );
+        let v = km.view("url").unwrap();
+        assert_eq!(
+            tokens(v.rows.last().unwrap()),
+            [
+                "to_symbols",
+                "slash",
+                "dot_com",
+                "space",
+                "period",
+                "Return"
+            ]
+        );
+        let v = km.view("password").unwrap();
+        assert_eq!(
+            tokens(v.rows.last().unwrap()),
+            ["to_symbols", "comma", "at", "space", "period", "Return"]
+        );
+    }
+
+    #[test]
+    fn password_and_terminal_have_no_emoji_key() {
+        let km = bundled();
+        for name in [
+            "password",
+            "terminal",
+            "terminal_symbols",
+            "terminal_more_symbols",
+        ] {
+            assert!(
+                km.view(name)
+                    .unwrap()
+                    .keys()
+                    .all(|k| !matches!(k.action, KeyAction::Page(Page::Emoji))),
+                "{name} has an emoji key"
+            );
+        }
+        let base = km.view("base").unwrap();
+        assert!(
+            base.keys()
+                .any(|k| matches!(k.action, KeyAction::Page(Page::Emoji)))
+        );
+    }
+
+    #[test]
+    fn main_quote_keys_are_plain() {
+        let km = bundled();
+        let sym = km.view("symbols").unwrap();
+        for (ch, name) in [('"', "quotedbl"), ('\'', "apostrophe")] {
+            let key = sym.keys().find(|k| k.token == ch.to_string()).unwrap();
+            assert!(is_keysym(&key.action, name), "{ch} is its plain keysym");
+        }
+        for v in &km.views {
+            assert!(
+                v.keys().all(|k| k.token != "”" && k.token != "’"),
+                "{} has a curly quote as a main key",
+                v.name
+            );
+        }
+    }
+
+    #[test]
+    fn base_row_widths_match_aosp() {
+        let km = bundled();
+        for name in [
+            "base",
+            "symbols",
+            "more_symbols",
+            "email",
+            "url",
+            "password",
+            "terminal",
+            "terminal_symbols",
+            "terminal_more_symbols",
+        ] {
+            for (i, row) in km.view(name).unwrap().rows.iter().enumerate() {
+                let sum: f32 = row
+                    .cells
+                    .iter()
+                    .map(|c| match c {
+                        Cell::Key(k) => k.width,
+                        Cell::Spacer(w) => *w,
+                    })
+                    .sum();
+                assert!((sum - 100.0).abs() < 0.01, "{name} row {i} sums to {sum}");
+            }
+        }
+    }
+
+    #[test]
+    fn pages_reach_each_other_and_the_phone_pad_types_pause_and_wait() {
+        let km = bundled();
+        let find = |view: &str, token: &str| {
+            km.view(view)
+                .unwrap()
+                .keys()
+                .find(|k| k.token == token)
+                .unwrap()
+                .clone()
+        };
+        let page = |view: &str, token: &str| match find(view, token).action {
+            KeyAction::Page(p) => p,
+            a => panic!("{view}/{token}: {a:?}"),
+        };
+        assert_eq!(page("base", "to_symbols"), Page::Symbols);
+        assert_eq!(page("symbols", "to_more_symbols"), Page::MoreSymbols);
+        assert_eq!(page("more_symbols", "to_symbols"), Page::Symbols);
+        assert_eq!(page("symbols", "to_letters"), Page::Letters);
+        assert_eq!(page("phone", "to_phone_symbols"), Page::PhoneSymbols);
+        assert_eq!(page("phone_symbols", "to_phone"), Page::Letters);
+        assert!(
+            matches!(find("phone_symbols", "pause").action, KeyAction::EmitText(t) if t == ",")
+        );
+        assert!(matches!(find("phone_symbols", "wait").action, KeyAction::EmitText(t) if t == ";"));
+        // The period on the ?123 page is the literal `.` so `…` attaches.
+        assert_eq!(find("symbols", ".").choices, ["…"]);
+        assert_eq!(find("number", "minus").choices, ["+"]);
+        assert!(find("phone", "2").choices.is_empty());
+    }
+
+    #[test]
+    fn notice_file_is_bundled() {
+        let notice = include_str!("../../resources/NOTICE-aosp.txt");
+        assert!(notice.contains("AOSP LatinIME"));
+        assert!(notice.contains("Apache License"));
     }
 }

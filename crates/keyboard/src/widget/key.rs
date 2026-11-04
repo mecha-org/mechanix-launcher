@@ -11,7 +11,6 @@ use crate::layout::{KeyAction, KeyFace};
 use crate::modifiers::latch::LatchedState;
 use crate::modifiers::shift::{Shift, ShiftState};
 use crate::touch::{KeyFeedback, popup_text};
-use crate::zone::ExclusiveZone;
 
 /// What a key looks like — determines the [`ColorRole`] pair it draws with.
 /// Derived from the key's [`KeyAction`] so the visual matches the behaviour.
@@ -30,9 +29,6 @@ fn kind_of(action: &KeyAction) -> KeyKind {
         KeyAction::EmitKeysym(_) | KeyAction::EmitText(_) => KeyKind::Normal,
         KeyAction::LatchModifier(_)
         | KeyAction::SetView(_)
-        | KeyAction::ToggleView { .. }
-        | KeyAction::HideKeyboard
-        | KeyAction::ToggleExclusiveZone
         | KeyAction::Page(_)
         | KeyAction::Shift
         | KeyAction::Unhandled(_) => KeyKind::Function,
@@ -173,14 +169,12 @@ impl Widget for Key {
             KeyAction::LatchModifier(m) => Some(m),
             _ => None,
         };
-        let zone = matches!(b.key.action, KeyAction::ToggleExclusiveZone);
         let shift = matches!(b.key.action, KeyAction::Shift);
-        // Latch, zone and shift keys show their on state, so a press doesn't
+        // Latch and shift keys show their on state, so a press doesn't
         // flash them.
-        let is_latch = latch.is_some() || zone || shift;
+        let is_latch = latch.is_some() || shift;
         s.on_theme(me, move |ctx| {
             let lit = latch.is_some_and(|m| ctx.resource::<LatchedState>().get(m))
-                || (zone && ctx.resource::<ExclusiveZone>().on)
                 || (shift && ctx.resource::<Shift>().state() != ShiftState::Off);
             let state = KeyState::latched_if(lit);
             let (bg_role, fg_role) = key_roles(look, kind, state);

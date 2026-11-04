@@ -89,7 +89,7 @@ pub(crate) struct Outline {
 }
 
 /// A squeekboard button's `action:` value — either a bare name (`erase`,
-/// `show_prefs`) or a structured single-key map (`set_view`, `locking`). Tried
+/// `show_prefs`) or a structured single-key map (`set_view`, `page`). Tried
 /// as untagged variants in order; `Other` is the catch-all, so an unrecognised
 /// structured action still parses (and later resolves to `Unhandled`) instead
 /// of failing the whole layout.
@@ -99,16 +99,7 @@ pub(crate) enum ActionSpec {
     Named(String),
     SetView { set_view: String },
     Page { page: String },
-    Locking { locking: LockingSpec },
     Other(serde::de::IgnoredAny),
-}
-
-/// The body of a squeekboard `locking` action: the view tapped to (`lock_view`),
-/// and the view tapped back to (`unlock_view`) once the lock view is current.
-#[derive(Debug, Deserialize)]
-pub(crate) struct LockingSpec {
-    pub(crate) lock_view: String,
-    pub(crate) unlock_view: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
