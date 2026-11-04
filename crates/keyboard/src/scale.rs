@@ -8,7 +8,11 @@
 //!
 //! The output's width is the keyboard surface's own: anchored left and right
 //! with no width, the compositor configures it to the output's full logical
-//! width ([`on_resized`]). Until the first configure the keyboard is laid out
+//! width ([`on_resized`]). Only while those anchors hold, though: hiding a
+//! drawn surface unmaps it, which resets the compositor's layer state
+//! (anchors included), so a configure that a commit on the hidden surface
+//! draws (a zone change, say) carries some other width. Those are ignored;
+//! the show re-sends the anchors and its configure brings the real width. Until the first configure the keyboard is laid out
 //! at the design width (factor 1); a later or changed width (rotation, a new
 //! output scale) re-lays it out ([`crate::widget::surface::relayout`]).
 //!
@@ -17,6 +21,7 @@
 use mecha_wayland::prelude::*;
 
 use crate::layout::KeyboardStyle;
+use crate::visibility::KeyboardVisibilityExt;
 use crate::widget::popup::GAP;
 use crate::widget::surface::{KeyboardSurface, relayout};
 
@@ -55,6 +60,9 @@ pub(crate) struct KeyboardGeometry {
     design: KeyboardStyle,
     /// The output's logical width, once the compositor configured the surface.
     pub(crate) output_width: Option<f32>,
+    /// Whether the keyboard was ever shown. Once it was, a hide resets the
+    /// surface's anchors at the compositor until the next show.
+    pub(crate) ever_shown: bool,
 }
 impl Resource for KeyboardGeometry {}
 
@@ -63,6 +71,7 @@ impl KeyboardGeometry {
         Self {
             design,
             output_width: None,
+            ever_shown: false,
         }
     }
 
@@ -80,6 +89,14 @@ impl KeyboardGeometry {
         scaled(&self.design, self.factor())
     }
 
+    /// Whether the compositor holds the surface's bottom|left|right anchors
+    /// now: shown, or never shown (created anchored, not yet reset by a hide).
+    /// Only then does a configure carry the output's width, and only then may
+    /// the surface ask for width 0.
+    pub(crate) fn anchored(&self, visible: bool) -> bool {
+        visible || !self.ever_shown
+    }
+
     /// Gap between a pop-up (or choices row) and its key at the current
     /// output width.
     pub(crate) fn popup_gap(&self) -> f32 {
@@ -92,6 +109,14 @@ impl KeyboardGeometry {
 pub(crate) fn on_resized(app: &mut App, e: &Emitted<Resized>) {
     let window = app.resource::<KeyboardSurface>().window;
     if !e.targets.contains(&window) {
+        return;
+    }
+    let visible = app.keyboard_visible();
+    if !app.resource::<KeyboardGeometry>().anchored(visible) {
+        tracing::debug!(
+            width = e.event.size.width,
+            "keyboard: ignoring a configure of the hidden, unanchored surface"
+        );
         return;
     }
     let before = app.resource::<KeyboardGeometry>().factor();
@@ -172,5 +197,69 @@ mod tests {
         assert_eq!(s.font_size, design.font_size);
         assert_eq!(s.font, design.font);
         assert_eq!(s.background_color, design.background_color);
+    }
+
+    /// An app with the keyboard's geometry and surface resources (its window
+    /// the root, no keyboard tree), shown or hidden, and another node.
+    fn keyboard_app(visible: bool, ever_shown: bool) -> (App, NodeId, NodeId) {
+        let mut app = App::new();
+        app.add_module(LayoutModule).add_module(PaintModule);
+        let window = app.root();
+        let other = app.spawn(window, div()).id();
+        let mut g = KeyboardGeometry::new(load_keymap().keyboard);
+        g.ever_shown = ever_shown;
+        app.insert_resource(g);
+        app.insert_resource(KeyboardSurface {
+            window,
+            height: 391.0,
+            headroom: 69.0,
+            bottom_gap: 20.0,
+        });
+        crate::visibility::install(&mut app);
+        app.resource_mut::<crate::visibility::KeyboardVisibility>()
+            .visible = visible;
+        (app, window, other)
+    }
+
+    fn resized(app: &mut App, target: NodeId, width: f32) {
+        let e = Emitted {
+            event: Resized {
+                size: Size::new(width, 100.0),
+            },
+            targets: target.into(),
+        };
+        on_resized(app, &e);
+    }
+
+    #[test]
+    fn the_keyboards_configure_sets_the_width() {
+        let (mut app, window, _) = keyboard_app(false, false);
+        resized(&mut app, window, 408.0);
+        assert_eq!(app.resource::<KeyboardGeometry>().output_width, Some(408.0));
+        let (mut app, window, _) = keyboard_app(true, true);
+        resized(&mut app, window, 337.5);
+        assert_eq!(app.resource::<KeyboardGeometry>().factor(), 0.625);
+    }
+
+    #[test]
+    fn another_windows_resize_does_not_change_the_factor() {
+        let (mut app, window, other) = keyboard_app(true, true);
+        resized(&mut app, window, 408.0);
+        resized(&mut app, other, 204.0);
+        let g = *app.resource::<KeyboardGeometry>();
+        assert_eq!(g.output_width, Some(408.0));
+        assert_eq!(g.factor(), 408.0 / 540.0);
+    }
+
+    #[test]
+    fn a_configure_while_hidden_after_a_show_is_ignored() {
+        // A hide reset the anchors: the compositor's width is not the output's.
+        let (mut app, window, _) = keyboard_app(false, true);
+        app.resource_mut::<KeyboardGeometry>().output_width = Some(408.0);
+        resized(&mut app, window, 204.0);
+        assert_eq!(app.resource::<KeyboardGeometry>().output_width, Some(408.0));
+        let g = *app.resource::<KeyboardGeometry>();
+        assert!(!g.anchored(false));
+        assert!(g.anchored(true));
     }
 }
