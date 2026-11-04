@@ -109,6 +109,7 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
     let home = container(HOME_ID, Home)
         .open(bottom_quick(), FADE)
         .close(OnExternal(ExternalEvent::AppLaunched), INSTANT)
+        .close(OnExternal(ExternalEvent::WindowOpened), INSTANT)
         .child(
             container(DRAWER, drawer)
                 .open(swipe(HOME, Direction::Up, Timing::Any), INSTANT)
