@@ -50,7 +50,11 @@ impl Widget for Form {
             s.spawn(list, text(b.font, label).size(14).color(label_color));
             let mut field = input(b.font)
                 .size(18)
-                .style(LayoutStyle::default().size(percent(100.0), px(40.0)).shrink(0.0))
+                .style(
+                    LayoutStyle::default()
+                        .size(percent(100.0), px(40.0))
+                        .shrink(0.0),
+                )
                 .border(1.0, field_border)
                 .background(field_bg)
                 .color(field_color)

@@ -29,7 +29,16 @@ fn pick_view<'a>(
     family: Family,
     page: Page,
 ) -> Option<usize> {
-    let find = |f: Family| views.clone().position(|(_, vf, vp)| vf == f && vp == page);
+    // The keymap's view order comes from a hash map, so ties are broken by
+    // name (`base` first) to keep the choice deterministic.
+    let find = |f: Family| {
+        views
+            .clone()
+            .enumerate()
+            .filter(|(_, (_, vf, vp))| *vf == f && *vp == page)
+            .min_by_key(|(_, (name, ..))| (*name != BASE_VIEW, *name))
+            .map(|(i, _)| i)
+    };
     if let Some(idx) = find(family) {
         return Some(idx);
     }
@@ -137,6 +146,29 @@ mod tests {
         assert_eq!(name(Family::Number), Some("numbers"));
         assert_eq!(name(Family::Text), Some(BASE_VIEW));
         assert_eq!(name(Family::Email), Some(BASE_VIEW));
+    }
+
+    #[test]
+    fn pick_is_independent_of_view_order() {
+        let keymap = layout::load_keymap();
+        let mut views = keymap_views(&keymap);
+        fn expect<'a>(views: &[(&'a str, Family, Page)]) -> [Option<&'a str>; 4] {
+            [
+                Family::Terminal,
+                Family::Number,
+                Family::Text,
+                Family::Email,
+            ]
+            .map(|f| pick_view(views.iter().copied(), f, Page::Letters).map(|i| views[i].0))
+        }
+        let want = expect(&views);
+        for rot in 0..views.len() {
+            views.rotate_left(1);
+            assert_eq!(expect(&views), want, "rotation {rot}");
+        }
+        views.reverse();
+        assert_eq!(expect(&views), want);
+        assert_eq!(want[2], Some(BASE_VIEW));
     }
 
     #[test]
