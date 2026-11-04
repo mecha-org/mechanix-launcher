@@ -48,6 +48,7 @@ fn main() {
         .add_module(DBusModule::new().system())
         .add_module(PulseAudioModule)
         .add_module(VolumeControlModule)
+        .add_module(TimerModule)
         .add_module(
             WaylandModule::new()
                 .bind::<WlCompositor>()
