@@ -186,6 +186,7 @@ impl Keymap {
             views,
             keyboard,
             prediction,
+            choices_look: KeyLook::for_button(&styles, "", None, false),
         }
     }
 }

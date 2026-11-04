@@ -18,6 +18,8 @@ pub(crate) struct ChoicesRow {
     pub choices: Vec<String>,
     /// The whole row, in window coordinates.
     pub rect: Rect,
+    /// The long-pressed key, in window coordinates.
+    pub key: Rect,
     /// One cell's width.
     pub cell_w: f32,
     /// The choice a release would type, if any.
@@ -50,6 +52,7 @@ impl ChoicesRow {
         ChoicesRow {
             choices,
             rect: Rect::new(x, y, w, h),
+            key,
             cell_w,
             highlighted: Some(0),
             mirrored,
@@ -57,10 +60,11 @@ impl ChoicesRow {
     }
 
     /// The finger moved to `p`: the cell under it (clamped to the row's
-    /// ends) is highlighted, or none once it is more than one key height
-    /// below the row (a release there cancels).
+    /// ends) is highlighted, or none once it is more than half a key height
+    /// below the long-pressed key (a release there cancels). Resting on the
+    /// key, or just under it, keeps a highlight.
     pub(crate) fn track(&mut self, p: Point) {
-        if p.y > self.rect.bottom() + self.rect.size.height {
+        if p.y > self.key.bottom() + self.key.size.height / 2.0 {
             self.highlighted = None;
             return;
         }
@@ -149,10 +153,16 @@ mod tests {
     fn sliding_far_below_cancels() {
         let key = Rect::new(100.0, 200.0, 50.0, 50.0);
         let mut row = ChoicesRow::open(key, BOUNDS, choices("3 é"));
-        // Row bottom 196: on the key itself is still within one key height.
-        row.track(Point::new(120.0, 240.0));
-        assert_eq!(row.highlighted, Some(0));
-        row.track(Point::new(120.0, 247.0));
+        // Anywhere on the key, at its bottom edge and in the gap just below
+        // it, the finger still picks a cell.
+        for y in [205.0, 240.0, 250.0, 262.0, 275.0] {
+            row.track(Point::new(120.0, y));
+            assert_eq!(row.highlighted, Some(0), "y = {y}");
+        }
+        // Clearly below the key (more than half a key under it): cancel.
+        row.track(Point::new(120.0, 276.0));
+        assert_eq!(row.highlighted, None);
+        row.track(Point::new(120.0, 320.0));
         assert_eq!(row.highlighted, None);
         // Coming back up picks a cell again.
         row.track(Point::new(160.0, 170.0));

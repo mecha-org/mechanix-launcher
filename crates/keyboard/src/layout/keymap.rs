@@ -11,6 +11,9 @@ pub struct Keymap {
     pub views: Vec<View>,
     pub keyboard: KeyboardStyle,
     pub prediction: PredictionConfig,
+    /// The long-press choices row's look: the `normal` style for its cells
+    /// and the `latched` style for the highlighted one.
+    pub choices_look: KeyLook,
 }
 
 /// One selectable arrangement of keys (e.g. `base`, `upper`).

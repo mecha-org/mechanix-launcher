@@ -214,6 +214,7 @@ impl Widget for Keyboard {
                 font: b.fonts.id(style.font),
                 font_size: style.font_size,
                 radius: style.radius,
+                look: b.keymap.choices_look,
             },
         );
 
