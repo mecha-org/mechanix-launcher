@@ -10,7 +10,7 @@ keyboard:
   padding: 8
   width: 540
   height: 252
-  font: geist
+  font: geist-mono
   font-size: 20
 
 # Predictive touch: letter keys' touch areas lean toward likely next letters.
