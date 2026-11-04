@@ -1,5 +1,7 @@
 use mecha_pulseaudio::*;
-use mecha_wayland::mechanix_widgets::prelude::{SliderChange, SliderContextExt, slider};
+use mecha_wayland::mechanix_widgets::prelude::{
+    ButtonContextExt, ButtonVariant, SliderChange, SliderContextExt, button, slider,
+};
 use mecha_wayland::prelude::*;
 
 use crate::util::load_icon;
@@ -48,9 +50,17 @@ impl Widget for VolumeSlider {
 
         let icon_handle = s.spawn(
             row,
-            icon(high) // default icon
-                .style(LayoutStyle::default().shrink(0.0))
-                .color(s.color(ColorRole::OnSurface)),
+            button()
+                .variant(ButtonVariant::Text)
+                .icon(high)
+                .text_color(ColorRole::OnSurface)
+                .width(px(48.0))
+                .height(px(48.0))
+                .hover_background(s.color(ColorRole::SecondaryContainer))
+                .pressed_background(s.color(ColorRole::OnSecondaryContainer))
+                // the artwork is a little too low and far too right within the
+                // button
+                .padding(Insets::new(px(0.0), px(12.0), px(12.0), px(0.0))),
         );
 
         let slider_handle = s.spawn(
@@ -62,6 +72,12 @@ impl Widget for VolumeSlider {
                 .tick_height(40.0)
                 .tick_gap(4.0),
         );
+
+        s.on::<Clicked>(icon_handle, |ctx, _| {
+            if let VolumeState::Ready { muted, .. } = *ctx.resource::<VolumeState>() {
+                ctx.signal(SetMuted(!muted))
+            }
+        });
 
         s.on::<SliderChange>(slider_handle, |ctx, e| {
             println!(
@@ -95,14 +111,15 @@ impl Widget for VolumeSlider {
 
                 // TODO: check if we're already muted and if our icon is
                 // already set to high or low, saves resetting it
-                if let Some(mut icon_handler) = ctx.at(icon_handle) {
-                    if muted {
-                        icon_handler.set_sprite(mute);
+                if let Some(mut button) = ctx.at(icon_handle) {
+                    let sprite = if muted {
+                        mute
                     } else if volume_percent > HIGH_LEVEL {
-                        icon_handler.set_sprite(high);
+                        high
                     } else {
-                        icon_handler.set_sprite(low);
-                    }
+                        low
+                    };
+                    button.set_icon(sprite);
                 }
             }
         });
