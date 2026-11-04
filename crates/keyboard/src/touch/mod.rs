@@ -6,6 +6,7 @@
 mod defer;
 mod flow;
 mod glue;
+pub(crate) mod long_press;
 mod resolve;
 mod tracker;
 
@@ -18,7 +19,7 @@ use crate::layout::{KeyAction, KeyFace, Keymap};
 use crate::protocol::virtual_keyboard::keysym_text;
 use crate::widget::key::Key;
 
-pub(crate) use glue::{TouchState, attach, view_switched};
+pub(crate) use glue::{TouchState, attach, long_pressed, view_switched};
 pub(crate) use tracker::TouchTracker;
 
 /// The input layer's word to the UI: a key gained or lost the pressed state.
@@ -39,16 +40,19 @@ pub(crate) struct KeyEntry {
     pub action: KeyAction,
     /// The key's lowercase `a`-`z` letter, if it types one.
     pub letter: Option<char>,
+    /// The key's long-press choices (lowercase), if any.
+    pub choices: Vec<String>,
 }
 
 impl KeyEntry {
-    /// The entry for a spawned key with this action.
-    pub(crate) fn new(node: Handle<Key>, action: KeyAction) -> Self {
+    /// The entry for a spawned key with this action and long-press choices.
+    pub(crate) fn new(node: Handle<Key>, action: KeyAction, choices: Vec<String>) -> Self {
         let letter = letter_of(&action);
         Self {
             node,
             action,
             letter,
+            choices,
         }
     }
 }

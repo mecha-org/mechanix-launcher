@@ -10,9 +10,11 @@ use crate::layout::tokens::{Font, Fonts};
 use crate::layout::{Cell, Family, KeyAction, Keymap, Modifier, Page};
 use crate::modifiers::shift::{self, HOLD_LOCK, Shift};
 use crate::predict::TypingContext;
+use crate::touch::long_press::LONG_PRESS;
 use crate::touch::{self, KeyEntry, TouchState, TouchTracker, letter_views};
 use crate::view::{BASE_VIEW, SwitchView, switch_view, view_for};
 use crate::widget::key::{Key, KeyBuilder};
+use crate::widget::more_keys::{MoreKeys, MoreKeysBuilder};
 use crate::widget::popup::{KeyPopup, KeyPopupBuilder};
 use crate::widget::surface::{popup_headroom, row_weight, view_height};
 
@@ -58,6 +60,13 @@ pub(crate) struct Keyboard {
     pub(crate) touch: TouchState,
     /// The pressed key's bubble, painted above the keys.
     pub(crate) popup: Handle<KeyPopup>,
+    /// The long-press choices row, painted above everything.
+    pub(crate) choices_row: Handle<MoreKeys>,
+    /// The long-press timer, started while a key with choices is pressed.
+    pub(crate) long_press_timer: TimerId,
+    /// Height of the strip above the keys the pop-up and choices row may
+    /// rise into.
+    pub(crate) headroom: f32,
 }
 
 impl Keyboard {
@@ -183,7 +192,11 @@ impl Widget for Keyboard {
                         _ => {}
                     }
 
-                    view_keys.push(KeyEntry::new(key_handle, key.action.clone()));
+                    view_keys.push(KeyEntry::new(
+                        key_handle,
+                        key.action.clone(),
+                        key.choices.clone(),
+                    ));
                 }
             }
             keys.push(view_keys);
@@ -201,7 +214,18 @@ impl Widget for Keyboard {
             },
         );
 
+        // After the pop-up, so it paints above it too.
+        let choices_row = s.spawn(
+            me,
+            MoreKeysBuilder {
+                font: b.fonts.id(style.font),
+                font_size: style.font_size,
+                radius: style.radius,
+            },
+        );
+
         let shift_timer = s.add_timeout(HOLD_LOCK, |ctx, _| shift::held(ctx));
+        let long_press_timer = s.add_timeout(LONG_PRESS, |ctx, _| touch::long_pressed(ctx));
 
         touch::attach(s, me);
         // A focused field asked for this view: the word typed belonged to
@@ -235,6 +259,9 @@ impl Widget for Keyboard {
             tracker: TouchTracker::default(),
             touch: TouchState::default(),
             popup,
+            choices_row,
+            long_press_timer,
+            headroom: popup_headroom(&style),
         }
     }
 }

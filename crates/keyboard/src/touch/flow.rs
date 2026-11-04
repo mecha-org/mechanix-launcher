@@ -7,6 +7,7 @@
 use mecha_wayland::prelude::*;
 
 use super::defer::{Contact, Deferral, PendingPress, laid_out};
+use super::long_press::ChoicesRow;
 use super::resolve::{KeyGeom, ResolveParams, resolve};
 use super::tracker::{KeyRef, TouchOut, TouchTracker};
 use crate::predict::{FLAT, LetterPrior};
@@ -41,6 +42,10 @@ pub(crate) trait Board {
     fn predict(&mut self) -> (LetterPrior, f32);
     /// Whether key `index` of the current view repeats while held.
     fn repeats(&mut self, index: usize) -> bool;
+    /// Whether key `index` of the current view has long-press choices.
+    fn has_choices(&mut self, index: usize) -> bool;
+    /// The choices row key `index` of the current view opens, if it has one.
+    fn choices_row(&mut self, index: usize) -> Option<ChoicesRow>;
     fn tracker(&mut self) -> &mut TouchTracker;
     fn flow(&mut self) -> &mut Flow;
     /// Act on tracker outputs (indices into the current view), then cancel
@@ -63,9 +68,15 @@ pub(crate) fn press(b: &mut impl Board, p: PendingPress) {
     }
 }
 
-/// A contact moved to `position`.
+/// A contact moved to `position`. While its choices row is open the row
+/// tracks it instead of the keys.
 pub(crate) fn moved(b: &mut impl Board, c: ContactId, position: Point, time: u32) {
     if gate(b, Contact::Moved(c)) {
+        if b.tracker().choices_open() {
+            let out = b.tracker().track(c, position);
+            b.act(out, time);
+            return;
+        }
         let geoms = b.geoms();
         let key = key_at(b, &geoms, position);
         let out = b.tracker().moved(c, key, time);
@@ -88,6 +99,19 @@ pub(crate) fn cancel(b: &mut impl Board, c: ContactId, time: u32) {
         let out = b.tracker().cancel(c, time);
         b.act(out, time);
     }
+}
+
+/// The long-press timer fired at `time` for the key under the active
+/// contact: open its choices row.
+pub(crate) fn long_pressed(b: &mut impl Board, time: u32) {
+    let Some((c, key)) = b.tracker().pressed() else {
+        return;
+    };
+    let Some(row) = b.choices_row(key) else {
+        return;
+    };
+    let out = b.tracker().long_pressed(c, row);
+    b.act(out, time);
 }
 
 /// Pass a non-press `event` through the deferral, starting a held-back press
@@ -140,7 +164,12 @@ fn key_at(b: &mut impl Board, geoms: &[KeyGeom], p: Point) -> Option<KeyRef> {
     let params = ResolveParams::for_keys(geoms, flow.strength);
     let index = resolve(geoms, p, &flow.prior, &params)?;
     let repeats = b.repeats(index);
-    Some(KeyRef { index, repeats })
+    let choices = b.has_choices(index);
+    Some(KeyRef {
+        index,
+        repeats,
+        choices,
+    })
 }
 
 #[cfg(test)]
@@ -167,6 +196,15 @@ mod tests {
         predicted: Vec<String>,
         tracker: TouchTracker,
         flow: Flow,
+        /// Long-press choices per key index, in every view.
+        choices: [Vec<&'static str>; 2],
+        /// The key the long-press timer runs for, as the glue starts and
+        /// cancels it.
+        timer: Option<usize>,
+        /// Every timer start: key and time.
+        timer_starts: Vec<(usize, u32)>,
+        /// Whether the choices row is shown.
+        row_shown: bool,
     }
 
     impl Fake {
@@ -180,17 +218,40 @@ mod tests {
                 predicted: Vec::new(),
                 tracker: TouchTracker::default(),
                 flow: Flow::default(),
+                choices: [Vec::new(), Vec::new()],
+                timer: None,
+                timer_starts: Vec::new(),
+                row_shown: false,
             }
         }
 
-        fn apply(&mut self, out: Vec<TouchOut>) {
+        fn apply(&mut self, out: Vec<TouchOut>, time: u32) {
             for o in out {
-                if let TouchOut::Commit(i) = o {
-                    match self.views[self.current][i] {
+                match o {
+                    TouchOut::Pressed(i) if !self.choices[i].is_empty() => {
+                        self.timer = Some(i);
+                        self.timer_starts.push((i, time));
+                    }
+                    TouchOut::Unpressed(_) => self.timer = None,
+                    TouchOut::Commit(i) => match self.views[self.current][i] {
                         Act::Letter(c) => self.typed.push(c),
                         Act::View(v) => self.current = v,
+                    },
+                    TouchOut::OpenChoices(_) => self.row_shown = true,
+                    TouchOut::CommitChoice { key, choice } => {
+                        self.row_shown = false;
+                        self.typed.push_str(self.choices[key][choice]);
                     }
+                    TouchOut::CloseChoices => self.row_shown = false,
+                    _ => {}
                 }
+            }
+        }
+
+        /// The long-press timer fires, if running.
+        fn fire(&mut self, time: u32) {
+            if self.timer.take().is_some() {
+                long_pressed(self, time);
             }
         }
     }
@@ -221,6 +282,15 @@ mod tests {
         fn repeats(&mut self, _: usize) -> bool {
             false
         }
+        fn has_choices(&mut self, index: usize) -> bool {
+            !self.choices[index].is_empty()
+        }
+        fn choices_row(&mut self, index: usize) -> Option<ChoicesRow> {
+            let list: Vec<String> = self.choices[index].iter().map(|c| c.to_string()).collect();
+            let key = self.geoms()[index].rect;
+            (!list.is_empty())
+                .then(|| ChoicesRow::open(key, Rect::new(0.0, -60.0, 400.0, 100.0), list))
+        }
         fn tracker(&mut self) -> &mut TouchTracker {
             &mut self.tracker
         }
@@ -229,10 +299,10 @@ mod tests {
         }
         fn act(&mut self, out: Vec<TouchOut>, time: u32) {
             let view = self.current;
-            self.apply(out);
+            self.apply(out, time);
             if self.current != view {
                 let out = self.tracker.cancel_active(time);
-                self.apply(out);
+                self.apply(out, time);
             }
         }
     }
@@ -251,6 +321,78 @@ mod tests {
             [Act::View(1), Act::Letter('h')],
             [Act::View(0), Act::Letter('H')],
         ])
+    }
+
+    /// `q` and `h`, with `h` long-pressing to `4 ĥ` and `q` to `1`.
+    fn choices_board() -> Fake {
+        let mut b = Fake::new(vec![[Act::Letter('q'), Act::Letter('h')]]);
+        b.choices = [vec!["1"], vec!["4", "ĥ"]];
+        b
+    }
+
+    #[test]
+    fn release_before_timeout_types_the_key() {
+        let mut b = choices_board();
+        press(&mut b, at(A, 60.0, 0));
+        assert_eq!(b.timer, Some(1));
+        release(&mut b, A, 200);
+        assert_eq!(b.timer, None, "release cancels the timer");
+        assert_eq!(b.typed, "h");
+        assert!(!b.row_shown);
+    }
+
+    #[test]
+    fn timeout_opens_choices_and_release_commits_highlighted() {
+        let mut b = choices_board();
+        press(&mut b, at(A, 60.0, 0));
+        b.fire(300);
+        assert!(b.row_shown);
+        assert!(b.tracker.choices_open());
+        release(&mut b, A, 400);
+        assert_eq!(b.typed, "4");
+        assert!(!b.row_shown);
+        // Slide to the second cell (the row runs right from x = 40).
+        press(&mut b, at(A, 60.0, 500));
+        b.fire(800);
+        moved(&mut b, A, Point::new(100.0, -20.0), 850);
+        release(&mut b, A, 900);
+        assert_eq!(b.typed, "4ĥ");
+    }
+
+    #[test]
+    fn slide_to_neighbour_before_timeout_switches_key_and_restarts_timer() {
+        let mut b = choices_board();
+        press(&mut b, at(A, 60.0, 0));
+        moved(&mut b, A, Point::new(20.0, 20.0), 200);
+        assert_eq!(b.timer_starts, vec![(1, 0), (0, 200)]);
+        assert_eq!(b.timer, Some(0));
+        b.fire(500);
+        release(&mut b, A, 600);
+        assert_eq!(b.typed, "1");
+    }
+
+    #[test]
+    fn second_finger_while_open_commits_highlighted_then_presses() {
+        let mut b = choices_board();
+        press(&mut b, at(A, 60.0, 0));
+        b.fire(300);
+        press(&mut b, at(B, 20.0, 400));
+        assert_eq!(b.typed, "4");
+        assert!(!b.row_shown);
+        release(&mut b, A, 450);
+        release(&mut b, B, 500);
+        assert_eq!(b.typed, "4q");
+    }
+
+    #[test]
+    fn slide_off_the_row_and_release_types_nothing() {
+        let mut b = choices_board();
+        press(&mut b, at(A, 60.0, 0));
+        b.fire(300);
+        moved(&mut b, A, Point::new(60.0, 100.0), 350);
+        release(&mut b, A, 400);
+        assert_eq!(b.typed, "");
+        assert!(!b.row_shown);
     }
 
     #[test]

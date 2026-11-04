@@ -167,6 +167,20 @@ pub(crate) fn cased(c: char, state: ShiftState) -> char {
     }
 }
 
+/// A long-press choice as shown and typed under `state`: a single character
+/// is uppercased (any script, `é` to `É`) when shift is on and its capital is
+/// one character; longer choices (`.org`) stay as they are.
+pub(crate) fn cased_choice(choice: &str, state: ShiftState) -> String {
+    let mut chars = choice.chars();
+    if let (Some(c), None, false) = (chars.next(), chars.next(), state == ShiftState::Off) {
+        let mut upper = c.to_uppercase();
+        if let (Some(u), None) = (upper.next(), upper.next()) {
+            return u.to_string();
+        }
+    }
+    choice.to_string()
+}
+
 /// Show the current shift state: relabel every letter key in every view and
 /// repaint the ⇧ keys.
 pub(crate) fn refresh(ctx: &mut Context<'_, Keyboard>) {
