@@ -26,12 +26,12 @@ fn base_geometry(keymap: &Keymap) -> Vec<KeyGeom> {
     let row_w = kb.width.unwrap_or(540.0) - 2.0 * kb.padding;
     let mut out = Vec::new();
     for (r, row) in view.rows.iter().enumerate() {
-        let n = row.keys.len() as f32;
-        let total: f32 = row.keys.iter().map(|k| k.width).sum();
+        let n = row.keys().count() as f32;
+        let total: f32 = row.keys().map(|k| k.width).sum();
         let avail = row_w - (n - 1.0) * kb.gap;
         let y = kb.padding + r as f32 * (row_h + kb.row_gap);
         let mut x = kb.padding;
-        for key in &row.keys {
+        for key in row.keys() {
             let w = key.width / total * avail;
             let letter = match &key.action {
                 KeyAction::EmitKeysym(ks) => letter_of(*ks),

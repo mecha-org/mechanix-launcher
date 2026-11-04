@@ -125,7 +125,7 @@ impl Widget for Keyboard {
                     div().style(LayoutStyle::default().row().fill().gap(px(style.gap))),
                 );
 
-                for key in &row.keys {
+                for key in row.keys() {
                     // The label keeps its normal font while latched.
                     let label_style = key.look.style(KeyState::Normal);
                     let key_handle = s.spawn(

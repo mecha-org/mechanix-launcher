@@ -18,7 +18,7 @@ use tokens::Font;
 // `Row` and `View` are part of the module's public surface even where no
 // sibling currently names them.
 #[allow(unused_imports)]
-pub use keymap::{Key, KeyAction, KeyFace, Keymap, Modifier, Row, View};
+pub use keymap::{Cell, Family, Key, KeyAction, KeyFace, Keymap, Modifier, Page, Row, View};
 
 /// Default predictive-touch bias strength.
 pub const DEFAULT_STRENGTH: f32 = 0.25;

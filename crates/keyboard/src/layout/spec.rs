@@ -17,9 +17,40 @@ pub(crate) struct Layout {
     #[serde(default)]
     pub(crate) key_styles: HashMap<String, KeyStyleSpec>,
     pub(crate) outlines: HashMap<String, Outline>,
-    pub(crate) views: HashMap<String, Vec<String>>,
+    pub(crate) views: HashMap<String, ViewSpec>,
     #[serde(default)]
     pub(crate) buttons: HashMap<String, Button>,
+}
+
+/// A view: a plain list of rows, or a map with family/page/extends metadata.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum ViewSpec {
+    Rows(Vec<RowSpec>),
+    Map(ViewMap),
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct ViewMap {
+    pub(crate) family: Option<String>,
+    pub(crate) page: Option<String>,
+    /// Copy rows from this view (after this view's own `rows`), then `replace`.
+    pub(crate) extends: Option<String>,
+    /// Token to token, applied to every occurrence.
+    #[serde(default)]
+    pub(crate) replace: HashMap<String, String>,
+    /// Which set in `more_keys.yaml` this view uses (consumed later).
+    #[allow(dead_code)]
+    pub(crate) more_keys: Option<String>,
+    pub(crate) rows: Option<Vec<RowSpec>>,
+}
+
+/// A row: a whitespace-separated token string, or one with a height weight.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum RowSpec {
+    Keys(String),
+    Sized { height: Option<f32>, keys: String },
 }
 
 /// Applies to the entire keyboard container layout.
@@ -66,6 +97,7 @@ pub(crate) struct Outline {
 pub(crate) enum ActionSpec {
     Named(String),
     SetView { set_view: String },
+    Page { page: String },
     Locking { locking: LockingSpec },
     Other(serde::de::IgnoredAny),
 }

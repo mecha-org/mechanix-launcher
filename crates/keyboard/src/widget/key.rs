@@ -32,6 +32,8 @@ fn kind_of(action: &KeyAction) -> KeyKind {
         | KeyAction::ToggleView { .. }
         | KeyAction::HideKeyboard
         | KeyAction::ToggleExclusiveZone
+        | KeyAction::Page(_)
+        | KeyAction::Shift
         | KeyAction::Unhandled(_) => KeyKind::Function,
     }
 }

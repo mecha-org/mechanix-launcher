@@ -82,6 +82,9 @@ pub(crate) fn dispatch(ctx: &mut Context<'_, Keyboard>, action: &KeyAction) {
         KeyAction::ToggleExclusiveZone => {
             toggle_exclusive_zone(ctx);
         }
+        KeyAction::Page(_) | KeyAction::Shift => {
+            tracing::info!(?action, "tapped key whose action is not wired yet");
+        }
         KeyAction::Unhandled(name) => {
             tracing::info!(action = %name, "tapped key with no wired action");
         }
