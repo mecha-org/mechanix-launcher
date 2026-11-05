@@ -36,7 +36,7 @@ impl Widget for BrightnessSlider {
                     .row()
                     .width(percent(100.0))
                     .center()
-                    .gap(px(Spacing::Space200.dp())),
+                    .gap(px(Spacing::Space300.dp())),
             ),
         );
 

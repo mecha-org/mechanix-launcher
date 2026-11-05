@@ -42,7 +42,7 @@ impl Widget for VolumeSlider {
                     .row()
                     .width(percent(100.0))
                     .center()
-                    .gap(px(Spacing::Space200.dp())),
+                    .gap(px(Spacing::Space300.dp())),
             ),
         );
 

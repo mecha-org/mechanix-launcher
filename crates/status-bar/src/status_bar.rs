@@ -39,7 +39,7 @@ impl Widget for StatusBar {
             .center()
             .width(percent(100.0))
             .height(px(DEFAULT_BAR_HEIGHT))
-            .padding(Insets::symmetric(px(20.0), px(8.0)))
+            .padding(Insets::symmetric(px(20.0), px(6.0)))
             .justify(Justify::SpaceBetween);
 
         // Pitch black background

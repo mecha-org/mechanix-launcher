@@ -4,10 +4,6 @@ use crate::indicators::{indicator_layout, load_svg_icon};
 
 use assets::icons::bluetooth as svg;
 
-/// The Bluetooth glyphs fill more of their box than the other status icons,
-/// so they're drawn smaller and centered in the indicator slot.
-pub const BLUETOOTH_ICON_SIZE: u32 = 24;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BluetoothState {
     Connected,
@@ -44,7 +40,6 @@ pub struct BluetoothIcons {
 
 impl BluetoothIcons {
     pub fn load(atlas: &mut Atlas, master: u32) -> Result<Self, Error> {
-        let master = master.min(BLUETOOTH_ICON_SIZE);
         Ok(Self {
             default: load_svg_icon(atlas, svg::DEFAULT, master)?,
             connected: load_svg_icon(atlas, svg::CONNECTED, master)?,
