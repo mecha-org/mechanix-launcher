@@ -21,3 +21,7 @@ target
 #.idea/
 
 docs/
+
+# mechanix-packager output
+/dist/
+/stage/
