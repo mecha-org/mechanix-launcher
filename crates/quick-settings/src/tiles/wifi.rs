@@ -8,7 +8,7 @@ use mecha_wayland::prelude::*;
 
 use services::{APUpdate, SetWifiEnabled, StateUpdate, WifiState};
 
-use super::{DOT_RADIUS, WIDE_GAP, build_tile};
+use super::{Borders, DOT_RADIUS, WIDE_GAP, build_tile, tile_quad};
 use crate::util::{load_icon, short_name};
 
 /// Latest Wi-Fi details used to render the tile.
@@ -17,6 +17,7 @@ pub struct Wifi {
     state: WifiState,
     ssid: String,
     strength: u8,
+    borders: Borders,
     // TODO: maybe store sprites in the widget itself ?
 }
 
@@ -33,7 +34,10 @@ struct WifiSprites {
 }
 
 /// Builds the Wi-Fi tile and subscribes it to updates.
-pub struct WifiBuilder;
+pub struct WifiBuilder {
+    /// Which sides get a border, e.g. [`borders::ALL`](super::borders::ALL).
+    pub borders: Borders,
+}
 
 impl Build for WifiBuilder {
     type Widget = Wifi;
@@ -42,8 +46,8 @@ impl Build for WifiBuilder {
 impl Widget for Wifi {
     type Builder = WifiBuilder;
 
-    fn build(_: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
-        let icon_handle = build_tile(me, s, icons::HIGH, WIDE_GAP);
+    fn build(b: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
+        let icon_handle = build_tile(me, s, icons::HIGH, WIDE_GAP, b.borders);
         // Load sprites once; event handlers only switch between their IDs.
         let atlas = &mut s.resource_mut::<Atlas>();
         let sprites = WifiSprites {
@@ -117,6 +121,7 @@ impl Widget for Wifi {
             state: WifiState::Unavailable,
             ssid: "".to_string(),
             strength: 0,
+            borders: b.borders,
         }
     }
 }
@@ -134,6 +139,7 @@ fn render(
     let on_icon_colour = ctx.color(ColorRole::OnSurface);
 
     let wifi = ctx.me();
+    let wifi_borders = wifi.borders;
     let mut ssid = String::new();
 
     // Connection state takes precedence over any cached SSID or strength.
@@ -160,7 +166,7 @@ fn render(
     } else {
         Color::TRANSPARENT
     };
-    let tile = Quad::new(background).border(1.0, border_colour);
+    let tile = tile_quad(background, border_colour, wifi_borders);
     let icon_colour = if on { on_icon_colour } else { off_icon_colour };
     let dot_paint = if on {
         Paint::Quad(Quad::new(ctx.color(ColorRole::Primary)).radius(DOT_RADIUS))

@@ -3,7 +3,7 @@ use mecha_wayland::mechanix_widgets::prelude::{
 };
 use mecha_wayland::prelude::*;
 
-use super::{DOT_RADIUS, WIDE_GAP, build_tile};
+use super::{Borders, DOT_RADIUS, WIDE_GAP, build_tile, tile_quad};
 use crate::util::{load_icon, short_name};
 use services::{BluetoothState, BluetoothStateChanged, ToggleBluetooth};
 
@@ -16,9 +16,13 @@ pub struct Bluetooth {
     pub icon_on: SpriteId,
     pub icon_off: SpriteId,
     pub icon_connected: SpriteId,
+    borders: Borders,
 }
 
-pub struct BluetoothBuilder;
+pub struct BluetoothBuilder {
+    /// Which sides get a border, e.g. [`borders::ALL`](super::borders::ALL).
+    pub borders: Borders,
+}
 
 impl Build for BluetoothBuilder {
     type Widget = Bluetooth;
@@ -27,13 +31,13 @@ impl Build for BluetoothBuilder {
 impl Widget for Bluetooth {
     type Builder = BluetoothBuilder;
 
-    fn build(_: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
+    fn build(b: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
         // Off and On (not connected) share the plain glyph; only a connection changes it.
         let icon_on = load_icon(&mut s.resource_mut::<Atlas>(), svg::DEFAULT);
         let icon_off = icon_on;
         let icon_connected = load_icon(&mut s.resource_mut::<Atlas>(), svg::CONNECTED);
 
-        let icon = build_tile(me, s, svg::DEFAULT, WIDE_GAP);
+        let icon = build_tile(me, s, svg::DEFAULT, WIDE_GAP, b.borders);
 
         // Only shown while connected, so the icon sits centred otherwise.
         // `short_name` abbreviates device names; ellipsis overflow is a fallback for narrow tiles.
@@ -71,6 +75,7 @@ impl Widget for Bluetooth {
             icon_on,
             icon_off,
             icon_connected,
+            borders: b.borders,
         }
     }
 }
@@ -81,9 +86,9 @@ pub trait BluetoothContext {
 
 impl BluetoothContext for Context<'_, Bluetooth> {
     fn set_state(&mut self, state: BluetoothState) {
-        let (icon_on, icon_off, icon_connected) = {
+        let (icon_on, icon_off, icon_connected, borders) = {
             let me = self.me();
-            (me.icon_on, me.icon_off, me.icon_connected)
+            (me.icon_on, me.icon_off, me.icon_connected, me.borders)
         };
         let is_on = state != BluetoothState::Off;
         let bg_color = if is_on {
@@ -100,7 +105,7 @@ impl BluetoothContext for Context<'_, Bluetooth> {
             Paint::None
         };
 
-        self.set_paint(Paint::Quad(Quad::new(bg_color).border(1.0, border_color)));
+        self.set_paint(Paint::Quad(tile_quad(bg_color, border_color, borders)));
 
         let (sprite, text) = match state {
             BluetoothState::Off => (icon_off, None),

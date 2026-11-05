@@ -5,7 +5,7 @@ use mecha_wayland::prelude::*;
 
 use services::BatteryPercentageChanged;
 
-use super::{WIDE_GAP, build_tile};
+use super::{Borders, WIDE_GAP, build_tile};
 use crate::util::load_icon;
 
 /// One icon per 10% step, index 0 = 10% … index 9 = 100%.
@@ -28,7 +28,10 @@ pub struct Battery {
     levels: [SpriteId; 10],
 }
 
-pub struct BatteryBuilder;
+pub struct BatteryBuilder {
+    /// Which sides get a border, e.g. [`borders::ALL`](super::borders::ALL).
+    pub borders: Borders,
+}
 
 impl Build for BatteryBuilder {
     type Widget = Battery;
@@ -37,10 +40,10 @@ impl Build for BatteryBuilder {
 impl Widget for Battery {
     type Builder = BatteryBuilder;
 
-    fn build(_: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
+    fn build(b: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
         let levels = LEVELS.map(|svg| load_icon(&mut s.resource_mut::<Atlas>(), svg));
 
-        let icon = build_tile(me, s, LEVELS[0], WIDE_GAP);
+        let icon = build_tile(me, s, LEVELS[0], WIDE_GAP, b.borders);
         let percentage = s.spawn(
             me,
             text("N/A")
