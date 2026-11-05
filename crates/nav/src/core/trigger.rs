@@ -13,6 +13,9 @@ use super::{AreaId, EXTERNAL};
 pub enum ExternalEvent {
     /// A screen started an app.
     AppLaunched,
+    /// A new app window, not a dialog, opened with focus, however it was
+    /// started.
+    WindowOpened,
 }
 
 pub trait Trigger: 'static {

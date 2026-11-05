@@ -61,6 +61,9 @@ const ALL_SIDES: Anchor = Anchor::from_bits_truncate(
     Anchor::TOP.bits() | Anchor::BOTTOM.bits() | Anchor::LEFT.bits() | Anchor::RIGHT.bits(),
 );
 
+/// A layer role. The namespace prefix tells the compositor the surface's role,
+/// which decides its stacking: `mx-edge-` gesture zones and `mx-bar-` bars
+/// above `mx-view-` views, all above a fullscreen app.
 fn role(layer: Layer, anchor: Anchor, exclusive_zone: i32, namespace: &str) -> Role {
     Role::Layer(LayerRole {
         layer,
@@ -106,6 +109,7 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
     let home = container(HOME_ID, Home)
         .open(bottom_quick(), FADE)
         .close(OnExternal(ExternalEvent::AppLaunched), INSTANT)
+        .close(OnExternal(ExternalEvent::WindowOpened), INSTANT)
         .child(
             container(DRAWER, drawer)
                 .open(swipe(HOME, Direction::Up, Timing::Any), INSTANT)
@@ -130,7 +134,7 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
         .window(
             nav_window(
                 HOME,
-                role(Layer::Top, ALL_SIDES, 0, "home"),
+                role(Layer::Top, ALL_SIDES, 0, "mx-view-home"),
                 LayoutStyle::default(),
             )
             .container(home),
@@ -138,7 +142,7 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
         .window(
             nav_window(
                 RUNNING_APPS,
-                role(Layer::Top, ALL_SIDES, 0, "running-apps"),
+                role(Layer::Top, ALL_SIDES, 0, "mx-view-running-apps"),
                 LayoutStyle::default(),
             )
             .container(running),
@@ -149,7 +153,7 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
                 // Above the keyboard, in the gap it leaves under its keys;
                 // zone -1 keeps it on the edge rather than above the
                 // keyboard's zone.
-                role(Layer::Overlay, Anchor::BOTTOM | sides, -1, "bottom-edge"),
+                role(Layer::Overlay, Anchor::BOTTOM | sides, -1, "mx-edge-bottom"),
                 strip,
             )
             .transparent(),
@@ -157,7 +161,7 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
         .window(
             nav_window(
                 PANEL,
-                role(Layer::Top, ALL_SIDES, 0, "panel"),
+                role(Layer::Top, ALL_SIDES, 0, "mx-view-panel"),
                 LayoutStyle::default(),
             )
             .container(panel(NOTIFICATIONS, Notifications, Span::LeftHalf))
@@ -166,7 +170,7 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
         .window(
             nav_window(
                 TOP_EDGE,
-                role(Layer::Overlay, Anchor::TOP | sides, -1, "top-edge"),
+                role(Layer::Overlay, Anchor::TOP | sides, -1, "mx-edge-top"),
                 bar.clone(),
             )
             .transparent(),
@@ -178,7 +182,7 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
                     Layer::Overlay,
                     Anchor::TOP | sides,
                     DEFAULT_BAR_HEIGHT as i32,
-                    "status-bar",
+                    "mx-bar-status",
                 ),
                 bar,
             )

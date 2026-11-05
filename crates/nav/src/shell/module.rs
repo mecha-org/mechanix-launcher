@@ -184,7 +184,9 @@ impl Module for NavModule {
         app.system(on_resized);
         app.system(on_contact);
         app.system(on_frame);
+        app.insert_resource(SeenToplevels(Vec::new()));
         app.system(on_app_launched);
+        app.system(on_toplevels_changed);
         apply(app);
     }
 }
@@ -195,6 +197,37 @@ fn on_app_launched(app: &mut App, _: &AppLaunched) {
         .stack
         .handle(Input::External(ExternalEvent::AppLaunched));
     apply(app);
+}
+
+/// The open windows that have had focus.
+struct SeenToplevels(Vec<ToplevelId>);
+impl Resource for SeenToplevels {}
+
+/// Feeds an app window's first focus to the stack, so an app opened from
+/// elsewhere shows rather than staying behind the shell. Dialogs and focus
+/// returning to a window, as when another closes, do not count.
+fn on_toplevels_changed(app: &mut App, _: &ToplevelsChanged) {
+    if !app.has_resource::<Toplevels>() {
+        return;
+    }
+    let opened = {
+        let (toplevels, mut seen) = app.query::<(Res<Toplevels>, ResMut<SeenToplevels>)>();
+        let opened = toplevels
+            .iter()
+            .any(|t| t.activated && t.parent.is_none() && !seen.0.contains(&t.id));
+        seen.0 = toplevels
+            .iter()
+            .filter(|t| t.last_activated != 0)
+            .map(|t| t.id)
+            .collect();
+        opened
+    };
+    if opened {
+        app.resource_mut::<Nav>()
+            .stack
+            .handle(Input::External(ExternalEvent::WindowOpened));
+        apply(app);
+    }
 }
 
 #[cfg(test)]
