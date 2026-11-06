@@ -3,6 +3,7 @@ use screen::Screen;
 
 pub mod app_screens;
 pub mod control_center;
+pub mod drag_handle;
 pub mod screen_selector;
 
 use crate::app_screens::AppScreen;

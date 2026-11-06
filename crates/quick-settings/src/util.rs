@@ -2,12 +2,6 @@ use mecha_wayland::prelude::*;
 // TODO: need to refactor this file
 const ICON_SIZE: u32 = 32;
 
-pub fn full_width(height: f32) -> LayoutStyle {
-    LayoutStyle::default()
-        .size(percent(100.0), px(height))
-        .shrink(0.0)
-}
-
 /// Loads an SVG as a one-colour shape (its colours are dropped; the widget's
 /// `color` fills it). The atlas keeps the SVG and redraws it when the display
 /// scale changes, so it stays sharp.

@@ -1,11 +1,8 @@
 use mecha_wayland::prelude::*;
 
 use crate::bottom_bar::BottomBarBuilder;
-use crate::drag_handle::DragHandleBuilder;
 use crate::header::HeaderBuilder;
 use crate::sliders::SlidersBuilder;
-
-const SECTION_GAP: f32 = 31.0;
 
 pub struct QuickSettings;
 
@@ -27,9 +24,8 @@ impl Widget for QuickSettings {
             .fill()
             .width(percent(100.0))
             .height(percent(100.0))
-            .column()
             .justify(Justify::SpaceBetween)
-            .gap(px(SECTION_GAP));
+            .column();
 
         // Header and footer keep their fixed heights; the sliders grow
         // into the space between them and center themselves there.
@@ -47,7 +43,6 @@ impl Widget for QuickSettings {
             ),
         );
         s.spawn(footer, b.bottom_bar);
-        s.spawn(footer, DragHandleBuilder);
 
         QuickSettings
     }

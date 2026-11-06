@@ -1,4 +1,5 @@
 use crate::app_screens::AppScreen;
+use crate::drag_handle::DragHandleBuilder;
 use crate::screen_selector::ScreenSelectorBuilder;
 use mecha_wayland::prelude::*;
 
@@ -42,10 +43,14 @@ impl Widget for ControlCenter {
                 LayoutStyle::default()
                     .width(percent(100.0))
                     .grow(1.0)
+                    .min_height(px(0.0))
                     .display(shown(opened == screen)),
             )
         };
         let containers = AppScreen::ALL.map(|screen| (screen, s.spawn(me, container(screen))));
+        // One handle for every screen: the panel closes on an up swipe
+        // whichever screen is showing.
+        s.spawn(me, DragHandleBuilder);
 
         s.on::<AppScreen>(me, move |ctx, selected| {
             for (screen, node) in containers {
