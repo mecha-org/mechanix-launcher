@@ -1,14 +1,14 @@
+use crate::card_drag::{CardDrag, Moved, Settle};
+use crate::card_options::{self, CardOption, CardOptions, CardOptionsBuilder, CardOptionsPressed};
 use crate::dbus_spec::{NOTIFICATIONS_EXPIRY, NOTIFIFICATION_DISMISSED};
 use crate::millis::Millis;
 use crate::notification_store::Entry;
-use crate::notifications_control_center::NotificationsControlListBuilder;
-use crate::notify_signal::NotificationSignal::RemoveNotification;
+use crate::notify_signal::NotificationSignal::{RemoveNotification, ShowOptions};
 use crate::rich_text::RichTextBuilder;
 use crate::rich_text::RichTextExt;
-use crate::style::{color, shape, size, space, text};
-use crate::toggle::Toggle;
+use crate::style::{color, size, space, text};
 use mecha_wayland::mechanix_widgets::prelude::TextContextExt;
-use mecha_wayland::mechanix_widgets::{self as mw, button};
+use mecha_wayland::mechanix_widgets::{self as mw};
 use mecha_wayland::prelude::*;
 use std::time::Duration;
 use std::time::SystemTime;
@@ -19,6 +19,9 @@ pub struct CardBuilder {
 
 pub struct Card {
     pub notification_id: u32,
+    drag: CardDrag,
+    content: Handle<Div>,
+    options: Handle<CardOptions>,
 }
 
 pub struct UpdateCard(pub Entry);
@@ -35,26 +38,16 @@ impl Widget for Card {
     type Builder = CardBuilder;
 
     fn build(b: CardBuilder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
-        *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
-            .row()
-            .align_items(Align::Center)
-            .size(px(size::CARD_WIDTH), px(size::CARD_HEIGHT))
-            .padding(Insets::new(
-                px(0.0),
-                px(space::CARD_X.dp()),
-                px(0.0),
-                px(space::CARD_X.dp()),
-            ))
-            .gap(px(space::ICON_TO_TEXT.dp()));
-        *s.component_mut::<Paint>(me).unwrap() = Paint::Quad(
-            Quad::new(s.color(color::CARD))
-                .radius(shape::CARD.resolve_radius_dp(size::CARD_HEIGHT)),
-        );
+        *s.component_mut::<LayoutStyle>(me).unwrap() =
+            LayoutStyle::default().relative().width(percent(100.0));
+        s.component_mut::<Viewport>(me).unwrap().clip = true;
 
-        // TODO: Load icons based on the categories
+        let content = s.spawn(me, div().style(content_style(0.0)));
+
+        // TODO: app glyph from `app_icon` / `desktop-entry`, centred in here.
         s.spawn(
-            me,
-            div().style(
+            content,
+            div().background(s.color(color::ICON_TILE)).style(
                 LayoutStyle::default()
                     .size(px(size::ICON), px(size::ICON))
                     .shrink(0.0),
@@ -73,7 +66,7 @@ impl Widget for Card {
         };
 
         let column = s.spawn(
-            me,
+            content,
             div().style(
                 LayoutStyle::default()
                     .column()
@@ -84,36 +77,13 @@ impl Widget for Card {
             ),
         );
 
-        let title_row = s.spawn(
-            column,
-            div().style(
-                LayoutStyle::default()
-                    .row()
-                    .justify(Justify::SpaceBetween)
-                    .align_items(Align::End)
-                    .gap(px(space::TITLE_TO_BODY.dp())),
-            ),
-        );
-        let close_btn = s.spawn(title_row, button().label("close"));
-        let id = b.entry.id;
-        s.on::<Clicked>(close_btn, move |ctx, _| {
-            close_notification(ctx, id);
-        });
         let summary = s.spawn(
-            title_row,
+            column,
             mw::text(b.entry.notification.summary)
                 .variant(text::CARD_TITLE.variant)
                 .color(text::CARD_TITLE.color)
-                .emphasised()
                 .max_lines(1)
                 .overflow(TextOverflow::Ellipsis),
-        );
-
-        let time = s.spawn(
-            title_row,
-            mw::text(ago(b.entry.received_time))
-                .variant(text::CARD_TIME.variant)
-                .color(text::CARD_TIME.color),
         );
 
         let rich_text = s.spawn(
@@ -123,17 +93,62 @@ impl Widget for Card {
             },
         );
 
-        let controls = s.spawn(
-            column,
-            NotificationsControlListBuilder {
-                notification_id: b.entry.id,
-            },
+        let time = s.spawn(
+            content,
+            mw::text(ago(b.entry.received_time))
+                .variant(text::CARD_TIME.variant)
+                .color(text::CARD_TIME.color),
         );
 
-        let toggle_btn = s.spawn(me, button().label("..."));
-        s.on::<Clicked>(toggle_btn, move |ctx, _| {
-            ctx.emit(Toggle, controls);
+        let options = s.spawn(me, CardOptionsBuilder { card: me.id() });
+
+        let id = b.entry.id;
+        s.on::<CardOptionsPressed>(me, move |ctx, e| {
+            if ctx.me().drag.ended_in_swipe() {
+                return;
+            }
+            match (e.option, e.anchor) {
+                (CardOption::Dismiss, _) => dismiss(ctx, id),
+                (CardOption::Options, Some(anchor)) => {
+                    ctx.signal(ShowOptions(id, anchor));
+                }
+                (CardOption::Options, None) => {}
+            }
         });
+
+        s.on::<Press>(me, |ctx, e| ctx.me().drag.press(e.contact, e.position))
+            .on::<PressMoved>(me, |ctx, e| {
+                let w = width(ctx);
+                match ctx.me().drag.update(e.contact, e.position, w) {
+                    Moved::Claim => {
+                        if ctx.claim_contact(e.contact) {
+                            ctx.me().drag.start_swipe();
+                        }
+                    }
+                    Moved::Slide(offset) => set_offset(ctx, offset),
+                    Moved::Ignore => {}
+                }
+            })
+            .on::<Release>(me, move |ctx, e| {
+                let w = width(ctx);
+                match ctx.me().drag.release(e.contact, w) {
+                    Settle::Rest(offset) => set_offset(ctx, offset),
+                    Settle::Dismiss => dismiss(ctx, id),
+                    Settle::Ignore => {}
+                }
+            })
+            .on::<PressCancelled>(me, |ctx, _| {
+                let offset = ctx.me().drag.cancel();
+                set_offset(ctx, offset);
+            })
+            .on::<Clicked>(content.id(), |ctx, _| {
+                if ctx.me().drag.ended_in_swipe() {
+                    return;
+                }
+                if ctx.me().drag.offset() < 0.0 {
+                    set_offset(ctx, 0.0);
+                }
+            });
 
         s.on::<UpdateCard>(me, move |ctx, e| {
             let entry = &e.0;
@@ -162,15 +177,14 @@ impl Widget for Card {
         s.on::<SnoozeCard>(me, move |ctx, e| {
             ctx.component_mut::<LayoutStyle>().unwrap().display = Display::Hidden;
             ctx.start_timer_for(snooze, e.0.duration());
-            // close the controls too
-            ctx.at(controls)
-                .unwrap()
-                .component_mut::<LayoutStyle>()
-                .unwrap()
-                .display = Display::Hidden;
+            // come back closed
+            set_offset(ctx, 0.0);
         });
         Card {
             notification_id: b.entry.id,
+            drag: CardDrag::default(),
+            content,
+            options,
         }
     }
 }
@@ -185,12 +199,46 @@ fn ago(t: SystemTime) -> String {
         .as_secs();
     match secs {
         0..60 => "now".into(),
-        60..3_600 => format!("{} m", secs / 60),
-        3_600..86_400 => format!("{} h", secs / 3_600),
-        _ => format!("{} d", secs / 86_400),
+        60..3_600 => format!("{}m", secs / 60),
+        3_600..86_400 => format!("{}h", secs / 3_600),
+        _ => format!("{}d", secs / 86_400),
     }
 }
 
-fn close_notification(ctx: &mut Context<Card>, id: u32) {
+fn content_style(offset: f32) -> LayoutStyle {
+    LayoutStyle::default()
+        .row()
+        .relative()
+        .inset(Insets::new(auto(), auto(), auto(), px(offset)))
+        .align_items(Align::Center)
+        .width(percent(100.0))
+        .min_height(px(size::CARD_MIN_HEIGHT))
+        .padding(Insets::all(px(space::CARD_PAD.dp())))
+        .gap(px(space::ICON_TO_TEXT.dp()))
+}
+
+fn set_offset(ctx: &mut Context<'_, Card>, offset: f32) {
+    ctx.me().drag.set_offset(offset);
+    let (content, options) = (ctx.me().content, ctx.me().options);
+    if let Some(mut n) = ctx.at(content) {
+        restyle(&mut n, content_style(offset));
+    }
+    if let Some(mut n) = ctx.at(options) {
+        restyle(&mut n, card_options::style(offset));
+    }
+}
+
+fn restyle<W: Widget>(n: &mut Context<'_, W>, style: LayoutStyle) {
+    if *n.component::<LayoutStyle>().unwrap() != style {
+        *n.component_mut::<LayoutStyle>().unwrap() = style;
+    }
+}
+
+fn width(ctx: &mut Context<'_, Card>) -> f32 {
+    ctx.component::<ComputedLayout>()
+        .map_or(0.0, |l| l.rect.width())
+}
+
+fn dismiss(ctx: &mut Context<Card>, id: u32) {
     ctx.signal(RemoveNotification(id, NOTIFIFICATION_DISMISSED));
 }

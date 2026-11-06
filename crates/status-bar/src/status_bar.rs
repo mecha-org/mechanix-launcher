@@ -54,7 +54,7 @@ impl Widget for StatusBar {
         let clock = s.spawn(
             left_cluster,
             clock(CLOCK_FORMAT)
-                .interval(ClockInterval::Second)
+                .interval(ClockInterval::Minute)
                 .size(14.0)
                 .color(ColorRole::OnSecondaryContainer),
         );

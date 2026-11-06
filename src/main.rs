@@ -1,5 +1,7 @@
 use app_drawer::{AppDrawer, GEIST_MONO, GEIST_MONO_LIGHT};
 use apps::RegistryModule;
+use control_center::app_screens::AppScreen;
+use control_center::{ControlCenterScreen, select_screen};
 use home::Home;
 use keyboard::{KeyboardModule, hide_keyboard, show_keyboard, suspend_keyboard_zone};
 use mecha_pulseaudio::{PulseAudioModule, VolumeControlModule};
@@ -10,8 +12,8 @@ use nav::core::{
     OnExternal, Span, TOP_EDGE, Timing, container, gated, swipe,
 };
 use nav::shell::{ContainerShown, NavModule, nav_window};
-use notifications::{Notifications, NotificationsModule};
-use quick_settings::{QuickSettingsModule, QuickSettingsScreen};
+use notifications::NotificationsModule;
+use quick_settings::QuickSettingsModule;
 use running_apps::{RunningApps, RunningAppsModule};
 use status_bar::{
     DEFAULT_BAR_HEIGHT, DEFAULT_ICON_SIZE, StatusBarModule, StatusBarScreen, StatusIcons,
@@ -25,14 +27,13 @@ const STATUS_BAR: AreaId = AreaId("status-bar");
 const HOME_ID: ContainerId = ContainerId("home");
 const DRAWER: ContainerId = ContainerId("drawer");
 const RUNNING: ContainerId = ContainerId("running");
-const NOTIFICATIONS: ContainerId = ContainerId("notifications");
-const QUICK_SETTINGS: ContainerId = ContainerId("quick_settings");
+const CONTROL_CENTER: ContainerId = ContainerId("control_center");
 const STATUS: ContainerId = ContainerId("status");
 
 /// The launcher screens that cover apps. While any is open the keyboard
 /// reserves no space, so they and the apps under them keep their full
 /// size; opening one hides the keyboard.
-const COVERS: [ContainerId; 4] = [HOME_ID, RUNNING, NOTIFICATIONS, QUICK_SETTINGS];
+const COVERS: [ContainerId; 3] = [HOME_ID, RUNNING, CONTROL_CENTER];
 
 /// The [`COVERS`] open now.
 struct OpenCovers(Vec<ContainerId>);
@@ -62,6 +63,9 @@ const ALL_SIDES: Anchor = Anchor::from_bits_truncate(
     Anchor::TOP.bits() | Anchor::BOTTOM.bits() | Anchor::LEFT.bits() | Anchor::RIGHT.bits(),
 );
 
+/// A layer role. The namespace prefix tells the compositor the surface's role,
+/// which decides its stacking: `mx-edge-` gesture zones and `mx-bar-` bars
+/// above `mx-view-` views, all above a fullscreen app.
 fn role(layer: Layer, anchor: Anchor, exclusive_zone: i32, namespace: &str) -> Role {
     Role::Layer(LayerRole {
         layer,
@@ -83,7 +87,7 @@ fn bottom_corner(span: Span) -> nav::core::Swipe {
     swipe(BOTTOM_EDGE, Direction::Up, Timing::Any).span(span)
 }
 
-/// A panel that pulls down from its half of the top edge and closes on an up swipe.
+/// A panel that pulls down from its span of the top edge and closes on an up swipe.
 fn panel(id: ContainerId, screen: impl screen::Screen, span: Span) -> nav::core::ContainerSpec {
     container(id, screen)
         .open(
@@ -91,6 +95,10 @@ fn panel(id: ContainerId, screen: impl screen::Screen, span: Span) -> nav::core:
             INSTANT,
         )
         .close(swipe(PANEL, Direction::Up, Timing::Any), INSTANT)
+}
+
+fn top_half(span: Span) -> nav::core::Swipe {
+    swipe(TOP_EDGE, Direction::Down, Timing::Any).span(span)
 }
 
 /// Opaque space under the keyboard's keys; the bottom swipe strip sits inside it.
@@ -107,6 +115,7 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
     let home = container(HOME_ID, Home)
         .open(bottom_quick(), FADE)
         .close(OnExternal(ExternalEvent::AppLaunched), INSTANT)
+        .close(OnExternal(ExternalEvent::WindowOpened), INSTANT)
         .child(
             container(DRAWER, drawer)
                 .open(swipe(HOME, Direction::Up, Timing::Any), INSTANT)
@@ -128,10 +137,16 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
     NavModule::new(cfg)
         .action(bottom_corner(Span::LeftCorner), show_keyboard)
         .action(bottom_corner(Span::RightCorner), show_keyboard)
+        .action(top_half(Span::LeftHalf), |app| {
+            select_screen(app, AppScreen::NotificationsScreen)
+        })
+        .action(top_half(Span::RightHalf), |app| {
+            select_screen(app, AppScreen::QuickSettingsScreen)
+        })
         .window(
             nav_window(
                 HOME,
-                role(Layer::Top, ALL_SIDES, 0, "home"),
+                role(Layer::Top, ALL_SIDES, 0, "mx-view-home"),
                 LayoutStyle::default(),
             )
             .container(home),
@@ -139,7 +154,7 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
         .window(
             nav_window(
                 RUNNING_APPS,
-                role(Layer::Top, ALL_SIDES, 0, "running-apps"),
+                role(Layer::Top, ALL_SIDES, 0, "mx-view-running-apps"),
                 LayoutStyle::default(),
             )
             .container(running),
@@ -150,7 +165,7 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
                 // Above the keyboard, in the gap it leaves under its keys;
                 // zone -1 keeps it on the edge rather than above the
                 // keyboard's zone.
-                role(Layer::Overlay, Anchor::BOTTOM | sides, -1, "bottom-edge"),
+                role(Layer::Overlay, Anchor::BOTTOM | sides, -1, "mx-edge-bottom"),
                 strip,
             )
             .transparent(),
@@ -158,16 +173,15 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
         .window(
             nav_window(
                 PANEL,
-                role(Layer::Top, ALL_SIDES, 0, "panel"),
+                role(Layer::Top, ALL_SIDES, 0, "mx-view-panel"),
                 LayoutStyle::default(),
             )
-            .container(panel(NOTIFICATIONS, Notifications, Span::LeftHalf))
-            .container(panel(QUICK_SETTINGS, QuickSettingsScreen, Span::RightHalf)),
+            .container(panel(CONTROL_CENTER, ControlCenterScreen, Span::Whole)),
         )
         .window(
             nav_window(
                 TOP_EDGE,
-                role(Layer::Overlay, Anchor::TOP | sides, -1, "top-edge"),
+                role(Layer::Overlay, Anchor::TOP | sides, -1, "mx-edge-top"),
                 bar.clone(),
             )
             .transparent(),
@@ -179,7 +193,7 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
                     Layer::Overlay,
                     Anchor::TOP | sides,
                     DEFAULT_BAR_HEIGHT as i32,
-                    "status-bar",
+                    "mx-bar-status",
                 ),
                 bar,
             )

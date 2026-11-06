@@ -9,6 +9,7 @@ mod quick_settings;
 mod sliders;
 mod tiles;
 mod util;
+mod volume_keys;
 
 use bottom_bar::BottomBarBuilder;
 use header::HeaderBuilder;
@@ -16,14 +17,17 @@ use power_overlay::PowerOverlayBuilder;
 use quick_settings::QuickSettingsBuilder;
 use services::{BluetoothModule, DisplayModule, NetworkManagerModule, PowerModule, UpowerModule};
 use sliders::SlidersBuilder;
+use volume_keys::VolumeKeysModule;
 
 /// Installs the quick settings' services (UPower, Bluetooth, display
-/// brightness and logind power). It spawns no window; place the panel with
-/// [`QuickSettingsScreen`].
+/// brightness and logind power) and the volume keys. It spawns no window;
+/// place the panel with [`QuickSettingsScreen`].
 ///
-/// Expects the host to have installed `RingModule`, `TimerModule` (for the
-/// header's date) and `DBusModule::new().system()`, and to have inserted the
-/// [`Atlas`] and `FontBook`.
+/// Expects the host to have installed `RingModule`, `PulseAudioModule` and
+/// `VolumeControlModule` (for the volume slider and keys), `WaylandModule`
+/// (before this module, for the volume keys), `TimerModule` (for the header's
+/// date) and `DBusModule::new().system()`, and to have inserted the [`Atlas`]
+/// and `FontBook`.
 pub struct QuickSettingsModule;
 
 impl Module for QuickSettingsModule {
@@ -32,7 +36,8 @@ impl Module for QuickSettingsModule {
             .add_module(NetworkManagerModule)
             .add_module(BluetoothModule)
             .add_module(DisplayModule)
-            .add_module(PowerModule);
+            .add_module(PowerModule)
+            .add_module(VolumeKeysModule);
     }
 }
 
@@ -128,6 +133,10 @@ mod tests {
             .widget::<mecha_wayland::prelude::Text>(native)
             .unwrap()
             .string;
-        assert!(label.starts_with("Today, "), "{label}");
+        // DATE_FORMAT, e.g. "Monday,2 Nov".
+        let (weekday, day_month) = label.split_once(',').expect(label);
+        assert!(weekday.ends_with("day"), "{label}");
+        let (day, month) = day_month.split_once(' ').expect(label);
+        assert!(day.parse::<u8>().is_ok() && month.len() == 3, "{label}");
     }
 }
