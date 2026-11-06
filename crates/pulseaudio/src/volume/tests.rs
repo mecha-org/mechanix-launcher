@@ -248,6 +248,8 @@ fn set_volume_is_a_no_op_without_a_ready_output_or_connection() {
             muted: false,
         }
     );
+    assert!(app.resource::<VolumeBackend>().sent.is_empty());
+    assert_eq!(app.resource::<VolumeBackend>().pending_volume, None);
 }
 
 #[test]
@@ -302,4 +304,113 @@ fn volume_replies_request_refresh_without_changing_observed_volume() {
         assert!(app.resource::<VolumeBackend>().dirty);
         assert_eq!(*app.resource::<VolumeState>(), old);
     }
+}
+
+/// A started backend on a ready connection, with a refresh in flight and
+/// the previous snapshot still published.
+fn refreshing_app(volume_percent: u32) -> App {
+    let mut app = App::new();
+    app.init_resource::<PulseAudio>()
+        .add_module(VolumeControlModule);
+    app.resource_mut::<PulseAudio>().connection_state = ConnectionState::Ready;
+    app.resource_mut::<VolumeState>()
+        .set_if_neq(VolumeState::Ready {
+            volume_percent,
+            muted: false,
+        });
+    {
+        let mut backend = app.resource_mut::<VolumeBackend>();
+        backend.started = true;
+        backend.loading = true;
+    }
+    app
+}
+
+fn finish_refresh(app: &mut App, volume_percent: u32) {
+    app.resource::<VolumeBackend>()
+        .updates
+        .borrow_mut()
+        .extend([
+            VolumeUpdate::Sink(VolumeState::Ready {
+                volume_percent,
+                muted: false,
+            }),
+            VolumeUpdate::SinkDone,
+        ]);
+    on_tick(app, &Tick);
+}
+
+#[test]
+fn set_volume_is_sent_at_once_when_no_refresh_is_in_flight() {
+    let mut app = refreshing_app(50);
+    app.resource_mut::<VolumeBackend>().loading = false;
+
+    app.signal(SetVolume(75));
+    app.flush();
+
+    assert_eq!(app.resource::<VolumeBackend>().sent, [75]);
+    assert_eq!(app.resource::<VolumeBackend>().pending_volume, None);
+}
+
+#[test]
+fn latest_set_volume_waits_for_the_refresh_then_is_sent() {
+    let mut app = refreshing_app(50);
+
+    for percent in [55, 60, 65] {
+        app.signal(SetVolume(percent));
+    }
+    app.flush();
+    assert!(app.resource::<VolumeBackend>().sent.is_empty());
+    assert_eq!(app.resource::<VolumeBackend>().pending_volume, Some(65));
+
+    // A change notification during the query keeps it held.
+    app.resource::<VolumeBackend>()
+        .updates
+        .borrow_mut()
+        .push(VolumeUpdate::Dirty);
+    on_tick(&mut app, &Tick);
+    assert!(app.resource::<VolumeBackend>().sent.is_empty());
+    assert_eq!(app.resource::<VolumeBackend>().pending_volume, Some(65));
+    app.resource_mut::<VolumeBackend>().dirty = false;
+
+    finish_refresh(&mut app, 55);
+    assert_eq!(app.resource::<VolumeBackend>().sent, [65]);
+    assert_eq!(app.resource::<VolumeBackend>().pending_volume, None);
+
+    // Sent once only.
+    on_tick(&mut app, &Tick);
+    assert_eq!(app.resource::<VolumeBackend>().sent, [65]);
+}
+
+#[test]
+fn held_set_volume_is_dropped_when_the_output_goes_away() {
+    let mut app = refreshing_app(50);
+    app.signal(SetVolume(55));
+    app.flush();
+
+    // The refresh finds no default output.
+    app.resource::<VolumeBackend>()
+        .updates
+        .borrow_mut()
+        .push(VolumeUpdate::SinkDone);
+    on_tick(&mut app, &Tick);
+
+    assert_eq!(*app.resource::<VolumeState>(), VolumeState::Unavailable);
+    assert!(app.resource::<VolumeBackend>().sent.is_empty());
+    assert_eq!(app.resource::<VolumeBackend>().pending_volume, None);
+}
+
+#[test]
+fn held_set_volume_is_dropped_on_disconnect() {
+    let mut app = refreshing_app(50);
+    app.signal(SetVolume(55));
+    app.flush();
+
+    on_connection(
+        &mut app,
+        &PulseAudioContextConnectionStateChanged(ConnectionState::Terminated),
+    );
+
+    assert_eq!(app.resource::<VolumeBackend>().pending_volume, None);
+    assert!(app.resource::<VolumeBackend>().sent.is_empty());
 }

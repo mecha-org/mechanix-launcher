@@ -20,6 +20,7 @@ use super::defer::PendingPress;
 use super::flow::{self, Board, Flow};
 use super::resolve::KeyGeom;
 use super::tracker::{TouchOut, TouchTracker};
+use crate::feedbackd;
 use crate::input::{dispatch, field_kind, hold, release, repeats};
 use crate::layout::KeyAction;
 use crate::predict::{LetterPrior, Prediction, TypingContext};
@@ -166,7 +167,10 @@ fn finish_stale(tracker: &mut TouchTracker, then: usize, now: usize, time: u32) 
 fn apply(ctx: &mut Context<'_, Keyboard>, view: usize, out: Vec<TouchOut>) {
     for o in out {
         match o {
-            TouchOut::Pressed(i) => feedback(ctx, view, i, |key| KeyFeedback::Pressed { key }),
+            TouchOut::Pressed(i) => {
+                feedbackd::key_pressed(ctx);
+                feedback(ctx, view, i, |key| KeyFeedback::Pressed { key });
+            }
             TouchOut::Unpressed(i) => feedback(ctx, view, i, |key| KeyFeedback::Released { key }),
             TouchOut::Commit(i) => {
                 if let Some(action) = entry_action(ctx, view, i) {

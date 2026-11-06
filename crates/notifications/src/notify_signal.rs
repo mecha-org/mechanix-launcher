@@ -4,6 +4,8 @@ use crate::dbus::{DbusSignal, emit_signal};
 use crate::dbus_spec::NOTIFIFICATION_DISMISSED;
 use crate::millis::Millis;
 use crate::notification_store::NotificationStore;
+use crate::notifications::NotificationsCenter;
+use crate::options_menu::ShowOptionsMenu;
 use NotificationSignal::SnoozeNotifiation;
 use mecha_wayland::prelude::*;
 
@@ -14,6 +16,7 @@ pub enum NotificationSignal {
     UpdateNotification(u32),
     CloseAllNotifications,
     SnoozeNotifiation(u32, u32),
+    ShowOptions(u32, Rect),
 }
 
 pub fn notify_signal(app: &mut App, notify_signal: &NotificationSignal) {
@@ -97,6 +100,22 @@ pub fn notify_signal(app: &mut App, notify_signal: &NotificationSignal) {
                 return;
             };
             app.emit(SnoozeCard(Millis(*expiry_timeout)), card);
+        }
+        NotificationSignal::ShowOptions(id, anchor) => {
+            let Some(menu) = app
+                .widgets::<NotificationsCenter>()
+                .next()
+                .map(|(_, center)| center.menu)
+            else {
+                return;
+            };
+            app.emit(
+                ShowOptionsMenu {
+                    notification_id: *id,
+                    anchor: *anchor,
+                },
+                menu,
+            );
         }
     }
 }

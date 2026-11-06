@@ -58,6 +58,7 @@ pub fn spawn_ui(app: &mut App, bottom_gap: f32) {
     app.insert_resource(crate::predict::TypingContext::default());
     app.insert_resource(crate::predict::Prediction::from_config(&keymap.prediction));
     app.insert_resource(ExclusiveZone::default());
+    crate::feedbackd::install(app);
     // Keyboard surface visibility — starts hidden; IM2 `activate`, a
     // corner swipe and the hide key flip it through `KeyboardVisibilityExt`.
     crate::visibility::install(app);

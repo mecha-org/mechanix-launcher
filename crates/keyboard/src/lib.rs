@@ -9,6 +9,7 @@
 
 #![recursion_limit = "1024"]
 
+mod feedbackd;
 mod input;
 mod latch;
 mod layout;
