@@ -404,6 +404,7 @@ fn freeing_a_watch_cancels_its_poll_and_releases_its_fd() {
     let fd = app.resource::<PulseAudio>().pending_polls[&poll]
         .fd
         .as_raw_fd();
+    let identity = fd_identity(fd).unwrap();
 
     app.resource::<PulseAudio>().mainloop_api.io_free.unwrap()(watch);
     drop(reader);
@@ -427,7 +428,9 @@ fn freeing_a_watch_cancels_its_poll_and_releases_its_fd() {
         -libc::ECANCELED
     );
     assert_eq!(data.calls.get(), 0);
-    assert_eq!(unsafe { libc::fcntl(fd, libc::F_GETFD) }, -1);
+    // Another test thread may reuse the fd number once it is closed, so check
+    // that it no longer names the same open file.
+    assert_ne!(fd_identity(fd), Some(identity));
     assert!(app.resource_mut::<Ring>().finish(cancel).is_none());
     assert!(app.resource_mut::<Ring>().finish(poll).is_none());
 }
@@ -1046,4 +1049,13 @@ fn io_watches_created_by_deferred_work_are_armed_before_waiting() {
     writer.write_all(b"x").unwrap();
     dispatch_poll(&mut app, token);
     assert!(app.resource::<PulseAudio>().pending_polls.is_empty());
+}
+
+/// The (device, inode) of the open file `fd` names, or `None` if it is closed.
+fn fd_identity(fd: RawFd) -> Option<(libc::dev_t, libc::ino_t)> {
+    let mut st = std::mem::MaybeUninit::<libc::stat>::uninit();
+    (unsafe { libc::fstat(fd, st.as_mut_ptr()) } == 0).then(|| {
+        let st = unsafe { st.assume_init() };
+        (st.st_dev, st.st_ino)
+    })
 }
