@@ -34,7 +34,8 @@ use mecha_wayland::prelude::*;
 pub(crate) fn indicator_layout(visible: bool) -> LayoutStyle {
     if visible {
         let size = crate::DEFAULT_ICON_SIZE as f32;
-        LayoutStyle::default().size(px(size), px(size))
+        // Centered so a sprite smaller than the slot stays aligned.
+        LayoutStyle::default().size(px(size), px(size)).center()
     } else {
         LayoutStyle::default().hidden()
     }

@@ -69,7 +69,8 @@ impl Module for VolumeControlModule {
             .system(on_connection)
             .system(on_tick)
             .system(on_set_muted)
-            .system(on_set_volume);
+            .system(on_set_volume)
+            .system(on_volume_state_changed);
         // The service owns the typed queue; PulseAudio retains a generic
         // reference until its context has disconnected all callbacks.
         let updates = Rc::clone(&app.resource::<VolumeBackend>().updates);
@@ -421,6 +422,13 @@ extern "C" fn on_sink(
 
 fn volume_percent(average: u32) -> u32 {
     ((u64::from(average) * 100 + u64::from(PA_VOLUME_NORM) / 2) / u64::from(PA_VOLUME_NORM)) as u32
+}
+
+/// Emit this event whenever volume state is changed
+pub struct VolumeStateEvent(pub VolumeState);
+impl Event for VolumeStateEvent {}
+fn on_volume_state_changed(app: &mut App, _: &OnChanged<VolumeState>) {
+    app.emit_all(VolumeStateEvent(*app.resource::<VolumeState>()));
 }
 
 #[cfg(test)]

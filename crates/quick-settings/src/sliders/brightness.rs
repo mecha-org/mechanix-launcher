@@ -8,8 +8,8 @@ mod svg {
     pub const MEDIUM: &[u8] = include_bytes!("../../assets/brightness/brightness-medium.svg");
 }
 
-const PADDING_VERTICAL: f32 = 12.0;
-const PADDING_HORIZONTAL: f32 = 32.0;
+const ICON_SIZE: f32 = 24.0;
+const SLIDER_LENGTH_PERCENT: f32 = 80.0;
 
 pub struct BrightnessSlider {
     pub slider: Handle<Slider>,
@@ -25,6 +25,8 @@ impl Widget for BrightnessSlider {
     type Builder = BrightnessSliderBuilder;
 
     fn build(_: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
+        *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default().width(percent(100.0));
+
         let icon_sprite = load_icon(&mut s.resource_mut::<Atlas>(), svg::MEDIUM);
 
         let row = s.spawn(
@@ -32,12 +34,9 @@ impl Widget for BrightnessSlider {
             div().style(
                 LayoutStyle::default()
                     .row()
+                    .width(percent(100.0))
                     .center()
-                    .gap(px(Spacing::Space200.dp()))
-                    .padding(Insets::symmetric(
-                        px(PADDING_HORIZONTAL),
-                        px(PADDING_VERTICAL),
-                    )),
+                    .gap(px(Spacing::Space300.dp())),
             ),
         );
 
@@ -45,6 +44,7 @@ impl Widget for BrightnessSlider {
             row,
             icon(icon_sprite)
                 .style(LayoutStyle::default().shrink(0.0))
+                .size(Size::new(ICON_SIZE, ICON_SIZE))
                 .color(s.color(ColorRole::OnSurface)),
         );
 
@@ -53,11 +53,12 @@ impl Widget for BrightnessSlider {
             slider()
                 .value(MIN_BRIGHTNESS)
                 .range(MIN_BRIGHTNESS, MAX_BRIGHTNESS)
-                .steps(68)
+                .length(percent(SLIDER_LENGTH_PERCENT))
                 .tick_height(40.0)
                 .tick_gap(4.0),
         );
-
+        // Sent on every step change; the display service coalesces these so
+        // only one D-Bus write is in flight and stale values are dropped.
         s.on::<SliderChange>(slider_handle, |ctx, event| {
             ctx.signal(SetBrightness(event.value));
         });
@@ -65,6 +66,10 @@ impl Widget for BrightnessSlider {
         s.on::<BrightnessChanged>(me, |ctx, event| {
             let slider = ctx.me().slider;
             if let Some(mut slider) = ctx.at(slider) {
+                // Don't yank the thumb while the user is moving it.
+                if slider.me().is_dragging() {
+                    return;
+                }
                 slider.set_value(event.value);
             }
         });

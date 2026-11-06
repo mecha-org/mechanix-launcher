@@ -2,6 +2,7 @@ use mecha_wayland::prelude::*;
 use screen::Screen;
 
 mod bottom_bar;
+mod drag_handle;
 mod header;
 mod power_overlay;
 mod quick_settings;
@@ -12,7 +13,6 @@ mod volume_keys;
 
 use bottom_bar::BottomBarBuilder;
 use header::HeaderBuilder;
-use mecha_pulseaudio::{PulseAudioModule, VolumeControlModule};
 use power_overlay::PowerOverlayBuilder;
 use quick_settings::QuickSettingsBuilder;
 use services::{BluetoothModule, DisplayModule, NetworkManagerModule, PowerModule, UpowerModule};
@@ -20,13 +20,14 @@ use sliders::SlidersBuilder;
 use volume_keys::VolumeKeysModule;
 
 /// Installs the quick settings' services (UPower, Bluetooth, display
-/// brightness and logind power), PulseAudio volume, and the volume keys.
-/// It spawns no window; place the panel with [`QuickSettingsScreen`].
+/// brightness and logind power) and the volume keys. It spawns no window;
+/// place the panel with [`QuickSettingsScreen`].
 ///
-/// Expects the host to have installed `RingModule` (before this module, for
-/// PulseAudio), `WaylandModule` (before this module, for the volume keys)
-/// and `DBusModule::new().system()`, and to have inserted the [`Atlas`] and
-/// `FontBook`.
+/// Expects the host to have installed `RingModule`, `PulseAudioModule` and
+/// `VolumeControlModule` (for the volume slider and keys), `WaylandModule`
+/// (before this module, for the volume keys), `TimerModule` (for the header's
+/// date) and `DBusModule::new().system()`, and to have inserted the [`Atlas`]
+/// and `FontBook`.
 pub struct QuickSettingsModule;
 
 impl Module for QuickSettingsModule {
@@ -36,8 +37,6 @@ impl Module for QuickSettingsModule {
             .add_module(BluetoothModule)
             .add_module(DisplayModule)
             .add_module(PowerModule)
-            .add_module(PulseAudioModule)
-            .add_module(VolumeControlModule)
             .add_module(VolumeKeysModule);
     }
 }
@@ -96,7 +95,7 @@ mod tests {
     use super::*;
     use crate::power_overlay::PowerOverlay;
     use crate::quick_settings::QuickSettings;
-    use mecha_wayland::mechanix_widgets::prelude::FontBook;
+    use mecha_wayland::mechanix_widgets::prelude::{Clock, ClockInterval, FontBook, Text};
 
     #[test]
     fn screen_builds_panel_and_overlay_without_a_window() {
@@ -104,7 +103,9 @@ mod tests {
         app.add_module(LayoutModule)
             .add_module(WindowModule)
             .add_module(PaintModule)
-            .add_module(MechanixTheme::dark());
+            .add_module(MechanixTheme::dark())
+            .add_module(RingModule::default())
+            .add_module(TimerModule);
         let mut atlas = Atlas::new();
         let font = atlas.add_font(assets::fonts::GEIST_MONO).unwrap();
         app.insert_resource(atlas);
@@ -118,5 +119,24 @@ mod tests {
         assert_eq!(app.widgets::<QuickSettings>().count(), 1);
         assert_eq!(app.widgets::<PowerOverlay>().count(), 1);
         assert_eq!(app.resource::<Windows>().iter().count(), 0);
+
+        let (interval, date_text) = {
+            let (_, date) = app
+                .widgets::<Clock>()
+                .next()
+                .expect("header shows the date");
+            (date.interval(), date.text())
+        };
+        assert_eq!(interval, ClockInterval::Second);
+        let native = app.widget::<Text>(date_text).unwrap().native();
+        let label = &app
+            .widget::<mecha_wayland::prelude::Text>(native)
+            .unwrap()
+            .string;
+        // DATE_FORMAT, e.g. "Monday,2 Nov".
+        let (weekday, day_month) = label.split_once(',').expect(label);
+        assert!(weekday.ends_with("day"), "{label}");
+        let (day, month) = day_month.split_once(' ').expect(label);
+        assert!(day.parse::<u8>().is_ok() && month.len() == 3, "{label}");
     }
 }

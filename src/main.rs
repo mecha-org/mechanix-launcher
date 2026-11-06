@@ -4,6 +4,7 @@ use control_center::app_screens::AppScreen;
 use control_center::{ControlCenterScreen, select_screen};
 use home::Home;
 use keyboard::{KeyboardModule, hide_keyboard, show_keyboard, suspend_keyboard_zone};
+use mecha_pulseaudio::{PulseAudioModule, VolumeControlModule};
 use mecha_wayland::mechanix_widgets::prelude::FontBook;
 use mecha_wayland::prelude::*;
 use nav::core::{
@@ -238,6 +239,8 @@ fn main() {
     app.add_module(RingModule::default())
         .add_module(TimerModule)
         .add_module(DBusModule::new().system().session())
+        .add_module(PulseAudioModule)
+        .add_module(VolumeControlModule)
         .add_module(
             WaylandModule::new()
                 .bind::<WlCompositor>()
@@ -318,6 +321,8 @@ mod tests {
     fn launcher() -> App {
         let mut app = App::new();
         app.add_module(LayoutModule)
+            .add_module(RingModule::default())
+            .add_module(TimerModule)
             .add_module(PaintModule)
             .add_module(WindowModule)
             .add_module(InteractivityModule)

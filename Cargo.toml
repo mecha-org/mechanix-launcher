@@ -16,6 +16,7 @@ notifications.workspace = true
 quick-settings.workspace = true
 control-center.workspace = true
 nav.workspace = true
+mecha-pulseaudio.workspace = true
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
@@ -55,6 +56,7 @@ nav = { path = "crates/nav" }
 keyboard = { path = "crates/keyboard" }
 services = { path = "crates/services" }
 assets = { path = "crates/assets" }
+mecha-pulseaudio = { path = "crates/pulseaudio" }
 
 # Local development override — assumes mecha-wayland is cloned as a sibling
 # directory: ../mecha-wayland

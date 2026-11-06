@@ -1,12 +1,17 @@
 use ::services::{APUpdate, BatteryPercentageChanged, BluetoothStateChanged, StateUpdate};
+use mecha_wayland::mechanix_widgets::prelude::{Clock, ClockInterval, clock};
 use mecha_wayland::prelude::*;
 
 use crate::indicators::*;
 use crate::{DEFAULT_BAR_HEIGHT, StatusIcons};
 
+/// 24-hour time, without seconds.
+pub const CLOCK_FORMAT: &str = "%H:%M";
+
 #[derive(Debug, Clone, Copy)]
 pub struct StatusBar {
     pub glyph: Handle<GlyphIndicator>,
+    pub clock: Handle<Clock>,
     pub airplane: Handle<AirplaneIndicator>,
     pub bluetooth: Handle<BluetoothIndicator>,
     pub cellular: Handle<CellularIndicator>,
@@ -34,7 +39,7 @@ impl Widget for StatusBar {
             .center()
             .width(percent(100.0))
             .height(px(DEFAULT_BAR_HEIGHT))
-            .padding(Insets::symmetric(px(20.0), px(8.0)))
+            .padding(Insets::symmetric(px(20.0), px(6.0)))
             .justify(Justify::SpaceBetween);
 
         // Pitch black background
@@ -46,7 +51,13 @@ impl Widget for StatusBar {
             div().style(LayoutStyle::default().row().center().gap(px(8.0))),
         );
         let glyph = s.spawn(left_cluster, glyph_indicator());
-        // TODO: clock here
+        let clock = s.spawn(
+            left_cluster,
+            clock(CLOCK_FORMAT)
+                .interval(ClockInterval::Minute)
+                .size(14.0)
+                .color(ColorRole::OnSecondaryContainer),
+        );
 
         // Right cluster container: flex row with gap between items
         let right_cluster = s.spawn(
@@ -90,6 +101,7 @@ impl Widget for StatusBar {
 
         StatusBar {
             glyph,
+            clock,
             airplane,
             bluetooth,
             cellular,

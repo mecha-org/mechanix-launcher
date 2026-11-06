@@ -7,7 +7,7 @@ use mecha_wayland::prelude::*;
 
 pub use indicators::*;
 pub use module::{StatusBarModule, StatusBarScreen};
-pub use status_bar::{StatusBar, StatusBarBuilder, status_bar};
+pub use status_bar::{CLOCK_FORMAT, StatusBar, StatusBarBuilder, status_bar};
 
 /// Bundled GeistMono font for status bar numeric text (such as battery percentage).
 pub use assets::fonts::GEIST_MONO as GEIST_MONO_BYTES;
@@ -61,6 +61,8 @@ mod tests {
         app.add_module(LayoutModule)
             .add_module(PaintModule)
             .add_module(MechanixTheme::dark())
+            .add_module(RingModule::default())
+            .add_module(TimerModule)
             .insert_resource(Atlas::new());
 
         let font = app
@@ -114,6 +116,48 @@ mod tests {
                 .state(),
             AirplaneState::Disabled
         );
+    }
+
+    #[test]
+    fn test_clock_shows_current_time() {
+        use mecha_wayland::mechanix_widgets::prelude::{Clock, ClockInterval, Text};
+
+        let mut app = App::new();
+        app.add_module(LayoutModule)
+            .add_module(PaintModule)
+            .add_module(MechanixTheme::dark())
+            .add_module(RingModule::default())
+            .add_module(TimerModule)
+            .insert_resource(Atlas::new());
+
+        let font = app
+            .resource_mut::<Atlas>()
+            .add_font(GEIST_MONO_BYTES)
+            .expect("GeistMono loads");
+        app.insert_resource(FontBook::new(font));
+
+        let icons = StatusIcons::load(&mut app.resource_mut::<Atlas>(), DEFAULT_ICON_SIZE)
+            .expect("icons load");
+        app.insert_resource(icons);
+
+        let root = app.root();
+        let bar = app.spawn(root, status_bar());
+        app.tick();
+
+        let clock = app
+            .widget::<Clock>(app.widget::<StatusBar>(bar).unwrap().clock)
+            .unwrap();
+        assert_eq!(clock.format(), CLOCK_FORMAT);
+        assert_eq!(clock.interval(), ClockInterval::Minute);
+
+        let native = app.widget::<Text>(clock.text()).unwrap().native();
+        let label = &app
+            .widget::<mecha_wayland::prelude::Text>(native)
+            .unwrap()
+            .string;
+        // `%H:%M`; the minute may roll over between spawn and here.
+        assert_eq!(label.len(), 5);
+        assert_eq!(label.as_bytes()[2], b':');
     }
 
     #[test]
@@ -174,6 +218,8 @@ mod tests {
         app.add_module(LayoutModule)
             .add_module(PaintModule)
             .add_module(MechanixTheme::dark())
+            .add_module(RingModule::default())
+            .add_module(TimerModule)
             .insert_resource(Atlas::new());
 
         let font = app
@@ -284,6 +330,8 @@ mod tests {
         app.add_module(LayoutModule)
             .add_module(PaintModule)
             .add_module(MechanixTheme::dark())
+            .add_module(RingModule::default())
+            .add_module(TimerModule)
             .insert_resource(Atlas::new());
 
         let font = app
@@ -334,6 +382,8 @@ mod tests {
         app.add_module(LayoutModule)
             .add_module(PaintModule)
             .add_module(MechanixTheme::dark())
+            .add_module(RingModule::default())
+            .add_module(TimerModule)
             .insert_resource(Atlas::new());
 
         let font = app
