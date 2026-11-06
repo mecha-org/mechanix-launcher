@@ -6,10 +6,6 @@ mod volume;
 use brightness::BrightnessSliderBuilder;
 use volume::VolumeSliderBuilder;
 
-/// Extra space under the sliders. They stay centered in what's left, so
-/// this moves them up by half its value.
-const BOTTOM_PADDING: f32 = 90.0;
-
 pub struct Sliders;
 
 pub struct SlidersBuilder;
@@ -29,8 +25,8 @@ impl Widget for Sliders {
             .grow(1.0)
             .min_height(px(0.0))
             .column()
-            .justify(Justify::Center)
-            .padding(Insets::new(px(0.0), px(0.0), px(BOTTOM_PADDING), px(0.0)));
+            .width(percent(100.0))
+            .justify(Justify::Center);
 
         let col = s.spawn(
             me,

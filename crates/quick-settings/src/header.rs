@@ -2,9 +2,8 @@ use mecha_wayland::mechanix_widgets::prelude::{ButtonVariant, ClockInterval, but
 use mecha_wayland::prelude::*;
 
 use crate::power_overlay::{OpenPowerOverlay, POWER_ICON};
-use crate::util::{full_width, load_icon_sized};
+use crate::util::load_icon_sized;
 
-pub const HEADER_HEIGHT: f32 = 80.0;
 /// Today's date with weekday, e.g. "Monday,2 Nov".
 const DATE_FORMAT: &str = "%A,%-d %b";
 const POWER_ICON_SIZE: u32 = 20;
@@ -21,11 +20,14 @@ impl Widget for Header {
     type Builder = HeaderBuilder;
 
     fn build(_: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
-        *s.component_mut::<LayoutStyle>(me).unwrap() = full_width(HEADER_HEIGHT)
+        let side = px(Spacing::Space250.dp());
+        *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
+            .width(percent(100.0))
+            .shrink(0.0)
             .row()
             .align_items(Align::Center)
             .justify(Justify::SpaceBetween)
-            .padding(Insets::symmetric(px(20.0), px(0.0)));
+            .padding(Insets::new(px(Spacing::Space300.dp()), side, px(0.0), side));
 
         // Ticks every second.
         s.spawn(
