@@ -1,15 +1,15 @@
 use mecha_wayland::prelude::*;
 
-use crate::util::full_width;
-
-/// Height of the strip under the tiles that holds the handle.
-pub const DRAG_HANDLE_HEIGHT: f32 = 50.0;
+/// Height of the strip at the bottom of the panel that holds the handle.
+pub const DRAG_HANDLE_HEIGHT: f32 = 48.0;
 const BAR_WIDTH: f32 = 32.0;
 const BAR_HEIGHT: f32 = 4.0;
 
 /// The bar at the bottom of the panel that hints it can be dragged up to
-/// close. Only visual: the panel's window already closes on an upward swipe
-/// that starts anywhere in it, including here.
+/// close. Shared by every screen of the control center, since the close
+/// gesture is the panel's, not a screen's. Only visual: the panel's window
+/// already closes on an upward swipe that starts anywhere in it, including
+/// here.
 pub struct DragHandle;
 
 pub struct DragHandleBuilder;
@@ -22,7 +22,10 @@ impl Widget for DragHandle {
     type Builder = DragHandleBuilder;
 
     fn build(_: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
-        *s.component_mut::<LayoutStyle>(me).unwrap() = full_width(DRAG_HANDLE_HEIGHT).center();
+        *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
+            .size(percent(100.0), px(DRAG_HANDLE_HEIGHT))
+            .shrink(0.0)
+            .center();
 
         let bar = s.spawn(
             me,

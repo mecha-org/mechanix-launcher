@@ -1,18 +1,18 @@
 use mecha_wayland::prelude::*;
+use screen::{Orientation, OrientationChanged};
 
 use crate::bottom_bar::{BottomBar, BottomBarBuilder};
-use crate::drag_handle::DragHandleBuilder;
 use crate::header::HeaderBuilder;
 use crate::sliders::{Sliders, SlidersBuilder};
 
 const SECTION_GAP: f32 = 31.0;
 
-/// The panel: header on top, drag handle at the bottom, and between them a
-/// body holding the sliders and the tiles.
+/// The panel: header on top and, under it, a body holding the sliders and
+/// the tiles. The drag handle under it all is the control center's.
 ///
-/// The body follows the panel's shape: in portrait the sliders sit above
-/// the tiles; when the panel is wider than it is tall they sit side by
-/// side, so the sections no longer have to share the short height.
+/// The body follows the launcher's [`Orientation`]: in portrait the sliders
+/// sit above the tiles; in landscape they sit side by side, so the
+/// sections no longer have to share the short height.
 pub struct QuickSettings {
     body: Handle<Div>,
     sliders: Handle<Sliders>,
@@ -38,7 +38,6 @@ fn body_style(landscape: bool) -> LayoutStyle {
         .width(percent(100.0))
         .grow(1.0)
         .min_height(px(0.0))
-        .padding(Insets::new(px(SECTION_GAP), px(0.0), px(0.0), px(0.0)))
         .gap(px(SECTION_GAP));
     if landscape {
         style.row().align_items(Align::Center)
@@ -57,15 +56,14 @@ impl Widget for QuickSettings {
             .height(percent(100.0))
             .column();
 
-        // Header and drag handle keep their fixed heights; the body takes
-        // the rest. The drag handle sits flush under it, outside the gap.
+        // The header keeps its fixed height; the body takes the rest. It
+        // builds portrait; `OrientationChanged` says when it is not.
         s.spawn(me, b.header);
         let body = s.spawn(me, div().style(body_style(false)));
         let sliders = s.spawn(body, b.sliders);
         let bottom_bar = s.spawn(body, b.bottom_bar);
-        s.spawn(me, DragHandleBuilder);
 
-        s.on::<OnChanged<ComputedLayout>>(me, |ctx, _| fit_orientation(ctx));
+        s.on::<OrientationChanged>(me, |ctx, e| fit_orientation(ctx, e.0));
 
         QuickSettings {
             body,
@@ -77,12 +75,9 @@ impl Widget for QuickSettings {
 }
 
 /// Switches the body between the portrait and landscape layouts when the
-/// panel's shape changes.
-fn fit_orientation(ctx: &mut Context<'_, QuickSettings>) {
-    let Some(rect) = ctx.component::<ComputedLayout>().map(|l| l.rect) else {
-        return;
-    };
-    let landscape = rect.width() > rect.height();
+/// launcher's orientation flips.
+fn fit_orientation(ctx: &mut Context<'_, QuickSettings>, orientation: Orientation) {
+    let landscape = orientation.is_landscape();
     if ctx.me().landscape == landscape {
         return;
     }
@@ -112,10 +107,12 @@ mod tests {
     }
 
     #[test]
-    fn sliders_sit_beside_the_tiles_only_while_the_panel_is_wider_than_tall() {
+    fn sliders_sit_beside_the_tiles_only_while_the_window_is_wider_than_tall() {
         let mut app = App::new();
         app.add_module(LayoutModule)
             .add_module(PaintModule)
+            .add_module(WindowModule)
+            .add_module(screen::OrientationModule)
             .add_module(MechanixTheme::dark())
             .add_module(RingModule::default())
             .add_module(TimerModule);
@@ -123,14 +120,23 @@ mod tests {
         let font = atlas.add_font(assets::fonts::GEIST_MONO).unwrap();
         app.insert_resource(atlas);
         app.insert_resource(FontBook::new(font));
-        let size = |w, h| LayoutStyle::default().size(px(w), px(h));
-        let window = app.spawn_with(
-            app.root(),
-            div().style(size(800.0, 480.0)),
-            (LayoutRoot(true),),
+        let size = |w, h| LayoutStyle::default().column().size(px(w), px(h));
+        let root = app.root();
+        let window = app.spawn(root, window().layout(size(800.0, 480.0)));
+        // What shares the window with the panel in the control center (the
+        // screen selector, the drag handle); empty until the portrait case.
+        let above = app.spawn(window, div().style(LayoutStyle::default().shrink(0.0)));
+        let slot = app.spawn(
+            window,
+            div().style(
+                LayoutStyle::default()
+                    .width(percent(100.0))
+                    .grow(1.0)
+                    .min_height(px(0.0)),
+            ),
         );
         let panel = app.spawn(
-            window,
+            slot,
             QuickSettingsBuilder {
                 header: HeaderBuilder,
                 bottom_bar: BottomBarBuilder,
@@ -160,8 +166,14 @@ mod tests {
         );
         assert!(tiles.origin.y + tiles.height() <= 480.0, "{tiles:?}");
 
+        // A portrait window whose panel, under 400 px of other content,
+        // is itself wider than tall: the window's shape wins.
         *app.component_mut::<LayoutStyle>(window).unwrap() = size(480.0, 800.0);
+        *app.component_mut::<LayoutStyle>(above).unwrap() =
+            LayoutStyle::default().height(px(400.0)).shrink(0.0);
         settle(&mut app);
+        let panel_rect = rect(&app, panel);
+        assert!(panel_rect.width() > panel_rect.height(), "{panel_rect:?}");
         let (sliders, tiles, landscape) = parts(&app);
         assert!(!landscape);
         assert!(

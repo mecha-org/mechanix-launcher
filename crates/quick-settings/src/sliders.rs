@@ -6,10 +6,6 @@ mod volume;
 use brightness::BrightnessSliderBuilder;
 use volume::VolumeSliderBuilder;
 
-/// Extra space under the sliders. They stay centered in what's left, so
-/// this moves them up by half its value.
-const BOTTOM_PADDING: f32 = 90.0;
-
 pub struct Sliders;
 
 pub struct SlidersBuilder;
@@ -20,7 +16,7 @@ impl Build for SlidersBuilder {
 
 impl Sliders {
     /// Portrait: take all the height left between the header and the
-    /// bottom bar, and center the slider column inside it.
+    /// bottom bar, and center the slider column vertically inside it.
     /// Landscape: take half the width beside the tiles, centered with them.
     pub fn style(landscape: bool) -> LayoutStyle {
         let style = LayoutStyle::default()
@@ -31,12 +27,7 @@ impl Sliders {
         if landscape {
             style.flex_basis(px(0.0)).min_width(px(0.0))
         } else {
-            style.width(percent(100.0)).padding(Insets::new(
-                px(0.0),
-                px(0.0),
-                px(BOTTOM_PADDING),
-                px(0.0),
-            ))
+            style.width(percent(100.0))
         }
     }
 }

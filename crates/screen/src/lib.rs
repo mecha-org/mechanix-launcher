@@ -1,6 +1,9 @@
 use mecha_wayland::mechanix_widgets::prelude::{TextVariant, text};
 use mecha_wayland::prelude::*;
 
+mod orientation;
+pub use orientation::{Orientation, OrientationChanged, OrientationModule};
+
 /// A full-size piece of launcher content. A screen builds itself under any
 /// parent node and owns no window, so the nav can place it in whichever window
 /// it likes. Screens live in their own crates and are held as

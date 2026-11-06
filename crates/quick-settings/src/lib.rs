@@ -2,7 +2,6 @@ use mecha_wayland::prelude::*;
 use screen::Screen;
 
 mod bottom_bar;
-mod drag_handle;
 mod header;
 mod power_overlay;
 mod quick_settings;
