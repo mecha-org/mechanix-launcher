@@ -14,14 +14,27 @@ impl Build for BottomBarBuilder {
     type Widget = BottomBar;
 }
 
+impl BottomBar {
+    /// Portrait: full width under the sliders.
+    /// Landscape: half the width, beside the sliders.
+    pub fn style(landscape: bool) -> LayoutStyle {
+        let style = LayoutStyle::default()
+            .height(px(BOTTOM_BAR_HEIGHT))
+            .column()
+            .shrink(0.0);
+        if landscape {
+            style.grow(1.0).flex_basis(px(0.0)).min_width(px(0.0))
+        } else {
+            style.width(percent(100.0))
+        }
+    }
+}
+
 impl Widget for BottomBar {
     type Builder = BottomBarBuilder;
 
     fn build(_: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
-        *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
-            .height(px(BOTTOM_BAR_HEIGHT))
-            .column()
-            .shrink(0.0);
+        *s.component_mut::<LayoutStyle>(me).unwrap() = BottomBar::style(false);
 
         let row = LayoutStyle::default()
             .height(px(TILE_HEIGHT))
