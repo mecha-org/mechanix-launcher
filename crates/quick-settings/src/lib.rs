@@ -133,6 +133,10 @@ mod tests {
             .widget::<mecha_wayland::prelude::Text>(native)
             .unwrap()
             .string;
-        assert!(label.starts_with("Today, "), "{label}");
+        // DATE_FORMAT, e.g. "Monday,2 Nov".
+        let (weekday, day_month) = label.split_once(',').expect(label);
+        assert!(weekday.ends_with("day"), "{label}");
+        let (day, month) = day_month.split_once(' ').expect(label);
+        assert!(day.parse::<u8>().is_ok() && month.len() == 3, "{label}");
     }
 }
