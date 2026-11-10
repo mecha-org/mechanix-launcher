@@ -47,7 +47,7 @@ pub(super) fn tile_quad(background: Color, border_color: Color, borders: Borders
 /// Applies the frame every tile shares (size, column layout, border) to `me`.
 pub(super) fn frame<W: Widget>(me: Handle<W>, s: &mut Spawner<'_, W>, gap: f32, borders: Borders) {
     *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
-        .height(px(TILE_HEIGHT))
+        .height(percent(100.0))
         .flex_basis(px(0.0))
         .grow(1.0)
         .shrink(0.0)
