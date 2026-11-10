@@ -2,6 +2,7 @@ use mecha_pulseaudio::*;
 use mecha_wayland::mechanix_widgets::prelude::{SliderChange, SliderContextExt, slider};
 use mecha_wayland::prelude::*;
 
+use super::SLIDER_HEIGHT;
 use crate::util::load_icon;
 
 mod svg {
@@ -29,7 +30,10 @@ impl Widget for VolumeSlider {
     type Builder = VolumeSliderBuilder;
 
     fn build(_: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
-        *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default().width(percent(100.0));
+        *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
+            .width(percent(100.0))
+            .height(px(SLIDER_HEIGHT))
+            .shrink(0.0);
 
         let high = load_icon(&mut s.resource_mut::<Atlas>(), svg::HIGH);
         let low = load_icon(&mut s.resource_mut::<Atlas>(), svg::LOW);
@@ -60,7 +64,7 @@ impl Widget for VolumeSlider {
                 .value(LEVEL_PERCENT)
                 .range(0.0, 100.0)
                 .length(percent(SLIDER_LENGTH_PERCENT))
-                .tick_height(40.0)
+                .tick_height(SLIDER_HEIGHT)
                 .tick_gap(4.0),
         );
 
