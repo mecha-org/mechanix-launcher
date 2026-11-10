@@ -6,6 +6,10 @@ mod volume;
 use brightness::BrightnessSliderBuilder;
 use volume::VolumeSliderBuilder;
 
+const MIN_SLIDER_GAP: f32 = 10.0;
+const MAX_SLIDER_GAP: f32 = 40.0;
+const SLIDER_HEIGHT: f32 = 40.0;
+
 pub struct Sliders;
 
 pub struct SlidersBuilder;
@@ -44,13 +48,91 @@ impl Widget for Sliders {
                 LayoutStyle::default()
                     .column()
                     .width(percent(100.0))
-                    .center()
-                    .gap(px(Spacing::Space500.dp())),
+                    .height(percent(100.0))
+                    .min_height(px(0.0))
+                    .center(),
             ),
         );
         s.spawn(col, VolumeSliderBuilder);
+        // This consumes spare height up to 40 units; beyond that the column
+        // centers the controls, and at its minimum they still have 10 between.
+        s.spawn(
+            col,
+            div().style(
+                LayoutStyle::default()
+                    .height(px(MIN_SLIDER_GAP))
+                    .max_height(px(MAX_SLIDER_GAP))
+                    .grow(1.0)
+                    .shrink(0.0),
+            ),
+        );
         s.spawn(col, BrightnessSliderBuilder);
 
         Sliders
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn slider_layout(height: f32) -> (Rect, Rect, Rect) {
+        let mut app = App::new();
+        app.add_module(LayoutModule)
+            .add_module(PaintModule)
+            .add_module(WindowModule)
+            .add_module(MechanixTheme::dark());
+        app.insert_resource(Atlas::new());
+
+        let window = app.spawn(
+            app.root(),
+            window().layout(LayoutStyle::default().column().size(px(308.0), px(height))),
+        );
+        let sliders = app.spawn(window, SlidersBuilder);
+        app.tick();
+
+        let rect = |id| app.component::<ComputedLayout>(id).unwrap().rect;
+        let col = app.children(sliders.id()).unwrap()[0];
+        let controls = app.children(col).unwrap();
+        assert_eq!(controls.len(), 3);
+        (rect(sliders.id()), rect(controls[0]), rect(controls[2]))
+    }
+
+    #[test]
+    fn compact_sliders_keep_ten_units_between_controls() {
+        let (section, volume, brightness) = slider_layout(90.0);
+        assert_eq!(section.height(), 90.0);
+        assert_eq!(volume.height(), 40.0);
+        assert_eq!(brightness.height(), 40.0);
+        assert_eq!(
+            brightness.origin.y - (volume.origin.y + volume.height()),
+            10.0
+        );
+        assert!(volume.origin.y >= section.origin.y);
+        assert!(brightness.origin.y + brightness.height() <= section.origin.y + section.height());
+    }
+
+    #[test]
+    fn slider_gap_uses_the_height_between_compact_and_spacious() {
+        let (_, volume, brightness) = slider_layout(110.0);
+        assert_eq!(
+            brightness.origin.y - (volume.origin.y + volume.height()),
+            30.0
+        );
+    }
+
+    #[test]
+    fn spacious_sliders_keep_forty_units_between_controls_and_center_them() {
+        let (section, volume, brightness) = slider_layout(635.0);
+        assert_eq!(
+            brightness.origin.y - (volume.origin.y + volume.height()),
+            40.0
+        );
+        let above = volume.origin.y - section.origin.y;
+        let below = section.origin.y + section.height() - brightness.origin.y - brightness.height();
+        assert!(
+            (above - below).abs() <= 1.0,
+            "{section:?} {volume:?} {brightness:?}"
+        );
     }
 }
