@@ -107,6 +107,84 @@ mod tests {
     }
 
     #[test]
+    fn portrait_sections_fit_in_a_spacious_panel() {
+        let mut app = App::new();
+        app.add_module(LayoutModule)
+            .add_module(PaintModule)
+            .add_module(WindowModule)
+            .add_module(screen::OrientationModule)
+            .add_module(MechanixTheme::dark())
+            .add_module(RingModule::default())
+            .add_module(TimerModule);
+        let mut atlas = Atlas::new();
+        let font = atlas.add_font(assets::fonts::GEIST_MONO).unwrap();
+        app.insert_resource(atlas);
+        app.insert_resource(FontBook::new(font));
+
+        // The quick-settings slot on the 1074-unit-tall output at 1x is
+        // about 958 units high, after the surrounding control-center UI.
+        let window = app.spawn(
+            app.root(),
+            window().layout(LayoutStyle::default().size(px(954.0), px(958.0))),
+        );
+        let panel = app.spawn(
+            window,
+            QuickSettingsBuilder {
+                header: HeaderBuilder,
+                bottom_bar: BottomBarBuilder,
+                sliders: SlidersBuilder,
+            },
+        );
+        for _ in 0..3 {
+            app.tick();
+        }
+
+        let parts = app.widget::<QuickSettings>(panel).unwrap();
+        assert!(!parts.landscape);
+        let header = rect(&app, app.children(panel).unwrap()[0]);
+        let sliders = rect(&app, parts.sliders);
+        let tiles = rect(&app, parts.bottom_bar);
+        let slider_column = app.children(parts.sliders.id()).unwrap()[0];
+        let controls = app.children(slider_column).unwrap();
+        let volume = rect(&app, controls[0]);
+        let brightness = rect(&app, controls[1]);
+        let tile_rows = app.children(parts.bottom_bar.id()).unwrap();
+        let top_row = rect(&app, tile_rows[0]);
+        let bottom_row = rect(&app, tile_rows[1]);
+        let panel_rect = rect(&app, panel);
+        let bottom = |r: Rect| r.origin.y + r.height();
+
+        assert_eq!(panel_rect.height(), 958.0);
+        assert!(sliders.height() > 0.0, "{sliders:?}");
+        assert!(header.origin.y >= panel_rect.origin.y);
+        assert!(bottom(header) <= volume.origin.y, "{header:?} {volume:?}");
+        assert!(
+            bottom(volume) <= brightness.origin.y,
+            "{volume:?} {brightness:?}"
+        );
+        assert!(
+            bottom(brightness) <= bottom(sliders),
+            "{brightness:?} {sliders:?}"
+        );
+        assert!(
+            bottom(sliders) <= top_row.origin.y,
+            "{sliders:?} {top_row:?}"
+        );
+        assert!(
+            bottom(top_row) <= bottom_row.origin.y,
+            "{top_row:?} {bottom_row:?}"
+        );
+        assert!(
+            bottom(bottom_row) <= bottom(tiles),
+            "{bottom_row:?} {tiles:?}"
+        );
+        assert!(
+            bottom(tiles) <= bottom(panel_rect),
+            "{tiles:?} {panel_rect:?}"
+        );
+    }
+
+    #[test]
     fn sliders_sit_beside_the_tiles_only_while_the_window_is_wider_than_tall() {
         let mut app = App::new();
         app.add_module(LayoutModule)
