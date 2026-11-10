@@ -5,7 +5,8 @@ use crate::bottom_bar::{BottomBar, BottomBarBuilder};
 use crate::header::HeaderBuilder;
 use crate::sliders::{Sliders, SlidersBuilder};
 
-const SECTION_GAP: f32 = 31.0;
+const LANDSCAPE_SECTION_GAP: f32 = 31.0;
+const PORTRAIT_SECTION_GAP_PERCENT: f32 = 3.5;
 
 /// The panel: header on top and, under it, a body holding the sliders and
 /// the tiles. The drag handle under it all is the control center's.
@@ -37,12 +38,16 @@ fn body_style(landscape: bool) -> LayoutStyle {
     let style = LayoutStyle::default()
         .width(percent(100.0))
         .grow(1.0)
-        .min_height(px(0.0))
-        .gap(px(SECTION_GAP));
+        .min_height(px(0.0));
     if landscape {
-        style.row().align_items(Align::Center)
+        style
+            .row()
+            .align_items(Align::Center)
+            .gap(px(LANDSCAPE_SECTION_GAP))
     } else {
-        style.column()
+        style
+            .column()
+            .row_gap(percent(PORTRAIT_SECTION_GAP_PERCENT))
     }
 }
 
@@ -102,6 +107,17 @@ mod tests {
     use super::*;
     use mecha_wayland::mechanix_widgets::prelude::FontBook;
 
+    #[test]
+    fn section_gap_follows_portrait_body_height_but_stays_fixed_in_landscape() {
+        let portrait = body_style(false);
+        assert_eq!(portrait.row_gap, percent(3.5));
+        assert_eq!(portrait.column_gap, px(0.0));
+
+        let landscape = body_style(true);
+        assert_eq!(landscape.row_gap, px(31.0));
+        assert_eq!(landscape.column_gap, px(31.0));
+    }
+
     fn rect(app: &App, id: impl Into<NodeId>) -> Rect {
         app.component::<ComputedLayout>(id).unwrap().rect
     }
@@ -142,12 +158,13 @@ mod tests {
         let parts = app.widget::<QuickSettings>(panel).unwrap();
         assert!(!parts.landscape);
         let header = rect(&app, app.children(panel).unwrap()[0]);
+        let body = rect(&app, parts.body);
         let sliders = rect(&app, parts.sliders);
         let tiles = rect(&app, parts.bottom_bar);
         let slider_column = app.children(parts.sliders.id()).unwrap()[0];
         let controls = app.children(slider_column).unwrap();
         let volume = rect(&app, controls[0]);
-        let brightness = rect(&app, controls[1]);
+        let brightness = rect(&app, controls[2]);
         let tile_rows = app.children(parts.bottom_bar.id()).unwrap();
         let top_row = rect(&app, tile_rows[0]);
         let bottom_row = rect(&app, tile_rows[1]);
@@ -155,6 +172,8 @@ mod tests {
         let bottom = |r: Rect| r.origin.y + r.height();
 
         assert_eq!(panel_rect.height(), 958.0);
+        let gap = tiles.origin.y - bottom(sliders);
+        assert!((gap - body.height() * 0.035).abs() <= 1.0, "{body:?} {gap}");
         assert!(sliders.height() > 0.0, "{sliders:?}");
         assert!(header.origin.y >= panel_rect.origin.y);
         assert!(bottom(header) <= volume.origin.y, "{header:?} {volume:?}");
@@ -230,18 +249,21 @@ mod tests {
         assert!(!parts.landscape);
         let panel_rect = rect(&app, panel);
         let header = rect(&app, app.children(panel).unwrap()[0]);
+        let body = rect(&app, parts.body);
         let sliders = rect(&app, parts.sliders);
         let tiles = rect(&app, parts.bottom_bar);
         let slider_column = app.children(parts.sliders.id()).unwrap()[0];
         let controls = app.children(slider_column).unwrap();
         let volume = rect(&app, controls[0]);
-        let brightness = rect(&app, controls[1]);
+        let brightness = rect(&app, controls[2]);
         let tile_rows = app.children(parts.bottom_bar.id()).unwrap();
         let top_row = rect(&app, tile_rows[0]);
         let bottom_row = rect(&app, tile_rows[1]);
         let bottom = |r: Rect| r.origin.y + r.height();
 
         assert_eq!(panel_rect.height(), 230.0);
+        let gap = tiles.origin.y - bottom(sliders);
+        assert!((gap - body.height() * 0.035).abs() <= 1.0, "{body:?} {gap}");
         assert!(
             sliders.height() > 0.0,
             "slider section collapsed: {sliders:?}"
