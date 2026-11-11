@@ -57,7 +57,7 @@ impl Widget for BrightnessSlider {
                 .range(MIN_BRIGHTNESS, MAX_BRIGHTNESS)
                 .length(percent(SLIDER_LENGTH_PERCENT))
                 .style(LayoutStyle::default().height(percent(100.0)))
-                .tick_height_relative(percent(100.0))
+                .tick_height(percent(100.0))
                 .tick_gap(4.0),
         );
         // Sent on every step change; the display service coalesces these so
