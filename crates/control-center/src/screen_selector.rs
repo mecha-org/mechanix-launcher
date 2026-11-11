@@ -3,9 +3,13 @@ use mecha_wayland::prelude::*;
 
 use crate::app_screens::AppScreen;
 
+#[cfg(test)]
+mod tests;
+
 const TOP: f32 = 20.0;
 const TAB_HEIGHT: f32 = 47.0;
-const TAB_PADDING_X: f32 = 16.0;
+const MIN_TAB_SPACING_X: f32 = 2.0;
+const MAX_TAB_SPACING_X: f32 = 16.0;
 const TAB_PADDING_Y: f32 = 14.0;
 const INDICATOR: f32 = 2.0;
 const DIVIDER: f32 = 1.0;
@@ -46,20 +50,38 @@ impl Widget for ScreenSelector {
         *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
             .column()
             .width(percent(100.0))
-            .shrink(0.0)
-            .padding(Insets::new(px(TOP), px(0.0), px(0.0), px(0.0)));
+            .min_height(px(TAB_HEIGHT + DIVIDER))
+            .shrink(1.0);
+
+        // Give up the top gap before reducing the tab row or divider.
+        s.spawn(
+            me,
+            div().style(
+                LayoutStyle::default()
+                    .height(px(TOP))
+                    .min_height(px(0.0))
+                    .max_height(px(TOP))
+                    .shrink(1.0),
+            ),
+        );
 
         let row = s.spawn(
             me,
             div().style(
                 LayoutStyle::default()
                     .row()
-                    .size(percent(100.0), px(TAB_HEIGHT)),
+                    .size(percent(100.0), px(TAB_HEIGHT))
+                    .shrink(0.0),
             ),
         );
 
         let app_screen_selected = builder.selected;
         let indicator_color = s.color(ColorRole::Primary);
+        let side_spacing = LayoutStyle::default()
+            .width(px(MAX_TAB_SPACING_X))
+            .min_width(px(MIN_TAB_SPACING_X))
+            .max_width(px(MAX_TAB_SPACING_X))
+            .shrink(1.0);
         let tabs = AppScreen::ALL.map(|screen| {
             let on = screen == app_screen_selected;
             let cell = s.spawn(
@@ -67,26 +89,32 @@ impl Widget for ScreenSelector {
                 div().style(
                     LayoutStyle::default()
                         .relative()
-                        .column()
+                        .row()
+                        // Auto basis keeps each label's natural width in the
+                        // allocation; spare width is shared between the tabs.
                         .grow(1.0)
+                        .min_width(px(0.0))
                         .height(percent(100.0))
                         .align_items(Align::Center)
                         .justify(Justify::Center)
                         .padding(Insets::new(
                             px(TAB_PADDING_Y),
-                            px(TAB_PADDING_X),
+                            px(0.0),
                             px(TAB_PADDING_Y),
-                            px(TAB_PADDING_X),
+                            px(0.0),
                         )),
                 ),
             );
+            s.spawn(cell, div().style(side_spacing.clone()));
             let label = s.spawn(
                 cell,
                 text(screen.label())
                     .variant(TextVariant::HeadlineSmall)
                     .emphasised()
+                    .style(LayoutStyle::default().shrink(0.0))
                     .color(label_color(on)),
             );
+            s.spawn(cell, div().style(side_spacing.clone()));
             let indicator = s.spawn(
                 cell,
                 div().background(indicator_color).style(
@@ -110,9 +138,11 @@ impl Widget for ScreenSelector {
         let divider_color = s.color(ColorRole::Outline);
         s.spawn(
             me,
-            div()
-                .background(divider_color)
-                .style(LayoutStyle::default().size(percent(100.0), px(DIVIDER))),
+            div().background(divider_color).style(
+                LayoutStyle::default()
+                    .size(percent(100.0), px(DIVIDER))
+                    .shrink(0.0),
+            ),
         );
 
         let control_center = builder.control_center;

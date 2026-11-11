@@ -8,7 +8,7 @@ use mecha_wayland::prelude::*;
 
 use services::{APUpdate, SetWifiEnabled, StateUpdate, WifiState};
 
-use super::{Borders, DOT_RADIUS, WIDE_GAP, build_tile, tile_quad};
+use super::{Borders, DOT_RADIUS, build_tile, label_spacer, tile_quad};
 use crate::util::{load_icon, short_name};
 
 /// Latest Wi-Fi details used to render the tile.
@@ -18,6 +18,7 @@ pub struct Wifi {
     ssid: String,
     strength: u8,
     borders: Borders,
+    spacer: Handle<Div>,
     // TODO: maybe store sprites in the widget itself ?
 }
 
@@ -47,7 +48,8 @@ impl Widget for Wifi {
     type Builder = WifiBuilder;
 
     fn build(b: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
-        let icon_handle = build_tile(me, s, icons::HIGH, WIDE_GAP, b.borders);
+        let icon_handle = build_tile(me, s, icons::HIGH, b.borders);
+        let spacer = label_spacer(me, s);
         // Load sprites once; event handlers only switch between their IDs.
         let atlas = &mut s.resource_mut::<Atlas>();
         let sprites = WifiSprites {
@@ -66,7 +68,12 @@ impl Widget for Wifi {
                 .variant(TextVariant::LabelLarge)
                 .max_lines(1)
                 .overflow(TextOverflow::Ellipsis)
-                .style(LayoutStyle::default().max_width(percent(100.0)).hidden())
+                .style(
+                    LayoutStyle::default()
+                        .max_width(percent(100.0))
+                        .shrink(0.0)
+                        .hidden(),
+                )
                 .color(ColorRole::OnSurfaceVariant),
         );
         let dot = s.spawn(
@@ -122,6 +129,7 @@ impl Widget for Wifi {
             ssid: "".to_string(),
             strength: 0,
             borders: b.borders,
+            spacer,
         }
     }
 }
@@ -176,6 +184,12 @@ fn render(
 
     // Apply the appearance together after selecting it above.
     ctx.set_paint(Paint::Quad(tile));
+    let spacer = ctx.me().spacer;
+    ctx.at(spacer).unwrap().set_display(if connected {
+        Display::Flex
+    } else {
+        Display::Hidden
+    });
     let mut label = ctx.at(ssid_handle).unwrap();
     label.set_display(if connected {
         Display::Flex

@@ -1,10 +1,12 @@
 use mecha_wayland::prelude::*;
 
 use crate::tiles::{
-    BatteryBuilder, BluetoothBuilder, TILE_HEIGHT, WifiBuilder, action_tile, borders, svg,
+    BatteryBuilder, BluetoothBuilder, MAX_TILE_HEIGHT, WifiBuilder, action_tile, borders, svg,
 };
 
-const BOTTOM_BAR_HEIGHT: f32 = TILE_HEIGHT * 2.0;
+const BOTTOM_BAR_HEIGHT: f32 = MAX_TILE_HEIGHT * 2.0;
+// In portrait, leave room in the body for the sliders as the panel gets shorter.
+const PORTRAIT_BODY_PERCENT: f32 = 60.0;
 
 pub struct BottomBar;
 
@@ -14,17 +16,34 @@ impl Build for BottomBarBuilder {
     type Widget = BottomBar;
 }
 
+impl BottomBar {
+    /// Portrait: full width under the sliders.
+    /// Landscape: half the width, beside the sliders.
+    pub fn style(landscape: bool) -> LayoutStyle {
+        let style = LayoutStyle::default().column().shrink(0.0);
+        if landscape {
+            style
+                .height(px(BOTTOM_BAR_HEIGHT))
+                .grow(1.0)
+                .flex_basis(px(0.0))
+                .min_width(px(0.0))
+        } else {
+            style
+                .width(percent(100.0))
+                .height(percent(PORTRAIT_BODY_PERCENT))
+                .max_height(px(BOTTOM_BAR_HEIGHT))
+        }
+    }
+}
+
 impl Widget for BottomBar {
     type Builder = BottomBarBuilder;
 
     fn build(_: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
-        *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
-            .height(px(BOTTOM_BAR_HEIGHT))
-            .column()
-            .shrink(0.0);
+        *s.component_mut::<LayoutStyle>(me).unwrap() = BottomBar::style(false);
 
         let row = LayoutStyle::default()
-            .height(px(TILE_HEIGHT))
+            .height(percent(50.0))
             .row()
             .shrink(0.0);
         let top = s.spawn(me, div().style(row.clone()));
@@ -68,6 +87,48 @@ mod tests {
     use mecha_wayland::mechanix_widgets::NativeText;
     use mecha_wayland::mechanix_widgets::prelude::{FontBook, Text};
     use services::{BatteryPercentageChanged, BluetoothState, BluetoothStateChanged};
+
+    #[test]
+    fn portrait_rows_follow_the_bar_height_and_keep_their_tiles_inside() {
+        let mut app = App::new();
+        app.add_module(LayoutModule)
+            .add_module(PaintModule)
+            .add_module(WindowModule)
+            .add_module(MechanixTheme::dark());
+        let mut atlas = Atlas::new();
+        let font = atlas.add_font(assets::fonts::GEIST_MONO).unwrap();
+        app.insert_resource(atlas);
+        app.insert_resource(FontBook::new(font));
+
+        let size = |height| LayoutStyle::default().size(px(308.0), px(height));
+        let window = app.spawn(app.root(), window().layout(size(878.0)));
+        let bar = app.spawn(window, BottomBarBuilder);
+        for (parent_height, expected_height) in [(878.0, 212.0), (150.0, 90.0)] {
+            *app.component_mut::<LayoutStyle>(window).unwrap() = size(parent_height);
+            app.tick();
+
+            let rect = |id| app.component::<ComputedLayout>(id).unwrap().rect;
+            let bar_rect = rect(bar.id());
+            assert!(
+                (bar_rect.height() - expected_height).abs() <= 1.0,
+                "{bar_rect:?}"
+            );
+            let rows = app.children(bar.id()).unwrap();
+            let top = rect(rows[0]);
+            let bottom = rect(rows[1]);
+            assert!(top.height() > 0.0 && bottom.height() > 0.0);
+            assert!(top.origin.y + top.height() <= bottom.origin.y);
+            assert!(bottom.origin.y + bottom.height() <= bar_rect.origin.y + bar_rect.height());
+            for &row in rows {
+                let row_rect = rect(row);
+                for &tile in app.children(row).unwrap() {
+                    let tile_rect = rect(tile);
+                    assert_eq!(tile_rect.origin.y, row_rect.origin.y);
+                    assert_eq!(tile_rect.height(), row_rect.height());
+                }
+            }
+        }
+    }
 
     #[test]
     fn edge_tiles_drop_their_screen_edge_border() {

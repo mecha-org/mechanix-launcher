@@ -3,7 +3,7 @@ use mecha_wayland::mechanix_widgets::prelude::{
 };
 use mecha_wayland::prelude::*;
 
-use super::{Borders, DOT_RADIUS, WIDE_GAP, build_tile, tile_quad};
+use super::{Borders, DOT_RADIUS, build_tile, label_spacer, tile_quad};
 use crate::util::{load_icon, short_name};
 use services::{BluetoothState, BluetoothStateChanged, ToggleBluetooth};
 
@@ -12,6 +12,7 @@ use assets::icons::bluetooth as svg;
 pub struct Bluetooth {
     pub icon: Handle<Icon>,
     pub name: Handle<Text>,
+    spacer: Handle<Div>,
     pub dot: Handle<Div>,
     pub icon_on: SpriteId,
     pub icon_off: SpriteId,
@@ -37,7 +38,8 @@ impl Widget for Bluetooth {
         let icon_off = icon_on;
         let icon_connected = load_icon(&mut s.resource_mut::<Atlas>(), svg::CONNECTED);
 
-        let icon = build_tile(me, s, svg::DEFAULT, WIDE_GAP, b.borders);
+        let icon = build_tile(me, s, svg::DEFAULT, b.borders);
+        let spacer = label_spacer(me, s);
 
         // Only shown while connected, so the icon sits centred otherwise.
         // `short_name` abbreviates device names; ellipsis overflow is a fallback for narrow tiles.
@@ -47,7 +49,12 @@ impl Widget for Bluetooth {
                 .variant(TextVariant::LabelLarge)
                 .max_lines(1)
                 .overflow(TextOverflow::Ellipsis)
-                .style(LayoutStyle::default().max_width(percent(100.0)).hidden())
+                .style(
+                    LayoutStyle::default()
+                        .max_width(percent(100.0))
+                        .shrink(0.0)
+                        .hidden(),
+                )
                 .color(ColorRole::OnSurfaceVariant),
         );
         let dot = s.spawn(
@@ -71,6 +78,7 @@ impl Widget for Bluetooth {
         Bluetooth {
             icon,
             name,
+            spacer,
             dot,
             icon_on,
             icon_off,
@@ -123,6 +131,14 @@ impl BluetoothContext for Context<'_, Bluetooth> {
         let icon_handle = self.me().icon;
         let text_handle = self.me().name;
         let dot_handle = self.me().dot;
+        let spacer = self.me().spacer;
+        if let Some(mut gap) = self.at(spacer) {
+            gap.set_display(if text.is_some() {
+                Display::Flex
+            } else {
+                Display::Hidden
+            });
+        }
 
         if let Some(mut ic) = self.at(icon_handle) {
             ic.set_sprite(sprite);

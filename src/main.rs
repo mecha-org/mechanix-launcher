@@ -15,6 +15,7 @@ use nav::shell::{ContainerShown, NavModule, nav_window};
 use notifications::NotificationsModule;
 use quick_settings::QuickSettingsModule;
 use running_apps::{RunningApps, RunningAppsModule};
+use screen::OrientationModule;
 use status_bar::{
     DEFAULT_BAR_HEIGHT, DEFAULT_ICON_SIZE, StatusBarModule, StatusBarScreen, StatusIcons,
 };
@@ -213,6 +214,7 @@ fn main() {
     app.add_module(LayoutModule)
         .add_module(PaintModule)
         .add_module(WindowModule)
+        .add_module(OrientationModule)
         .add_module(InteractivityModule)
         .add_module(AnimationModule)
         .add_module(ScrollModule)
@@ -325,6 +327,7 @@ mod tests {
             .add_module(TimerModule)
             .add_module(PaintModule)
             .add_module(WindowModule)
+            .add_module(OrientationModule)
             .add_module(InteractivityModule)
             .add_module(AnimationModule)
             .add_module(ScrollModule)
