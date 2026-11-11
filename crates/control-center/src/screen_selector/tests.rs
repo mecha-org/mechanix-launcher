@@ -29,7 +29,7 @@ impl Fixture {
             },
         );
         let selector = app.children(center).unwrap()[0];
-        let row = app.children(selector).unwrap()[0];
+        let row = app.children(selector).unwrap()[1];
         let cells = app.children(row).unwrap().try_into().unwrap();
         let mut fixture = Self {
             app,
@@ -185,6 +185,48 @@ fn full_labels_fit_and_spacers_shrink_then_recover_on_resize() {
         }
         close(previous_right, row.right());
         assert!(f.rect(f.cells[0]).width() > f.rect(f.cells[1]).width());
+        f.assert_selection(AppScreen::NotificationsScreen);
+    }
+}
+
+#[test]
+fn top_spacing_yields_to_content_and_recovers_without_squeezing_tabs() {
+    let mut f = Fixture::new(AppScreen::NotificationsScreen);
+    let selector = f.app.children(f.center).unwrap()[0];
+    let spacer = f.app.children(selector).unwrap()[0];
+    let divider = f.app.children(selector).unwrap()[2];
+    let content = f.app.widget::<ControlCenter>(f.center).unwrap().containers[0].1;
+    // Reserve a realistic content height to put pressure on the selector through
+    // its parent, rather than imposing a smaller selector height directly.
+    f.app
+        .component_mut::<LayoutStyle>(content)
+        .unwrap()
+        .min_height = px(230.0);
+    let label_heights = f.cells.map(|cell| f.rect(f.parts(cell)[1]).height());
+
+    // 47-unit tabs + 1-unit divider + 230-unit content + 48-unit drag handle.
+    for (height, gap) in [(400.0, 20.0), (336.0, 10.0), (326.0, 0.0), (400.0, 20.0)] {
+        *f.app.component_mut::<LayoutStyle>(f.window).unwrap() =
+            LayoutStyle::default().size(px(308.0), px(height));
+        f.settle();
+        let selector_rect = f.rect(selector);
+        let spacer_rect = f.rect(spacer);
+        let row = f.rect(f.row);
+        let divider_rect = f.rect(divider);
+        close(spacer_rect.height(), gap);
+        close(spacer_rect.y(), selector_rect.y());
+        close(row.y(), spacer_rect.bottom());
+        close(row.height(), 47.0);
+        close(divider_rect.y(), row.bottom());
+        close(divider_rect.height(), 1.0);
+        close(divider_rect.bottom(), selector_rect.bottom());
+        close(f.rect(content.id()).y(), selector_rect.bottom());
+        assert!(f.rect(content.id()).height() >= 230.0);
+        let handle = *f.app.children(f.center).unwrap().last().unwrap();
+        close(f.rect(handle).bottom(), height);
+        for (cell, expected_height) in f.cells.into_iter().zip(label_heights) {
+            close(f.rect(f.parts(cell)[1]).height(), expected_height);
+        }
         f.assert_selection(AppScreen::NotificationsScreen);
     }
 }
