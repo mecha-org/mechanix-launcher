@@ -18,7 +18,7 @@ pub(crate) const MAX_TILE_HEIGHT: f32 = 106.0;
 pub(crate) const DOT_RADIUS: f32 = 5.0;
 
 /// Preferred icon/label spacing; the spacer yields before either content item.
-const ICON_LABEL_GAP: f32 = 20.0;
+const ICON_LABEL_GAP: f32 = 10.0;
 
 /// Starts hidden; each tile controls visibility alongside its label.
 pub(super) fn label_spacer<W: Widget>(me: Handle<W>, s: &mut Spawner<'_, W>) -> Handle<Div> {
