@@ -203,7 +203,7 @@ fn tabs_stay_flush_with_the_top_without_squeezing_content_on_resize() {
         .min_height = px(230.0);
     let label_heights = f.cells.map(|cell| f.rect(f.parts(cell)[1]).height());
 
-    // 47-unit tabs + 1-unit divider + 230-unit content + 48-unit drag handle.
+    // 47-unit tabs + 1-unit divider + at least 230-unit content + 4.47% handle strip.
     for height in [400.0, 336.0, 326.0, 400.0] {
         *f.app.component_mut::<LayoutStyle>(f.window).unwrap() =
             LayoutStyle::default().size(px(308.0), px(height));
@@ -221,6 +221,7 @@ fn tabs_stay_flush_with_the_top_without_squeezing_content_on_resize() {
         close(f.rect(content.id()).y(), selector_rect.bottom());
         assert!(f.rect(content.id()).height() >= 230.0);
         let handle = *f.app.children(f.center).unwrap().last().unwrap();
+        close(f.rect(handle).height(), height * 0.0447);
         close(f.rect(handle).bottom(), height);
         for (cell, expected_height) in f.cells.into_iter().zip(label_heights) {
             close(f.rect(f.parts(cell)[1]).height(), expected_height);
