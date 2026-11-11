@@ -1,6 +1,6 @@
 use mecha_wayland::prelude::*;
 
-use super::{Borders, GAP, frame};
+use super::{Borders, frame};
 use crate::util::load_icon;
 
 /// One-colour SVGs for the [`ActionTile`]s.
@@ -39,7 +39,7 @@ impl Widget for ActionTile {
     type Builder = ActionTileBuilder;
 
     fn build(b: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
-        frame(me, s, GAP, b.borders);
+        frame(me, s, b.borders);
         let sprite = load_icon(&mut s.resource_mut::<Atlas>(), b.icon);
         s.spawn(
             me,
