@@ -5,3 +5,7 @@ edition = "2024"
 
 [dependencies]
 mecha-wayland.workspace = true
+
+[dev-dependencies]
+dbus = { git = "https://github.com/mecha-org/mecha-wayland", branch = "dev", features = ["fake"] }
+wayland = { git = "https://github.com/mecha-org/mecha-wayland", branch = "dev", features = ["fake"] }

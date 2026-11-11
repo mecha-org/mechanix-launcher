@@ -1,9 +1,10 @@
-//! System power-off and restart through systemd-logind on the system bus.
+//! System power-off, restart and suspend through systemd-logind on the
+//! system bus.
 use mecha_wayland::prelude::*;
 
-const LOGIND: &str = "org.freedesktop.login1";
-const MANAGER_PATH: &str = "/org/freedesktop/login1";
-const MANAGER_INTERFACE: &str = "org.freedesktop.login1.Manager";
+pub(crate) const LOGIND: &str = "org.freedesktop.login1";
+pub(crate) const MANAGER_PATH: &str = "/org/freedesktop/login1";
+pub(crate) const MANAGER: &str = "org.freedesktop.login1.Manager";
 
 /// Request an interactive power-off (logind may prompt for authorization).
 pub struct PowerOff;
@@ -12,6 +13,12 @@ impl Signal for PowerOff {}
 /// Request an interactive reboot (logind may prompt for authorization).
 pub struct Restart;
 impl Signal for Restart {}
+
+/// Suspend now. logind still waits for its delay inhibitors, such as the
+/// session's lock before sleep.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Suspend;
+impl Signal for Suspend {}
 
 struct PowerStatus {
     pending: Option<(CallId, &'static str)>,
@@ -28,6 +35,11 @@ impl Module for PowerModule {
         app.insert_resource(PowerStatus { pending: None });
         app.system(on_power_off)
             .system(on_restart)
+            .system(|app, _: &Suspend| {
+                let call =
+                    MethodCall::new(LOGIND, MANAGER_PATH, MANAGER, "Suspend").body(&(false,));
+                app.resource_mut::<DBus>().system().send_no_reply(call);
+            })
             .system(on_reply)
             .system(on_disconnect);
     }
@@ -48,7 +60,7 @@ fn request(app: &mut App, method: &'static str) {
     // The `interactive` argument alone is not enough: logind only asks polkit
     // to prompt when the message header allows interactive authorization.
     let call = app.resource_mut::<DBus>().system().send(
-        MethodCall::new(LOGIND, MANAGER_PATH, MANAGER_INTERFACE, method)
+        MethodCall::new(LOGIND, MANAGER_PATH, MANAGER, method)
             .body(&(true,))
             .allow_interactive_auth(),
     );
