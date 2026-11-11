@@ -14,6 +14,7 @@ pub mod notification_store;
 pub mod notifications;
 pub mod notify;
 pub mod notify_signal;
+mod ongoing;
 pub mod options_menu;
 pub mod popup;
 pub mod rich_text;

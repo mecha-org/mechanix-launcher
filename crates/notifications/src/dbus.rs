@@ -26,8 +26,13 @@ pub fn on_call(app: &mut App, e: &MethodCallReceived) {
     }
 
     match e.call.member().as_str() {
+        "GetCapabilities" => {
+            app.resource_mut::<DBus>()
+                .reply(&e.call, &(CAPABILITIES.to_vec(),));
+        }
         "GetServerInformation" => {
-            app.resource_mut::<DBus>().reply(&e.call, &capabilities());
+            app.resource_mut::<DBus>()
+                .reply(&e.call, &server_information());
             return;
         }
         "Notify" => {
@@ -44,7 +49,11 @@ pub fn on_call(app: &mut App, e: &MethodCallReceived) {
     };
 }
 
-fn capabilities() -> (&'static str, &'static str, &'static str, &'static str) {
+/// Markup is parsed; cards stay until dismissed or expired. No actions yet.
+const CAPABILITIES: &[&str] = &["body", "body-markup", "persistence"];
+
+/// Name, vendor, version and spec version.
+fn server_information() -> (&'static str, &'static str, &'static str, &'static str) {
     (
         dbus_spec::SERVICE_NAME,
         dbus_spec::VENDOR,

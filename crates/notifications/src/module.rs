@@ -22,5 +22,6 @@ impl Module for NotificationsModule {
         app.system(on_call);
 
         app.init_resource::<NotificationStore>();
+        crate::ongoing::install(app);
     }
 }
