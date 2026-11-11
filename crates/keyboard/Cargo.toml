@@ -5,10 +5,23 @@ edition = "2024"
 
 [dependencies]
 mecha-wayland.workspace = true
-status-bar.workspace = true
+assets.workspace = true
 
 tracing = "0.1"
 serde = { version = "1.0", features = ["derive"] }
 yaml_serde = "0.10.7"
 xkbcommon = { version = "0.9.0", features = ["wayland"] }
 rustix = { version = "1.1.4", features = ["fs"] }
+
+# Only for the standalone `mechanix-osk` binary.
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+
+[features]
+# Builds the `mechanix-osk` binary: the keyboard as its own process, for
+# shells other than the launcher. `cargo build -p keyboard --features standalone`
+standalone = ["dep:tracing-subscriber"]
+
+[[bin]]
+name = "mechanix-osk"
+path = "src/bin/mechanix-osk.rs"
+required-features = ["standalone"]

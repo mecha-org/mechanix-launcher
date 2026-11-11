@@ -495,11 +495,12 @@ dependencies = [
 name = "keyboard"
 version = "0.1.0"
 dependencies = [
+ "assets",
  "mecha-wayland",
  "rustix",
  "serde",
- "status-bar",
  "tracing",
+ "tracing-subscriber",
  "xkbcommon",
  "yaml_serde",
 ]
