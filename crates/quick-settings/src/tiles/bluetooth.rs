@@ -108,7 +108,7 @@ impl BluetoothContext for Context<'_, Bluetooth> {
         let icon_color = self.color(ColorRole::OnSurface);
         let text_color = self.color(ColorRole::OnSurfaceVariant);
         let dot_paint = if is_on {
-            Paint::Quad(Quad::new(self.color(ColorRole::Primary)).radius(DOT_RADIUS))
+            Paint::Quad(Quad::new(self.color(ColorRole::Primary)).radius(DOT_RADIUS / 2.0))
         } else {
             Paint::None
         };

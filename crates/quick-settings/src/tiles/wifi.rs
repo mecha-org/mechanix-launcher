@@ -177,7 +177,7 @@ fn render(
     let tile = tile_quad(background, border_colour, wifi_borders);
     let icon_colour = if on { on_icon_colour } else { off_icon_colour };
     let dot_paint = if on {
-        Paint::Quad(Quad::new(ctx.color(ColorRole::Primary)).radius(DOT_RADIUS))
+        Paint::Quad(Quad::new(ctx.color(ColorRole::Primary)).radius(DOT_RADIUS / 2.0))
     } else {
         Paint::None
     };
