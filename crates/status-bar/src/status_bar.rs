@@ -19,6 +19,22 @@ pub struct StatusBar {
     pub battery: Handle<BatteryPercentage>,
 }
 
+/// The bar moved onto a lock surface (`true`) or off one. The lock screen
+/// shows the time itself, larger: on it, the bar's clock hides.
+pub(crate) struct OnLock(pub bool);
+impl Event for OnLock {}
+
+/// A bar moved: tell it whether it is on a lock surface now.
+pub(crate) fn on_moved(app: &mut App, m: &Moved) {
+    if app.widget::<StatusBar>(m.id).is_none() {
+        return;
+    }
+    let on_lock = std::iter::once(m.to)
+        .chain(app.ancestors(m.to))
+        .any(|n| matches!(app.component::<Role>(n), Some(Role::Lock(_))));
+    app.emit(OnLock(on_lock), m.id);
+}
+
 pub fn status_bar() -> StatusBarBuilder {
     StatusBarBuilder
 }
@@ -97,6 +113,10 @@ impl Widget for StatusBar {
         });
         s.on::<APUpdate>(me, move |ctx, event| {
             ctx.at(wifi).unwrap().set_strength(event.strength);
+        });
+        s.on::<OnLock>(me, move |ctx, e| {
+            let display = if e.0 { Display::Hidden } else { Display::Flex };
+            ctx.at(clock).unwrap().set_display(display);
         });
 
         StatusBar {

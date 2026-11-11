@@ -56,6 +56,47 @@ mod tests {
     }
 
     #[test]
+    fn the_clock_hides_on_a_lock_surface() {
+        let mut app = App::new();
+        app.add_module(LayoutModule)
+            .add_module(PaintModule)
+            .add_module(MechanixTheme::dark())
+            .add_module(RingModule::default())
+            .add_module(TimerModule)
+            .insert_resource(Atlas::new());
+        app.register_component::<Role>()
+            .system(status_bar::on_moved);
+        let font = app
+            .resource_mut::<Atlas>()
+            .add_font(GEIST_MONO_BYTES)
+            .expect("GeistMono loads");
+        app.insert_resource(FontBook::new(font));
+        let icons = StatusIcons::load(&mut app.resource_mut::<Atlas>(), DEFAULT_ICON_SIZE)
+            .expect("icons load");
+        app.insert_resource(icons);
+
+        let root = app.root();
+        let home = app.spawn(root, div()).id();
+        let lock = app
+            .spawn_with(root, div(), (Role::Lock(WlOutput(ObjectId(7))),))
+            .id();
+        let slot = app.spawn(lock, div()).id();
+        let bar = app.spawn(home, status_bar());
+        app.tick();
+        let clock = |app: &App| {
+            let clock = app.widget::<StatusBar>(bar).unwrap().clock;
+            app.component::<LayoutStyle>(clock.id()).unwrap().display
+        };
+
+        app.move_to(bar, slot);
+        app.tick();
+        assert_eq!(clock(&app), Display::Hidden);
+        app.move_to(bar, home);
+        app.tick();
+        assert_eq!(clock(&app), Display::Flex);
+    }
+
+    #[test]
     fn test_status_bar_spawn() {
         let mut app = App::new();
         app.add_module(LayoutModule)

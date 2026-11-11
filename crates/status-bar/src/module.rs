@@ -21,7 +21,8 @@ impl Module for StatusBarModule {
     fn install(self, app: &mut App) {
         app.add_module(NetworkManagerModule)
             .add_module(BluetoothModule)
-            .add_module(UpowerModule);
+            .add_module(UpowerModule)
+            .system(crate::status_bar::on_moved);
     }
 }
 
