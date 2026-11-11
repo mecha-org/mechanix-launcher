@@ -119,6 +119,7 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
         .open(bottom_quick(), FADE)
         .close(OnExternal(ExternalEvent::AppLaunched), INSTANT)
         .close(OnExternal(ExternalEvent::WindowOpened), INSTANT)
+        .open(OnExternal(ExternalEvent::LastWindowClosed), FADE)
         .child(
             container(DRAWER, drawer)
                 .open(swipe(HOME, Direction::Up, Timing::Any), INSTANT)
@@ -135,7 +136,9 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
             INSTANT,
         )
         .close(bottom_quick(), INSTANT)
-        .close(OnExternal(ExternalEvent::AppLaunched), INSTANT);
+        .close(OnExternal(ExternalEvent::AppLaunched), INSTANT)
+        // Closing the last app from here leaves nothing to show but Home.
+        .close(OnExternal(ExternalEvent::LastWindowClosed), INSTANT);
 
     NavModule::new(cfg)
         .action(bottom_corner(Span::LeftCorner), show_keyboard)
@@ -200,7 +203,14 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
                 ),
                 bar,
             )
-            .container(container(STATUS, StatusBarScreen).initially_open())
+            .container(
+                container(STATUS, StatusBarScreen)
+                    .initially_open()
+                    // Out of the way of a fullscreen app: with nothing
+                    // shown, the window drops below every app.
+                    .close(OnExternal(ExternalEvent::FullscreenEntered), INSTANT)
+                    .open(OnExternal(ExternalEvent::FullscreenLeft), INSTANT),
+            )
             .no_input(),
         )
 }

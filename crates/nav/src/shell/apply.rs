@@ -106,6 +106,9 @@ pub(crate) fn window_layers(nav: &Nav) -> Vec<(NodeId, Layer)> {
 /// Clears the tick clock once nothing animates, however the animation
 /// ended, so the next one starts from a zero tick.
 pub(crate) fn apply(app: &mut App) {
+    // Whatever just opened or closed may cover a fullscreen app or
+    // uncover one: the stack hears that first.
+    super::module::feed_fullscreen(app);
     {
         let mut nav = app.resource_mut::<Nav>();
         if nav.stack.animating().is_empty() {
