@@ -29,7 +29,7 @@ impl Fixture {
             },
         );
         let selector = app.children(center).unwrap()[0];
-        let row = app.children(selector).unwrap()[1];
+        let row = app.children(selector).unwrap()[0];
         let cells = app.children(row).unwrap().try_into().unwrap();
         let mut fixture = Self {
             app,
@@ -190,11 +190,10 @@ fn full_labels_fit_and_spacers_shrink_then_recover_on_resize() {
 }
 
 #[test]
-fn top_spacing_yields_to_content_and_recovers_without_squeezing_tabs() {
+fn tabs_stay_flush_with_the_top_without_squeezing_content_on_resize() {
     let mut f = Fixture::new(AppScreen::NotificationsScreen);
     let selector = f.app.children(f.center).unwrap()[0];
-    let spacer = f.app.children(selector).unwrap()[0];
-    let divider = f.app.children(selector).unwrap()[2];
+    let divider = f.app.children(selector).unwrap()[1];
     let content = f.app.widget::<ControlCenter>(f.center).unwrap().containers[0].1;
     // Reserve a realistic content height to put pressure on the selector through
     // its parent, rather than imposing a smaller selector height directly.
@@ -205,17 +204,16 @@ fn top_spacing_yields_to_content_and_recovers_without_squeezing_tabs() {
     let label_heights = f.cells.map(|cell| f.rect(f.parts(cell)[1]).height());
 
     // 47-unit tabs + 1-unit divider + 230-unit content + 48-unit drag handle.
-    for (height, gap) in [(400.0, 20.0), (336.0, 10.0), (326.0, 0.0), (400.0, 20.0)] {
+    for height in [400.0, 336.0, 326.0, 400.0] {
         *f.app.component_mut::<LayoutStyle>(f.window).unwrap() =
             LayoutStyle::default().size(px(308.0), px(height));
         f.settle();
         let selector_rect = f.rect(selector);
-        let spacer_rect = f.rect(spacer);
         let row = f.rect(f.row);
         let divider_rect = f.rect(divider);
-        close(spacer_rect.height(), gap);
-        close(spacer_rect.y(), selector_rect.y());
-        close(row.y(), spacer_rect.bottom());
+        close(row.y(), selector_rect.y());
+        close(selector_rect.y(), f.rect(f.center.id()).y());
+        close(selector_rect.height(), 48.0);
         close(row.height(), 47.0);
         close(divider_rect.y(), row.bottom());
         close(divider_rect.height(), 1.0);

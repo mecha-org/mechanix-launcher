@@ -6,7 +6,6 @@ use crate::app_screens::AppScreen;
 #[cfg(test)]
 mod tests;
 
-const TOP: f32 = 20.0;
 const TAB_HEIGHT: f32 = 47.0;
 const MIN_TAB_SPACING_X: f32 = 2.0;
 const MAX_TAB_SPACING_X: f32 = 16.0;
@@ -52,18 +51,6 @@ impl Widget for ScreenSelector {
             .width(percent(100.0))
             .min_height(px(TAB_HEIGHT + DIVIDER))
             .shrink(1.0);
-
-        // Give up the top gap before reducing the tab row or divider.
-        s.spawn(
-            me,
-            div().style(
-                LayoutStyle::default()
-                    .height(px(TOP))
-                    .min_height(px(0.0))
-                    .max_height(px(TOP))
-                    .shrink(1.0),
-            ),
-        );
 
         let row = s.spawn(
             me,
