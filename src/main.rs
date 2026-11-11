@@ -17,6 +17,7 @@ use power_menu::PowerMenuModule;
 use quick_settings::QuickSettingsModule;
 use running_apps::{RunningApps, RunningAppsModule};
 use screen::OrientationModule;
+use services::KeepAwakeModule;
 use status_bar::{
     DEFAULT_BAR_HEIGHT, DEFAULT_ICON_SIZE, StatusBarModule, StatusBarScreen, StatusIcons,
 };
@@ -271,7 +272,8 @@ fn main() {
         .add_module(NotificationsModule)
         .add_module(KeyboardModule { bottom_gap })
         .add_module(QuickSettingsModule)
-        .add_module(PowerMenuModule);
+        .add_module(PowerMenuModule)
+        .add_module(KeepAwakeModule);
 
     // Home starts open.
     app.insert_resource(OpenCovers(vec![HOME_ID]));

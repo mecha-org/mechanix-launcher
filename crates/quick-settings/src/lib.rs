@@ -12,13 +12,14 @@ mod volume_keys;
 use bottom_bar::BottomBarBuilder;
 use header::HeaderBuilder;
 use quick_settings::QuickSettingsBuilder;
-use services::{BluetoothModule, DisplayModule, NetworkManagerModule, UpowerModule};
+use services::{BluetoothModule, DisplayModule, KeepAwake, NetworkManagerModule, UpowerModule};
 use sliders::SlidersBuilder;
 use volume_keys::VolumeKeysModule;
 
 /// Installs the quick settings' services (UPower, Bluetooth and display
-/// brightness) and the volume keys. It spawns no window; place the panel with
-/// [`QuickSettingsScreen`]. The header's POWER button signals
+/// brightness) and the volume keys. Its keep-awake tile works with
+/// `services::KeepAwakeModule` installed. It spawns no window; place the panel
+/// with [`QuickSettingsScreen`]. The header's POWER button signals
 /// [`power_menu::ShowPowerMenu`].
 ///
 /// Expects the host to have installed `RingModule`, `PulseAudioModule` and
@@ -34,7 +35,9 @@ impl Module for QuickSettingsModule {
             .add_module(NetworkManagerModule)
             .add_module(BluetoothModule)
             .add_module(DisplayModule)
-            .add_module(VolumeKeysModule);
+            .add_module(VolumeKeysModule)
+            .init_resource::<KeepAwake>()
+            .system(tiles::keep_awake::on_changed);
     }
 }
 

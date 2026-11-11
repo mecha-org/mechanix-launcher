@@ -1,107 +1,66 @@
-//! The hardware volume keys, grabbed through `phosh_private_keyboard_event`.
+//! The hardware volume keys, grabbed through [`services::keys`].
 //!
-//! The compositor intercepts a grabbed key and sends one
-//! `accelerator_activated_event` per press, and again for each step of its
-//! own hold-to-repeat, so each activation is one step here and no repeat
-//! timer runs in the launcher.
+//! The compositor intercepts a grabbed key and reports one press, and
+//! again for each step of its own hold-to-repeat, so each press is one
+//! step here and no repeat timer runs in the launcher.
 
 use mecha_pulseaudio::{SetVolume, VolumeState};
 use mecha_wayland::prelude::*;
+use services::{Key, KeyAction, grab_key};
 
 const RAISE: &str = "XF86AudioRaiseVolume";
 const LOWER: &str = "XF86AudioLowerVolume";
 /// Percent per key press.
 const STEP: i32 = 5;
-/// `phosh_private.get_keyboard_event` is `since="5"`.
-const MIN_VERSION: u32 = 5;
 /// A step within this many ms of the previous one continues from the
 /// volume that step asked for, since PulseAudio may not have reported it
 /// yet; after a longer pause the reported volume is the base again.
 pub(crate) const PENDING_WINDOW_MS: u32 = 500;
 
 /// Grabs the volume keys and steps the volume with [`SetVolume`]. Install
-/// after `WaylandModule`. It binds `phosh_private` itself, independently of
-/// `ToplevelsModule`'s bind. Without the global it does nothing.
+/// after `WaylandModule`. Without `phosh_private` it does nothing.
 pub struct VolumeKeysModule;
 
 impl Module for VolumeKeysModule {
     fn install(self, app: &mut App) {
-        let Some(global) = app
-            .resource::<Globals>()
-            .find(PhoshPrivate::NAME)
-            .filter(|g| g.version >= MIN_VERSION)
-            .cloned()
-        else {
+        if !(grab_key(app, RAISE) && grab_key(app, LOWER)) {
             return;
-        };
-        let keyboard = {
-            let (globals, mut wl) = app.query::<(Res<Globals>, ResMut<Wayland>)>();
-            let phosh = globals.bind::<PhoshPrivate>(&global, &mut wl);
-            let keyboard = phosh.get_keyboard_event(&mut wl);
-            keyboard.grab_accelerator_request(&mut wl, RAISE);
-            keyboard.grab_accelerator_request(&mut wl, LOWER);
-            keyboard
-        };
+        }
         app.init_resource::<VolumeState>()
             .insert_resource(VolumeKeys {
-                keyboard,
-                actions: Vec::new(),
                 stepper: Stepper::default(),
             });
-        app.system(on_keyboard_event).system(on_volume_changed);
+        app.system(on_key).system(on_volume_changed);
     }
 }
 
 struct VolumeKeys {
-    keyboard: PhoshPrivateKeyboardEvent,
-    /// Granted action ids and the step each one makes.
-    actions: Vec<(u32, i32)>,
     stepper: Stepper,
 }
 impl Resource for VolumeKeys {}
 
-fn on_keyboard_event(app: &mut App, e: &PhoshPrivateKeyboardEventEvent) {
-    use PhoshPrivateKeyboardEventEvent as E;
-    let state = *app.resource::<VolumeState>();
-    let mut keys = app.resource_mut::<VolumeKeys>();
-    let set = match e {
-        E::GrabSuccessEvent {
-            phosh_private_keyboard_event: k,
-            accelerator,
-            action_id,
-        } if *k == keys.keyboard => {
-            let delta = match accelerator.as_str() {
-                RAISE => STEP,
-                LOWER => -STEP,
-                _ => return,
-            };
-            keys.actions.retain(|&(id, _)| id != *action_id);
-            keys.actions.push((*action_id, delta));
-            None
-        }
-        E::GrabFailedEvent {
-            phosh_private_keyboard_event: k,
-            accelerator,
-            error,
-        } if *k == keys.keyboard => {
-            tracing::warn!("volume keys: grabbing {accelerator} failed (error {error})");
-            None
-        }
-        E::AcceleratorActivatedEvent {
-            phosh_private_keyboard_event: k,
-            action_id,
-            timestamp,
-        } if *k == keys.keyboard => {
-            let delta = keys
-                .actions
-                .iter()
-                .find(|&&(id, _)| id == *action_id)
-                .map(|&(_, d)| d);
-            delta.and_then(|d| keys.stepper.step(state, d, *timestamp))
-        }
-        _ => None,
+fn on_key(app: &mut App, e: &Key) {
+    let delta = match e.accelerator {
+        RAISE => STEP,
+        LOWER => -STEP,
+        _ => return,
     };
-    drop(keys);
+    let timestamp = match e.action {
+        KeyAction::Pressed { timestamp } => timestamp,
+        KeyAction::Failed(error) => {
+            tracing::warn!(
+                "volume keys: grabbing {} failed (error {error})",
+                e.accelerator
+            );
+            return;
+        }
+        _ => return,
+    };
+    let state = *app.resource::<VolumeState>();
+    let set = app
+        .resource_mut::<VolumeKeys>()
+        .stepper
+        .step(state, delta, timestamp);
     if let Some(v) = set {
         app.signal(SetVolume(v));
     }

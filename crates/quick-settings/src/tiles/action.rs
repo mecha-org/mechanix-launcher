@@ -6,7 +6,6 @@ use crate::util::load_icon;
 /// One-colour SVGs for the [`ActionTile`]s.
 pub mod svg {
     pub const CAMERA: &[u8] = include_bytes!("../../assets/camera.svg");
-    pub const DISPLAY: &[u8] = include_bytes!("../../assets/display.svg");
     pub const MICROPHONE: &[u8] = include_bytes!("../../assets/microphone.svg");
     pub const RECORD: &[u8] = include_bytes!("../../assets/record.svg");
     pub const ROTATE: &[u8] = assets::icons::ROTATE;

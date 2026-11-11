@@ -543,6 +543,7 @@ dependencies = [
  "quick-settings",
  "running-apps",
  "screen",
+ "services",
  "status-bar",
  "tracing",
  "tracing-subscriber",
