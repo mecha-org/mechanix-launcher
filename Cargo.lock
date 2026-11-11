@@ -539,6 +539,7 @@ dependencies = [
  "mecha-wayland",
  "nav",
  "notifications",
+ "power-menu",
  "quick-settings",
  "running-apps",
  "screen",
@@ -833,6 +834,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "power-menu"
+version = "0.1.0"
+dependencies = [
+ "assets",
+ "mecha-wayland",
+ "services",
+]
+
+[[package]]
 name = "presentation"
 version = "0.1.0"
 source = "git+https://github.com/mecha-org/mecha-wayland?branch=dev#c1b7bb410cda4dff26b81c9a4273c3c4597424fd"
@@ -876,6 +886,7 @@ dependencies = [
  "assets",
  "mecha-pulseaudio",
  "mecha-wayland",
+ "power-menu",
  "screen",
  "services",
  "tracing",

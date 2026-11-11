@@ -3,7 +3,6 @@ use screen::Screen;
 
 mod bottom_bar;
 mod header;
-mod power_overlay;
 mod quick_settings;
 mod sliders;
 mod tiles;
@@ -12,15 +11,15 @@ mod volume_keys;
 
 use bottom_bar::BottomBarBuilder;
 use header::HeaderBuilder;
-use power_overlay::PowerOverlayBuilder;
 use quick_settings::QuickSettingsBuilder;
-use services::{BluetoothModule, DisplayModule, NetworkManagerModule, PowerModule, UpowerModule};
+use services::{BluetoothModule, DisplayModule, NetworkManagerModule, UpowerModule};
 use sliders::SlidersBuilder;
 use volume_keys::VolumeKeysModule;
 
-/// Installs the quick settings' services (UPower, Bluetooth, display
-/// brightness and logind power) and the volume keys. It spawns no window;
-/// place the panel with [`QuickSettingsScreen`].
+/// Installs the quick settings' services (UPower, Bluetooth and display
+/// brightness) and the volume keys. It spawns no window; place the panel with
+/// [`QuickSettingsScreen`]. The header's POWER button signals
+/// [`power_menu::ShowPowerMenu`].
 ///
 /// Expects the host to have installed `RingModule`, `PulseAudioModule` and
 /// `VolumeControlModule` (for the volume slider and keys), `WaylandModule`
@@ -35,27 +34,22 @@ impl Module for QuickSettingsModule {
             .add_module(NetworkManagerModule)
             .add_module(BluetoothModule)
             .add_module(DisplayModule)
-            .add_module(PowerModule)
             .add_module(VolumeKeysModule);
     }
 }
 
-/// The quick settings panel as content: builds the panel and its power
-/// overlay under any parent node.
+/// The quick settings panel as content, under any parent node.
 pub struct QuickSettingsScreen;
 
 impl Screen for QuickSettingsScreen {
     fn build(&self, app: &mut App, parent: NodeId) -> NodeId {
-        let root = app.root();
-        app.spawn(parent, ShellBuilder { root }).id()
+        app.spawn(parent, ShellBuilder).id()
     }
 }
 
 struct Shell;
 
-struct ShellBuilder {
-    root: NodeId,
-}
+struct ShellBuilder;
 
 impl Build for ShellBuilder {
     type Widget = Shell;
@@ -64,25 +58,18 @@ impl Build for ShellBuilder {
 impl Widget for Shell {
     type Builder = ShellBuilder;
 
-    fn build(b: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
+    fn build(_: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
         *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
             .width(percent(100.0))
             .height(percent(100.0));
         *s.component_mut::<Paint>(me).unwrap() = Paint::Quad(Quad::new(Color::BLACK));
 
-        let content = s.spawn(
+        s.spawn(
             me,
             QuickSettingsBuilder {
                 header: HeaderBuilder,
                 bottom_bar: BottomBarBuilder,
                 sliders: SlidersBuilder,
-            },
-        );
-        s.spawn(
-            me,
-            PowerOverlayBuilder {
-                root: b.root,
-                content,
             },
         );
         Shell
@@ -92,12 +79,11 @@ impl Widget for Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::power_overlay::PowerOverlay;
     use crate::quick_settings::QuickSettings;
     use mecha_wayland::mechanix_widgets::prelude::{Clock, ClockInterval, FontBook, Text};
 
     #[test]
-    fn screen_builds_panel_and_overlay_without_a_window() {
+    fn screen_builds_the_panel_without_a_window() {
         let mut app = App::new();
         app.add_module(LayoutModule)
             .add_module(WindowModule)
@@ -116,7 +102,6 @@ mod tests {
 
         assert!(app.widget::<Shell>(shell).is_some());
         assert_eq!(app.widgets::<QuickSettings>().count(), 1);
-        assert_eq!(app.widgets::<PowerOverlay>().count(), 1);
         assert_eq!(app.resource::<Windows>().iter().count(), 0);
 
         let (interval, date_text) = {

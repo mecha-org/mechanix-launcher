@@ -13,6 +13,7 @@ use nav::core::{
 };
 use nav::shell::{ContainerShown, NavModule, nav_window};
 use notifications::NotificationsModule;
+use power_menu::PowerMenuModule;
 use quick_settings::QuickSettingsModule;
 use running_apps::{RunningApps, RunningAppsModule};
 use screen::OrientationModule;
@@ -269,7 +270,8 @@ fn main() {
         .add_module(StatusBarModule)
         .add_module(NotificationsModule)
         .add_module(KeyboardModule { bottom_gap })
-        .add_module(QuickSettingsModule);
+        .add_module(QuickSettingsModule)
+        .add_module(PowerMenuModule);
 
     // Home starts open.
     app.insert_resource(OpenCovers(vec![HOME_ID]));

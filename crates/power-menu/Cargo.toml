@@ -1,0 +1,9 @@
+[package]
+name = "power-menu"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mecha-wayland.workspace = true
+services.workspace = true
+assets.workspace = true

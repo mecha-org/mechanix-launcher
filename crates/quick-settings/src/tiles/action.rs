@@ -9,7 +9,7 @@ pub mod svg {
     pub const DISPLAY: &[u8] = include_bytes!("../../assets/display.svg");
     pub const MICROPHONE: &[u8] = include_bytes!("../../assets/microphone.svg");
     pub const RECORD: &[u8] = include_bytes!("../../assets/record.svg");
-    pub const ROTATE: &[u8] = include_bytes!("../../assets/rotate.svg");
+    pub const ROTATE: &[u8] = assets::icons::ROTATE;
     pub const SETTINGS: &[u8] = include_bytes!("../../assets/settings.svg");
     pub const TERMINAL: &[u8] = include_bytes!("../../assets/terminal.svg");
 }
