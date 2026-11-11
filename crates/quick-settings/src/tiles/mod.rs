@@ -15,10 +15,10 @@ pub use wifi::WifiBuilder;
 pub(crate) const MAX_TILE_HEIGHT: f32 = 106.0;
 pub(crate) const DOT_RADIUS: f32 = 5.0;
 
-/// Default space between a tile's icon and its label.
-pub(super) const GAP: f32 = 12.0;
-/// Wider icon/label space used by Bluetooth and Battery.
-pub(super) const WIDE_GAP: f32 = 20.0;
+/// Vertical icon/label gap as a share of tile height: 12 units at full height.
+pub(super) const GAP: Val = percent(100.0 * 12.0 / MAX_TILE_HEIGHT);
+/// Wi-Fi, Bluetooth and battery: 20 units at full height, less in compact tiles.
+pub(super) const WIDE_GAP: Val = percent(100.0 * 20.0 / MAX_TILE_HEIGHT);
 
 /// Border width per side of a tile, passed to every tile builder.
 pub type Borders = Insets<f32>;
@@ -45,7 +45,7 @@ pub(super) fn tile_quad(background: Color, border_color: Color, borders: Borders
 }
 
 /// Applies the frame every tile shares (size, column layout, border) to `me`.
-pub(super) fn frame<W: Widget>(me: Handle<W>, s: &mut Spawner<'_, W>, gap: f32, borders: Borders) {
+pub(super) fn frame<W: Widget>(me: Handle<W>, s: &mut Spawner<'_, W>, gap: Val, borders: Borders) {
     *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
         .height(percent(100.0))
         .flex_basis(px(0.0))
@@ -55,7 +55,7 @@ pub(super) fn frame<W: Widget>(me: Handle<W>, s: &mut Spawner<'_, W>, gap: f32, 
         .max_width(percent(20.0))
         .column()
         .center()
-        .gap(px(gap));
+        .row_gap(gap);
     let border_color = s.color(ColorRole::SecondaryFixedDim);
     *s.component_mut::<Paint>(me).unwrap() =
         Paint::Quad(tile_quad(Color::TRANSPARENT, border_color, borders));
@@ -67,7 +67,7 @@ pub(super) fn build_tile<W: Widget>(
     me: Handle<W>,
     s: &mut Spawner<'_, W>,
     svg: &'static [u8],
-    gap: f32,
+    gap: Val,
     borders: Borders,
 ) -> Handle<Icon> {
     frame(me, s, gap, borders);
