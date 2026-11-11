@@ -1,4 +1,5 @@
 use crate::card_drag::{CardDrag, Moved, Settle};
+use crate::card_icon::{CardIconBuilder, UpdateIcon};
 use crate::card_options::{self, CardOption, CardOptions, CardOptionsBuilder, CardOptionsPressed};
 use crate::dbus_spec::{NOTIFICATIONS_EXPIRY, NOTIFIFICATION_DISMISSED};
 use crate::millis::Millis;
@@ -6,7 +7,7 @@ use crate::notification_store::Entry;
 use crate::notify_signal::NotificationSignal::{RemoveNotification, ShowOptions};
 use crate::rich_text::RichTextBuilder;
 use crate::rich_text::RichTextExt;
-use crate::style::{color, size, space, text};
+use crate::style::{size, space, text};
 use mecha_wayland::mechanix_widgets::prelude::TextContextExt;
 use mecha_wayland::mechanix_widgets::{self as mw};
 use mecha_wayland::prelude::*;
@@ -37,21 +38,18 @@ impl Build for CardBuilder {
 impl Widget for Card {
     type Builder = CardBuilder;
 
-    fn build(b: CardBuilder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
+    fn build(mut b: CardBuilder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
         *s.component_mut::<LayoutStyle>(me).unwrap() =
             LayoutStyle::default().relative().width(percent(100.0));
         s.component_mut::<Viewport>(me).unwrap().clip = true;
 
         let content = s.spawn(me, div().style(content_style(0.0)));
 
-        // TODO: app glyph from `app_icon` / `desktop-entry`, centred in here.
-        s.spawn(
+        let icon = s.spawn(
             content,
-            div().background(s.color(color::ICON_TILE)).style(
-                LayoutStyle::default()
-                    .size(px(size::ICON), px(size::ICON))
-                    .shrink(0.0),
-            ),
+            CardIconBuilder {
+                image: b.entry.notification.image.take(),
+            },
         );
 
         let on_expire = move |ctx: &mut Context<'_, Card>, _: &Timeout| {
@@ -161,6 +159,8 @@ impl Widget for Card {
                 .set_run(entry.notification.body.clone().into_runs());
             // TODO: update the body's runs
             ctx.at(time).unwrap().set_text(ago(entry.received_time));
+
+            ctx.emit(UpdateIcon(entry.notification.image.clone()), icon);
 
             // whenever a replacement occurs, the expiry timer would start again,
             match entry.notification.expire_timeout {
