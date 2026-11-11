@@ -112,7 +112,7 @@ impl Module for NavModule {
             }
             let layer = match &w.role {
                 Role::Layer(l) => Some(l.layer),
-                Role::Toplevel => None,
+                Role::Toplevel | Role::Lock(_) => None,
             };
             let node = app
                 .spawn_with(
