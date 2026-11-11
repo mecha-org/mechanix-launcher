@@ -12,7 +12,7 @@ pub use battery::BatteryBuilder;
 pub use bluetooth::BluetoothBuilder;
 pub use wifi::WifiBuilder;
 
-pub(crate) const TILE_HEIGHT: f32 = 106.0;
+pub(crate) const MAX_TILE_HEIGHT: f32 = 106.0;
 pub(crate) const DOT_RADIUS: f32 = 5.0;
 
 /// Default space between a tile's icon and its label.
