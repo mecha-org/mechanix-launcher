@@ -1,0 +1,4 @@
+#%PAM-1.0
+# The lock screen's password method: the account password.
+# Install to /etc/pam.d/mechanix.
+auth     include  system-auth

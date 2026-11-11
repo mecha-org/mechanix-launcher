@@ -1,0 +1,17 @@
+[package]
+name = "lockscreen"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+mecha-wayland.workspace = true
+services.workspace = true
+keyboard.workspace = true
+status-bar.workspace = true
+assets.workspace = true
+power-menu.workspace = true
+nav.workspace = true
+gestures.workspace = true
+libc = "0.2"
+tracing = "0.1"
+zeroize = "1.8"
