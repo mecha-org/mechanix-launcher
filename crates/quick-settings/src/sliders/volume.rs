@@ -63,7 +63,7 @@ impl Widget for VolumeSlider {
                 .range(0.0, 100.0)
                 .length(percent(SLIDER_LENGTH_PERCENT))
                 .style(LayoutStyle::default().height(percent(100.0)))
-                .tick_height_relative(percent(100.0))
+                .tick_height(percent(100.0))
                 .tick_gap(4.0),
         );
 
