@@ -6,7 +6,7 @@ mod volume;
 use brightness::BrightnessSliderBuilder;
 use volume::VolumeSliderBuilder;
 
-const MIN_SLIDER_GAP: f32 = 10.0;
+const MIN_SLIDER_GAP: f32 = 20.0;
 const MAX_SLIDER_GAP: f32 = 40.0;
 const SLIDER_HEIGHT: f32 = 40.0;
 

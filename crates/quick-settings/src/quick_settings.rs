@@ -7,6 +7,7 @@ use crate::sliders::{Sliders, SlidersBuilder};
 
 const LANDSCAPE_SECTION_GAP: f32 = 31.0;
 const PORTRAIT_SECTION_GAP_PERCENT: f32 = 3.5;
+const MIN_PORTRAIT_SECTION_GAP: f32 = 20.0;
 
 /// The panel: header on top and, under it, a body holding the sliders and
 /// the tiles. The drag handle under it all is the control center's.
@@ -17,6 +18,7 @@ const PORTRAIT_SECTION_GAP_PERCENT: f32 = 3.5;
 pub struct QuickSettings {
     body: Handle<Div>,
     sliders: Handle<Sliders>,
+    section_gap: Handle<Div>,
     bottom_bar: Handle<BottomBar>,
     /// The layout currently applied.
     landscape: bool,
@@ -45,10 +47,20 @@ fn body_style(landscape: bool) -> LayoutStyle {
             .align_items(Align::Center)
             .gap(px(LANDSCAPE_SECTION_GAP))
     } else {
-        style
-            .column()
-            .row_gap(percent(PORTRAIT_SECTION_GAP_PERCENT))
+        style.column()
     }
+}
+
+fn section_gap_style(landscape: bool) -> LayoutStyle {
+    LayoutStyle::default()
+        .height(percent(PORTRAIT_SECTION_GAP_PERCENT))
+        .min_height(px(MIN_PORTRAIT_SECTION_GAP))
+        .shrink(0.0)
+        .display(if landscape {
+            Display::Hidden
+        } else {
+            Display::Flex
+        })
 }
 
 impl Widget for QuickSettings {
@@ -66,6 +78,7 @@ impl Widget for QuickSettings {
         s.spawn(me, b.header);
         let body = s.spawn(me, div().style(body_style(false)));
         let sliders = s.spawn(body, b.sliders);
+        let section_gap = s.spawn(body, div().style(section_gap_style(false)));
         let bottom_bar = s.spawn(body, b.bottom_bar);
 
         s.on::<OrientationChanged>(me, |ctx, e| fit_orientation(ctx, e.0));
@@ -73,6 +86,7 @@ impl Widget for QuickSettings {
         QuickSettings {
             body,
             sliders,
+            section_gap,
             bottom_bar,
             landscape: false,
         }
@@ -86,16 +100,19 @@ fn fit_orientation(ctx: &mut Context<'_, QuickSettings>, orientation: Orientatio
     if ctx.me().landscape == landscape {
         return;
     }
-    let (body, sliders, bottom_bar) = {
+    let (body, sliders, section_gap, bottom_bar) = {
         let me = ctx.me();
         me.landscape = landscape;
-        (me.body, me.sliders, me.bottom_bar)
+        (me.body, me.sliders, me.section_gap, me.bottom_bar)
     };
     if let Some(mut c) = ctx.at(body) {
         c.set_style(body_style(landscape));
     }
     if let Some(mut c) = ctx.at(sliders) {
         c.set_style(Sliders::style(landscape));
+    }
+    if let Some(mut c) = ctx.at(section_gap) {
+        c.set_style(section_gap_style(landscape));
     }
     if let Some(mut c) = ctx.at(bottom_bar) {
         c.set_style(BottomBar::style(landscape));
@@ -110,8 +127,12 @@ mod tests {
     #[test]
     fn section_gap_follows_portrait_body_height_but_stays_fixed_in_landscape() {
         let portrait = body_style(false);
-        assert_eq!(portrait.row_gap, percent(3.5));
+        assert_eq!(portrait.row_gap, px(0.0));
         assert_eq!(portrait.column_gap, px(0.0));
+        let spacer = section_gap_style(false);
+        assert_eq!(spacer.height, percent(3.5));
+        assert_eq!(spacer.min_height, px(10.0));
+        assert_eq!(section_gap_style(true).display, Display::Hidden);
 
         let landscape = body_style(true);
         assert_eq!(landscape.row_gap, px(31.0));
@@ -173,7 +194,10 @@ mod tests {
 
         assert_eq!(panel_rect.height(), 958.0);
         let gap = tiles.origin.y - bottom(sliders);
-        assert!((gap - body.height() * 0.035).abs() <= 1.0, "{body:?} {gap}");
+        assert!(
+            (gap - (body.height() * 0.035).max(10.0)).abs() <= 1.0,
+            "{body:?} {gap}"
+        );
         assert!(sliders.height() > 0.0, "{sliders:?}");
         assert!(header.origin.y >= panel_rect.origin.y);
         assert!(bottom(header) <= volume.origin.y, "{header:?} {volume:?}");
@@ -277,7 +301,10 @@ mod tests {
             }
         }
         let gap = tiles.origin.y - bottom(sliders);
-        assert!((gap - body.height() * 0.035).abs() <= 1.0, "{body:?} {gap}");
+        assert!(
+            (gap - (body.height() * 0.035).max(10.0)).abs() <= 1.0,
+            "{body:?} {gap}"
+        );
         assert!(
             sliders.height() > 0.0,
             "slider section collapsed: {sliders:?}"
@@ -363,6 +390,7 @@ mod tests {
         };
         let (sliders, tiles, landscape) = parts(&app);
         assert!(landscape);
+        assert!((tiles.x() - sliders.right() - 31.0).abs() <= 1.0);
         assert!(
             sliders.origin.x + sliders.width() <= tiles.origin.x,
             "{sliders:?} {tiles:?}"

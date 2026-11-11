@@ -7,7 +7,7 @@ use crate::tiles::{
 
 const BOTTOM_BAR_HEIGHT: f32 = MAX_TILE_HEIGHT * 2.0;
 // In portrait, leave room in the body for the sliders as the panel gets shorter.
-const PORTRAIT_BODY_PERCENT: f32 = 60.0;
+const PORTRAIT_BODY_PERCENT: f32 = 55.0;
 
 pub struct BottomBar;
 
