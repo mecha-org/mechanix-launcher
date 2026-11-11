@@ -80,7 +80,6 @@ impl Widget for Drawer {
     fn build(b: DrawerBuilder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
         *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default().column().fill();
         *s.component_mut::<Paint>(me).unwrap() = Paint::Quad(Quad::new(Color::BLACK));
-
         let bar = SearchBar::spawn(s, me);
         let list = s.spawn(
             me,
@@ -92,6 +91,10 @@ impl Widget for Drawer {
                     .padding(Insets::new(px(0.0), px(0.0), px(LIST_BOTTOM), px(0.0))),
             ),
         );
+        // A tap on the list takes the focus from the search, and with it
+        // the keyboard. The search bar, its clear button included, leaves
+        // it there.
+        *s.component_mut::<Focusable>(list).unwrap() = Focusable(true);
 
         // After the input's own handlers, so its text is already updated.
         let input = bar.input;
@@ -483,19 +486,18 @@ mod tests {
         app.resource_mut::<Launched>().0 += 1;
     }
 
-    /// text-input's press rule, which needs a compositor to install: a
-    /// press in the field's window whose targets miss the focused field
-    /// blurs it.
-    fn blur_on_outside_press(app: &mut App, e: &Emitted<Press>) {
+    /// text-input's focus rule, which needs a compositor to install: a
+    /// focused field the keyboard focus moved off blurs.
+    fn blur_on_focus_moved(app: &mut App, _: &OnChanged<KeyboardFocus>) {
+        let focus = app.resource::<KeyboardFocus>().focused();
         let fields: Vec<NodeId> = app
             .widgets::<Drawer>()
             .filter(|(_, d)| d.focused)
             .map(|(_, d)| d.bar.input.id())
+            .filter(|&field| focus != Some(field))
             .collect();
         for field in fields {
-            if !e.targets.iter().any(|&t| t == field) {
-                app.emit(InputFocus { focused: false }, field);
-            }
+            app.emit(InputFocus { focused: false }, field);
         }
     }
 
@@ -517,7 +519,7 @@ mod tests {
             .add_module(MechanixTheme::dark())
             .init_resource::<Launched>()
             .system(count_launch)
-            .system(blur_on_outside_press);
+            .system(blur_on_focus_moved);
         app.insert_resource(Atlas::new());
         let (regular, light) = {
             let mut atlas = app.resource_mut::<Atlas>();
@@ -765,6 +767,32 @@ mod tests {
         assert_eq!(launched.borrow().len(), 1);
         assert!(activated.borrow().is_empty());
         assert_eq!(ui.app.resource::<Launched>().0, 1);
+    }
+
+    #[test]
+    fn a_press_on_the_list_gives_the_keyboard_back() {
+        let mut ui = ui(drawer(&three("press-list")));
+        ui.type_in("c");
+        assert_eq!(ui.me().keyboard(), KeyboardInteractivity::Exclusive);
+
+        // A real press on a row, through hit testing: the start of a
+        // scroll or a tap alike.
+        let row = ui.rows()[0];
+        let r = ui.app.component::<ComputedLayout>(row).unwrap().rect;
+        let at = Point::new(r.x() + r.width() / 2.0, r.y() + r.height() / 2.0);
+        for phase in [ContactPhase::Moved, ContactPhase::Pressed] {
+            let window = ui.win;
+            ui.app.signal(ContactInput {
+                window,
+                contact: ContactId::Touch(0),
+                phase,
+                position: at,
+                time: 0,
+            });
+            ui.app.flush();
+        }
+        ui.app.tick();
+        assert_eq!(ui.me().keyboard(), KeyboardInteractivity::None);
     }
 
     #[test]

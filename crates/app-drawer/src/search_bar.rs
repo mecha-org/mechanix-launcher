@@ -4,7 +4,11 @@
 use mecha_wayland::mechanix_widgets::{self as mw, FontContextExt};
 use mecha_wayland::prelude::*;
 
-const TOP: f32 = 28.0;
+/// From the top of the drawer, under the status bar, to the top of the
+/// field's text.
+const ABOVE_TEXT: f32 = 20.0;
+/// Over the field's row, which centres the text in it.
+const TOP: f32 = ABOVE_TEXT - (FIELD_HEIGHT - TEXT_PX as f32) / 2.0;
 const BOTTOM: f32 = 8.0;
 /// The field's row, without the line under it.
 const FIELD_HEIGHT: f32 = 54.0;
