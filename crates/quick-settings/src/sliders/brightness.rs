@@ -1,7 +1,7 @@
 use mecha_wayland::mechanix_widgets::prelude::{Slider, SliderChange, SliderContextExt, slider};
 use mecha_wayland::prelude::*;
 
-use super::SLIDER_HEIGHT;
+use super::control_style;
 use crate::util::load_icon;
 use services::{BrightnessChanged, MAX_BRIGHTNESS, MIN_BRIGHTNESS, SetBrightness};
 
@@ -26,10 +26,7 @@ impl Widget for BrightnessSlider {
     type Builder = BrightnessSliderBuilder;
 
     fn build(_: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
-        *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
-            .width(percent(100.0))
-            .height(px(SLIDER_HEIGHT))
-            .shrink(0.0);
+        *s.component_mut::<LayoutStyle>(me).unwrap() = control_style();
 
         let icon_sprite = load_icon(&mut s.resource_mut::<Atlas>(), svg::MEDIUM);
 
@@ -39,6 +36,7 @@ impl Widget for BrightnessSlider {
                 LayoutStyle::default()
                     .row()
                     .width(percent(100.0))
+                    .height(percent(100.0))
                     .center()
                     .gap(px(Spacing::Space300.dp())),
             ),
@@ -58,7 +56,8 @@ impl Widget for BrightnessSlider {
                 .value(MIN_BRIGHTNESS)
                 .range(MIN_BRIGHTNESS, MAX_BRIGHTNESS)
                 .length(percent(SLIDER_LENGTH_PERCENT))
-                .tick_height(SLIDER_HEIGHT)
+                .style(LayoutStyle::default().height(percent(100.0)))
+                .tick_height_relative(percent(100.0))
                 .tick_gap(4.0),
         );
         // Sent on every step change; the display service coalesces these so

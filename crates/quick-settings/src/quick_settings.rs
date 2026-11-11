@@ -262,6 +262,20 @@ mod tests {
         let bottom = |r: Rect| r.origin.y + r.height();
 
         assert_eq!(panel_rect.height(), 230.0);
+        for control in [controls[0], controls[2]] {
+            let control_rect = rect(&app, control);
+            let row = app.children(control).unwrap()[0];
+            let track = app.children(row).unwrap()[1];
+            let ticks = app.children(track).unwrap();
+            assert!(!ticks.is_empty());
+            for &tick in ticks {
+                let tick = rect(&app, tick);
+                assert_eq!(tick.origin.y, control_rect.origin.y);
+                assert_eq!(tick.height(), control_rect.height());
+                assert!(tick.origin.y >= bottom(header), "{header:?} {tick:?}");
+                assert!(bottom(tick) <= top_row.origin.y, "{tick:?} {top_row:?}");
+            }
+        }
         let gap = tiles.origin.y - bottom(sliders);
         assert!((gap - body.height() * 0.035).abs() <= 1.0, "{body:?} {gap}");
         assert!(

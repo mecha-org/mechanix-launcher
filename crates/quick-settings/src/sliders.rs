@@ -10,6 +10,19 @@ const MIN_SLIDER_GAP: f32 = 10.0;
 const MAX_SLIDER_GAP: f32 = 40.0;
 const SLIDER_HEIGHT: f32 = 40.0;
 
+/// single style, used for both volume and brightness sliders (and future
+//sliders)
+fn control_style() -> LayoutStyle {
+    // Share the section equally, yielding room to the minimum slider gap.
+    // The 24-unit icons set the lower bound for each control.
+    LayoutStyle::default()
+        .width(percent(100.0))
+        .height(percent(50.0))
+        .max_height(px(SLIDER_HEIGHT))
+        .min_height(px(24.0))
+        .shrink(1.0)
+}
+
 pub struct Sliders;
 
 pub struct SlidersBuilder;
@@ -89,13 +102,86 @@ mod tests {
             window().layout(LayoutStyle::default().column().size(px(308.0), px(height))),
         );
         let sliders = app.spawn(window, SlidersBuilder);
-        app.tick();
+        for _ in 0..3 {
+            app.tick();
+        }
 
         let rect = |id| app.component::<ComputedLayout>(id).unwrap().rect;
         let col = app.children(sliders.id()).unwrap()[0];
         let controls = app.children(col).unwrap();
         assert_eq!(controls.len(), 3);
+        for control in [controls[0], controls[2]] {
+            assert_ticks_fill_control(&app, control);
+        }
         (rect(sliders.id()), rect(controls[0]), rect(controls[2]))
+    }
+
+    fn assert_ticks_fill_control(app: &App, control: NodeId) {
+        let rect = |id| app.component::<ComputedLayout>(id).unwrap().rect;
+        let control_rect = rect(control);
+        let row = app.children(control).unwrap()[0];
+        let track = app.children(row).unwrap()[1];
+        let ticks = app.children(track).unwrap();
+        assert!(!ticks.is_empty());
+        for &tick in ticks {
+            let tick = rect(tick);
+            assert_eq!(tick.origin.y, control_rect.origin.y);
+            assert_eq!(tick.height(), control_rect.height());
+        }
+    }
+
+    #[test]
+    fn short_portrait_section_fits_rows_and_ticks_with_minimum_gap() {
+        let (section, volume, brightness) = slider_layout(79.0);
+        assert!((volume.height() - 34.5).abs() <= 1.0);
+        assert!((brightness.height() - 34.5).abs() <= 1.0);
+        assert_eq!(
+            brightness.origin.y - volume.origin.y - volume.height(),
+            10.0
+        );
+        assert!(volume.origin.y >= section.origin.y);
+        assert!(brightness.origin.y + brightness.height() <= section.origin.y + section.height());
+    }
+
+    #[test]
+    fn ticks_follow_resizing_and_orientation_without_rebuilding_controls() {
+        let mut app = App::new();
+        app.add_module(LayoutModule)
+            .add_module(PaintModule)
+            .add_module(WindowModule)
+            .add_module(MechanixTheme::dark());
+        app.insert_resource(Atlas::new());
+        let size = |h| LayoutStyle::default().column().size(px(308.0), px(h));
+        let window = app.spawn(app.root(), window().layout(size(635.0)));
+        let sliders = app.spawn(window, SlidersBuilder);
+        let column = app.children(sliders).unwrap()[0];
+        let children = app.children(column).unwrap();
+        let controls = [children[0], children[2]];
+        for (height, landscape, expected) in [
+            (635.0, false, 40.0),
+            (79.0, false, 34.5),
+            (79.0, true, 34.5),
+            (79.0, false, 34.5),
+            (635.0, false, 40.0),
+        ] {
+            *app.component_mut::<LayoutStyle>(window).unwrap() = size(height);
+            app.emit(
+                screen::OrientationChanged(if landscape {
+                    screen::Orientation::Landscape
+                } else {
+                    screen::Orientation::Portrait
+                }),
+                sliders,
+            );
+            for _ in 0..3 {
+                app.tick();
+            }
+            for control in controls {
+                let rect = app.component::<ComputedLayout>(control).unwrap().rect;
+                assert!((rect.height() - expected).abs() <= 1.0, "{rect:?}");
+                assert_ticks_fill_control(&app, control);
+            }
+        }
     }
 
     #[test]
