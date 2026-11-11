@@ -50,15 +50,28 @@ impl Widget for ScreenSelector {
         *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
             .column()
             .width(percent(100.0))
-            .shrink(0.0)
-            .padding(Insets::new(px(TOP), px(0.0), px(0.0), px(0.0)));
+            .min_height(px(TAB_HEIGHT + DIVIDER))
+            .shrink(1.0);
+
+        // Give up the top gap before reducing the tab row or divider.
+        s.spawn(
+            me,
+            div().style(
+                LayoutStyle::default()
+                    .height(px(TOP))
+                    .min_height(px(0.0))
+                    .max_height(px(TOP))
+                    .shrink(1.0),
+            ),
+        );
 
         let row = s.spawn(
             me,
             div().style(
                 LayoutStyle::default()
                     .row()
-                    .size(percent(100.0), px(TAB_HEIGHT)),
+                    .size(percent(100.0), px(TAB_HEIGHT))
+                    .shrink(0.0),
             ),
         );
 
@@ -125,9 +138,11 @@ impl Widget for ScreenSelector {
         let divider_color = s.color(ColorRole::Outline);
         s.spawn(
             me,
-            div()
-                .background(divider_color)
-                .style(LayoutStyle::default().size(percent(100.0), px(DIVIDER))),
+            div().background(divider_color).style(
+                LayoutStyle::default()
+                    .size(percent(100.0), px(DIVIDER))
+                    .shrink(0.0),
+            ),
         );
 
         let control_center = builder.control_center;
