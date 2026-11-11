@@ -8,3 +8,6 @@ mecha-wayland.workspace = true
 screen.workspace = true
 notifications.workspace = true
 quick-settings.workspace = true
+
+[dev-dependencies]
+assets.workspace = true

@@ -3,6 +3,9 @@ use mecha_wayland::prelude::*;
 
 use crate::app_screens::AppScreen;
 
+#[cfg(test)]
+mod tests;
+
 const TOP: f32 = 20.0;
 const TAB_HEIGHT: f32 = 47.0;
 const MIN_TAB_SPACING_X: f32 = 2.0;
