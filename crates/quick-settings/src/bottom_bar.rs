@@ -176,7 +176,7 @@ mod tests {
     }
 
     #[test]
-    fn battery_service_updates_bottom_bar_label() {
+    fn battery_service_updates_bottom_bar_label_and_icon_colour() {
         let mut app = App::new();
         app.add_module(LayoutModule)
             .add_module(PaintModule)
@@ -188,16 +188,36 @@ mod tests {
         app.spawn(app.root(), BottomBarBuilder);
         app.tick();
 
-        let (_, battery) = app.widgets::<Battery>().next().unwrap();
+        let (battery_id, battery) = app.widgets::<Battery>().next().unwrap();
         let percentage = battery.percentage;
-        for (value, label) in [(Some(42), "42%"), (None, "N/A")] {
+        let icon = battery.icon;
+        let spacer = app.children(battery_id).unwrap()[1];
+        let assert_state = |app: &App, label: &str, display, colour| {
+            let native = app.widget::<Text>(percentage).unwrap().native();
+            assert_eq!(app.widget::<NativeText>(native).unwrap().string, label);
+            for id in [percentage.id(), spacer] {
+                assert_eq!(app.component::<LayoutStyle>(id).unwrap().display, display);
+            }
+            assert_eq!(app.widget::<Icon>(icon).unwrap().color(), app.color(colour));
+        };
+        assert_state(
+            &app,
+            "",
+            Display::Hidden,
+            ColorRole::OnSecondaryFixedVariant,
+        );
+        for (value, label) in [(Some(42), "42%"), (None, ""), (Some(0), "0%"), (None, "")] {
             app.emit(
                 BatteryPercentageChanged { percentage: value },
                 app.descendants(app.root()).collect::<Vec<_>>(),
             );
             app.tick();
-            let native = app.widget::<Text>(percentage).unwrap().native();
-            assert_eq!(app.widget::<NativeText>(native).unwrap().string, label);
+            let (display, colour) = if value.is_some() {
+                (Display::Flex, ColorRole::OnSurface)
+            } else {
+                (Display::Hidden, ColorRole::OnSecondaryFixedVariant)
+            };
+            assert_state(&app, label, display, colour);
         }
     }
 

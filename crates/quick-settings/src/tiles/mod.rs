@@ -96,7 +96,10 @@ pub(super) fn build_tile<W: Widget>(
 mod tests {
     use super::*;
     use mecha_wayland::mechanix_widgets::prelude::FontBook;
-    use services::{APUpdate, BluetoothState, BluetoothStateChanged, StateUpdate, WifiState};
+    use services::{
+        APUpdate, BatteryPercentageChanged, BluetoothState, BluetoothStateChanged, StateUpdate,
+        WifiState,
+    };
 
     #[test]
     fn label_spacers_yield_to_contents_and_disappear_with_hidden_labels() {
@@ -150,6 +153,12 @@ mod tests {
                 },
             },
             bluetooth,
+        );
+        app.emit(
+            BatteryPercentageChanged {
+                percentage: Some(42),
+            },
+            battery,
         );
         let settle = |app: &mut App| {
             for _ in 0..3 {
@@ -206,8 +215,14 @@ mod tests {
                 },
                 bluetooth,
             );
+            app.emit(
+                BatteryPercentageChanged {
+                    percentage: connected.then_some(42),
+                },
+                battery,
+            );
             settle(&mut app);
-            for tile in [wifi.id(), bluetooth.id()] {
+            for tile in [wifi.id(), bluetooth.id(), battery.id()] {
                 let children = app.children(tile).unwrap();
                 for &child in &children[1..=2] {
                     assert_eq!(
