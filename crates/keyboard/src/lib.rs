@@ -13,6 +13,7 @@ mod feedbackd;
 mod input;
 mod latch;
 mod layout;
+mod lent;
 mod module;
 mod predict;
 mod protocol;
@@ -22,6 +23,9 @@ mod visibility;
 mod widget;
 mod zone;
 
+pub use lent::keys;
 pub use module::{KeyboardModule, spawn_ui};
-pub use visibility::{hide_keyboard, show_keyboard};
+pub use visibility::{
+    KeyboardVisibilityChanged, hide_keyboard, is_keyboard_visible, show_keyboard,
+};
 pub use zone::suspend_keyboard_zone;

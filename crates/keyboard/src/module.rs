@@ -82,13 +82,13 @@ pub fn spawn_ui(app: &mut App, bottom_gap: f32) {
             },
         )
         .id();
-    let surface = app
+    let (surface, keys) = app
         .widgets::<KeyboardUI>()
         .find(|(id, _)| *id == ui)
-        .unwrap()
-        .1
-        .surface;
+        .map(|(_, ui)| (ui.surface, ui.keys))
+        .unwrap();
     app.insert_resource(surface);
+    crate::lent::install(app, keys);
     app.insert_resource(InputRegion::default());
     app.system(ensure_input_region);
 

@@ -11,6 +11,7 @@ use mecha_wayland::prelude::*;
 
 use crate::layout::tokens::Fonts;
 use crate::layout::{KeyboardStyle, Keymap};
+use crate::lent::Keys;
 use crate::visibility::{ApplyKeyboardVisibility, KeyboardVisibilityExt};
 use crate::widget::keyboard::KeyboardBuilder;
 use crate::widget::popup::{GAP, HEIGHT_SCALE};
@@ -99,6 +100,7 @@ pub(crate) fn popup_headroom(style: &KeyboardStyle) -> f32 {
 /// surface are still delivered.
 pub(crate) struct KeyboardUI {
     pub(crate) surface: KeyboardSurface,
+    pub(crate) keys: Keys,
 }
 
 pub(crate) struct KeyboardUIBuilder {
@@ -155,13 +157,16 @@ impl Widget for KeyboardUI {
         );
         let window = win.id();
 
-        s.spawn(
+        let keys_handle = s.spawn(
             win,
             KeyboardBuilder {
                 fonts: b.fonts,
                 keymap: b.keymap,
             },
         );
+        let keys = Keys {
+            node: keys_handle.id(),
+        };
 
         // The gap under the keys is opaque: the window itself clears
         // transparent, for the headroom strip only.
@@ -175,7 +180,9 @@ impl Widget for KeyboardUI {
             ),
         );
 
-        // Map the surface while shown, unmap it while hidden, zone and all.
+        // The keys show while the keyboard does, wherever they are. The
+        // surface maps while they show at home, and unmaps otherwise, zone
+        // and all: keys lent to another window leave it unmapped.
         let surface = KeyboardSurface {
             window,
             height,
@@ -183,7 +190,14 @@ impl Widget for KeyboardUI {
             width: style.width,
         };
         s.on::<ApplyKeyboardVisibility>(me, move |ctx, _| {
-            let visible = ctx.keyboard_visible();
+            let shown = ctx.keyboard_visible();
+            ctx.at(keys_handle).unwrap().set_display(if shown {
+                Display::Flex
+            } else {
+                Display::Hidden
+            });
+            let home = ctx.tree().parent(keys.node) == Some(window);
+            let visible = shown && home;
             let zone = *ctx.resource::<ExclusiveZone>();
             let applied = {
                 let (mut surfaces, mut wl) = ctx.fetch::<(ResMut<Surfaces>, ResMut<Wayland>)>();
@@ -192,7 +206,7 @@ impl Widget for KeyboardUI {
             ctx.resource_mut::<InputRegion>().applied = applied;
         });
 
-        KeyboardUI { surface }
+        KeyboardUI { surface, keys }
     }
 }
 
