@@ -14,32 +14,35 @@ use crate::widget::keyboard::Keyboard;
 const WIDTH_SCALE: f32 = 1.4;
 /// The bubble's height as a multiple of the key's.
 pub(crate) const HEIGHT_SCALE: f32 = 1.3;
-/// Gap between the bubble's bottom edge and the key's top, in px.
+/// Gap between the bubble's bottom edge and the key's top, in logical px at
+/// the design scale ([`crate::scale`]).
 pub(crate) const GAP: f32 = 4.0;
 
-/// Where the bubble for `key` goes: centred over it, its bottom edge `GAP`
-/// above the key, then pushed inside `bounds` (all in window coordinates):
+/// Where the bubble for `key` goes: centred over it, its bottom edge `gap`
+/// ([`GAP`] at the current scale) above the key, then pushed inside `bounds` (all in window coordinates):
 /// the keyboard container plus the transparent headroom strip above it, so a
 /// top-row key's bubble rises into the strip.
-pub(crate) fn popup_rect(key: Rect, bounds: Rect) -> Rect {
+pub(crate) fn popup_rect(key: Rect, bounds: Rect, gap: f32) -> Rect {
     let w = key.size.width * WIDTH_SCALE;
     let h = key.size.height * HEIGHT_SCALE;
     let x = key.origin.x + (key.size.width - w) / 2.0;
-    let y = key.origin.y - GAP - h;
+    let y = key.origin.y - gap - h;
     let x = x.min(bounds.right() - w).max(bounds.origin.x);
     let y = y.min(bounds.bottom() - h).max(bounds.origin.y);
     Rect::new(x, y, w, h)
 }
 
 /// Build args for the [`KeyPopup`]: the keyboard it floats over, the font,
-/// the key label size (the bubble draws at twice it), the corner radius and
-/// the headroom strip above the keyboard it may rise into.
+/// the key label size (the bubble draws at twice it), the corner radius, the
+/// headroom strip above the keyboard it may rise into and the gap over the
+/// key, all at the current scale (a rescale updates them on the widget).
 pub(crate) struct KeyPopupBuilder {
     pub(crate) keyboard: Handle<Keyboard>,
     pub(crate) font: FontId,
     pub(crate) font_size: u16,
     pub(crate) radius: f32,
     pub(crate) headroom: f32,
+    pub(crate) gap: f32,
 }
 
 impl Build for KeyPopupBuilder {
@@ -51,6 +54,9 @@ pub(crate) struct KeyPopup {
     label: Handle<Text>,
     /// The key the bubble is showing, if any.
     shown: Option<NodeId>,
+    pub(crate) radius: f32,
+    pub(crate) headroom: f32,
+    pub(crate) gap: f32,
 }
 
 impl Widget for KeyPopup {
@@ -60,9 +66,8 @@ impl Widget for KeyPopup {
         let label = s.spawn(me, text(b.font, "").size(b.font_size * 2));
 
         let keyboard = b.keyboard;
-        let (radius, headroom) = (b.radius, b.headroom);
         s.on::<KeyFeedback>(me, move |ctx, e| match *e {
-            KeyFeedback::Pressed { key } => show(ctx, keyboard, key, radius, headroom),
+            KeyFeedback::Pressed { key } => show(ctx, keyboard, key),
             // Only the shown key's release hides the bubble.
             KeyFeedback::Released { key } => {
                 if ctx.me().shown == Some(key) {
@@ -71,18 +76,22 @@ impl Widget for KeyPopup {
                 }
             }
         });
-        KeyPopup { label, shown: None }
+        KeyPopup {
+            label,
+            shown: None,
+            radius: b.radius,
+            headroom: b.headroom,
+            gap: b.gap,
+        }
     }
 }
 
 /// Show the bubble over `key`, or hide it if the key has no character.
-fn show(
-    ctx: &mut Context<'_, KeyPopup>,
-    keyboard: Handle<Keyboard>,
-    key: NodeId,
-    radius: f32,
-    headroom: f32,
-) {
+fn show(ctx: &mut Context<'_, KeyPopup>, keyboard: Handle<Keyboard>, key: NodeId) {
+    let (radius, headroom, gap) = {
+        let me = ctx.me();
+        (me.radius, me.headroom, me.gap)
+    };
     ctx.me().shown = None;
     let Some((string, look)) = ctx
         .widget::<Key>(key)
@@ -110,7 +119,7 @@ fn show(
         container.size.width,
         container.size.height + headroom,
     );
-    let r = popup_rect(key_rect, bounds);
+    let r = popup_rect(key_rect, bounds, gap);
     let (x, y) = (
         r.origin.x - container.origin.x,
         r.origin.y - container.origin.y,
@@ -154,7 +163,7 @@ mod tests {
     #[test]
     fn popup_sits_above_key() {
         let key = Rect::new(200.0, 100.0, 100.0, 50.0);
-        let p = popup_rect(key, CONTAINER);
+        let p = popup_rect(key, CONTAINER, GAP);
         assert_eq!((p.size.width, p.size.height), (140.0, 65.0));
         assert_eq!(p.origin.x + p.size.width / 2.0, 250.0);
         assert_eq!(p.bottom(), 96.0);
@@ -165,16 +174,16 @@ mod tests {
         // Container at y = 100 under an 80 px headroom strip.
         let bounds = Rect::new(0.0, 20.0, 1000.0, 480.0);
         let key = Rect::new(200.0, 110.0, 100.0, 50.0);
-        let p = popup_rect(key, bounds);
+        let p = popup_rect(key, bounds, GAP);
         assert_eq!(p.bottom(), key.origin.y - 4.0);
         assert!(p.origin.y >= bounds.origin.y);
     }
 
     #[test]
     fn edge_popup_pushed_inward() {
-        let left = popup_rect(Rect::new(0.0, 100.0, 100.0, 50.0), CONTAINER);
+        let left = popup_rect(Rect::new(0.0, 100.0, 100.0, 50.0), CONTAINER, GAP);
         assert_eq!(left.origin.x, 0.0);
-        let right = popup_rect(Rect::new(900.0, 100.0, 100.0, 50.0), CONTAINER);
+        let right = popup_rect(Rect::new(900.0, 100.0, 100.0, 50.0), CONTAINER, GAP);
         assert_eq!(right.right(), 1000.0);
     }
 }

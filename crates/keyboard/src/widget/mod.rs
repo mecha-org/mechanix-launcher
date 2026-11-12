@@ -3,5 +3,6 @@
 
 pub(crate) mod key;
 pub(crate) mod keyboard;
+pub(crate) mod more_keys;
 pub(crate) mod popup;
 pub(crate) mod surface;
