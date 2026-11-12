@@ -4,8 +4,9 @@ use control_center::app_screens::AppScreen;
 use control_center::{ControlCenterScreen, select_screen};
 use home::Home;
 use keyboard::{KeyboardModule, hide_keyboard, show_keyboard, suspend_keyboard_zone};
+use lockscreen::{IdleModule, IdleSettings, LockSettings, LockscreenModule};
 use mecha_pulseaudio::{PulseAudioModule, VolumeControlModule};
-use mecha_wayland::mechanix_widgets::prelude::FontBook;
+use mecha_wayland::mechanix_widgets::prelude::{Clock, ClockTick, FontBook};
 use mecha_wayland::prelude::*;
 use nav::core::{
     AreaId, BOTTOM_EDGE, ContainerId, Direction, ExternalEvent, FADE, INSTANT, NavConfig,
@@ -13,9 +14,11 @@ use nav::core::{
 };
 use nav::shell::{ContainerShown, NavModule, nav_window};
 use notifications::NotificationsModule;
+use power_menu::PowerMenuModule;
 use quick_settings::QuickSettingsModule;
 use running_apps::{RunningApps, RunningAppsModule};
 use screen::OrientationModule;
+use services::{KeepAwakeModule, PrepareForSleep, SessionModule};
 use status_bar::{
     DEFAULT_BAR_HEIGHT, DEFAULT_ICON_SIZE, StatusBarModule, StatusBarScreen, StatusIcons,
 };
@@ -39,6 +42,15 @@ const COVERS: [ContainerId; 3] = [HOME_ID, RUNNING, CONTROL_CENTER];
 /// The [`COVERS`] open now.
 struct OpenCovers(Vec<ContainerId>);
 impl Resource for OpenCovers {}
+
+/// Woken from sleep: every clock shows the time now. Their timers are
+/// monotonic, which doesn't count the time asleep.
+fn on_wake(app: &mut App, e: &PrepareForSleep) {
+    if !e.0 {
+        let clocks: Vec<NodeId> = app.widgets::<Clock>().map(|(id, _)| id).collect();
+        app.emit(ClockTick, clocks);
+    }
+}
 
 fn on_container_shown(app: &mut App, s: &ContainerShown) {
     if !COVERS.contains(&s.id) {
@@ -117,6 +129,7 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
         .open(bottom_quick(), FADE)
         .close(OnExternal(ExternalEvent::AppLaunched), INSTANT)
         .close(OnExternal(ExternalEvent::WindowOpened), INSTANT)
+        .open(OnExternal(ExternalEvent::LastWindowClosed), FADE)
         .child(
             container(DRAWER, drawer)
                 .open(swipe(HOME, Direction::Up, Timing::Any), INSTANT)
@@ -133,7 +146,9 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
             INSTANT,
         )
         .close(bottom_quick(), INSTANT)
-        .close(OnExternal(ExternalEvent::AppLaunched), INSTANT);
+        .close(OnExternal(ExternalEvent::AppLaunched), INSTANT)
+        // Closing the last app from here leaves nothing to show but Home.
+        .close(OnExternal(ExternalEvent::LastWindowClosed), INSTANT);
 
     NavModule::new(cfg)
         .action(bottom_corner(Span::LeftCorner), show_keyboard)
@@ -198,12 +213,21 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
                 ),
                 bar,
             )
-            .container(container(STATUS, StatusBarScreen).initially_open())
+            .container(
+                container(STATUS, StatusBarScreen)
+                    .initially_open()
+                    // Out of the way of a fullscreen app: with nothing
+                    // shown, the window drops below every app.
+                    .close(OnExternal(ExternalEvent::FullscreenEntered), INSTANT)
+                    .open(OnExternal(ExternalEvent::FullscreenLeft), INSTANT),
+            )
             .no_input(),
         )
 }
 
 fn main() {
+    // An auth worker runs PAM and exits; it never gets past this.
+    lockscreen::run_worker_if_asked();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -269,12 +293,27 @@ fn main() {
         .add_module(StatusBarModule)
         .add_module(NotificationsModule)
         .add_module(KeyboardModule { bottom_gap })
-        .add_module(QuickSettingsModule);
+        .add_module(QuickSettingsModule)
+        .add_module(PowerMenuModule)
+        .add_module(SessionModule)
+        .add_module(KeepAwakeModule)
+        // Last, so its lock windows stack above everything else's.
+        .add_module(LockscreenModule {
+            settings: LockSettings {
+                // Until the configuration has it: `MECHANIX_SUSPEND=1` for a
+                // device that resumes.
+                suspend: std::env::var("MECHANIX_SUSPEND").is_ok_and(|v| v == "1"),
+                ..LockSettings::default()
+            },
+        })
+        .add_module(IdleModule {
+            settings: IdleSettings::default(),
+        });
 
     // Home starts open.
     app.insert_resource(OpenCovers(vec![HOME_ID]));
     suspend_keyboard_zone(&mut app, true);
-    app.system(on_container_shown);
+    app.system(on_container_shown).system(on_wake);
 
     app.run();
 }

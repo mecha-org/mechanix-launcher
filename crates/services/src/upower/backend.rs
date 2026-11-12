@@ -16,6 +16,7 @@ pub(super) struct UpowerBattery {
 }
 impl Resource for UpowerBattery {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BatteryPercentageChanged {
     /// event to send when the battery percentage changes
     /// None means the battery is invalid

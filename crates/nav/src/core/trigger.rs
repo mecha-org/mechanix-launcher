@@ -16,6 +16,15 @@ pub enum ExternalEvent {
     /// A new app window, not a dialog, opened with focus, however it was
     /// started.
     WindowOpened,
+    /// The last app window closed, however it went: nothing is left to
+    /// show but the shell.
+    LastWindowClosed,
+    /// A fullscreen app is what shows: the focused window is fullscreen
+    /// and no shell view covers it.
+    FullscreenEntered,
+    /// It no longer is: it left fullscreen or lost the focus, or a view
+    /// opened over it.
+    FullscreenLeft,
 }
 
 pub trait Trigger: 'static {

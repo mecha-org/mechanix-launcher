@@ -1,7 +1,8 @@
 use mecha_wayland::prelude::*;
 
 use crate::tiles::{
-    BatteryBuilder, BluetoothBuilder, MAX_TILE_HEIGHT, WifiBuilder, action_tile, borders, svg,
+    BatteryBuilder, BluetoothBuilder, KeepAwakeTileBuilder, MAX_TILE_HEIGHT, WifiBuilder,
+    action_tile, borders, svg,
 };
 
 const BOTTOM_BAR_HEIGHT: f32 = MAX_TILE_HEIGHT * 2.0;
@@ -60,7 +61,12 @@ impl Widget for BottomBar {
                 borders: borders::ALL,
             },
         );
-        s.spawn(top, action_tile(svg::DISPLAY, borders::ALL));
+        s.spawn(
+            top,
+            KeepAwakeTileBuilder {
+                borders: borders::ALL,
+            },
+        );
         s.spawn(top, action_tile(svg::TERMINAL, borders::ALL));
         s.spawn(top, action_tile(svg::MICROPHONE, borders::NO_RIGHT));
 

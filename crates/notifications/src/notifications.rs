@@ -1,5 +1,6 @@
 use crate::card_list::CardListBuilder;
 use crate::notify_signal::NotificationSignal;
+use crate::ongoing::OngoingListBuilder;
 use crate::options_menu::{OptionsMenu, OptionsMenuBuilder};
 use crate::style::{color, size, space, text};
 use mecha_wayland::mechanix_widgets::{self as mw, button};
@@ -31,6 +32,7 @@ impl Widget for NotificationsCenter {
             ))
             .gap(px(space::HEADER_TO_LIST.dp()));
 
+        s.spawn(me, OngoingListBuilder);
         let header = s.spawn(
             me,
             div().style(

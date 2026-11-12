@@ -9,8 +9,18 @@ pub mod fonts {
 pub mod icons {
     pub const AIRPLANE: &[u8] = include_bytes!("../icons/airplane.svg");
     pub const APP: &[u8] = include_bytes!("../icons/app.svg");
+    /// Go on: send what was typed.
+    pub const ARROW_RIGHT: &[u8] = include_bytes!("../icons/arrow-right.svg");
     pub const SEARCH: &[u8] = include_bytes!("../icons/magnifying-glass.svg");
     pub const CLEAR: &[u8] = include_bytes!("../icons/x.svg");
+    pub const BACKSPACE: &[u8] = include_bytes!("../icons/backspace.svg");
+    pub const ENTER: &[u8] = include_bytes!("../icons/enter.svg");
+    /// Show a password as typed, and hide it again.
+    pub const EYE: &[u8] = include_bytes!("../icons/eye.svg");
+    pub const EYE_SLASH: &[u8] = include_bytes!("../icons/eye-slash.svg");
+    pub const POWER: &[u8] = include_bytes!("../icons/power.svg");
+    /// Turning arrows: rotation, and restart.
+    pub const ROTATE: &[u8] = include_bytes!("../icons/rotate.svg");
     /// The Comet wheel, traced from the boot splash.
     pub const COMET_LOGO: &[u8] = include_bytes!("../icons/comet-logo.svg");
 

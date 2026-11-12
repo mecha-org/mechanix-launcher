@@ -78,6 +78,14 @@ pub fn hide_keyboard(app: &mut App) {
     app.set_keyboard_visibility(false);
 }
 
+/// Whether the keyboard is visible: its keys show, wherever they are. A host
+/// that has the keys lays out around them by this, again on each
+/// [`KeyboardVisibilityChanged`]. False without the
+/// [`KeyboardModule`](crate::KeyboardModule).
+pub fn is_keyboard_visible(app: &App) -> bool {
+    app.has_resource::<KeyboardVisibility>() && app.keyboard_visible()
+}
+
 /// On [`KeyboardVisibilityChanged`], broadcast [`ApplyKeyboardVisibility`] to
 /// the root and every descendant so the surface widget re-applies `Display`.
 fn on_keyboard_visibility_changed(app: &mut App, _: &KeyboardVisibilityChanged) {

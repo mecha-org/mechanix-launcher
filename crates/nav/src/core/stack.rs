@@ -883,6 +883,56 @@ mod tests {
         assert!(settled(&stack));
     }
 
+    #[test]
+    fn last_window_closed_opens_home() {
+        let home = home(false, drawer(INSTANT))
+            .close(OnExternal(ExternalEvent::AppLaunched), INSTANT)
+            .open(OnExternal(ExternalEvent::LastWindowClosed), INSTANT);
+        let mut stack = build(rest(home));
+        assert!(open_ones(&stack).is_empty());
+        stack.handle(Input::External(ExternalEvent::LastWindowClosed));
+        assert_eq!(open_ones(&stack), [HOME_ID]);
+        assert!(settled(&stack));
+        // Already open: it stays so.
+        stack.handle(Input::External(ExternalEvent::LastWindowClosed));
+        assert_eq!(open_ones(&stack), [HOME_ID]);
+    }
+
+    #[test]
+    fn last_window_closed_from_recents_lands_on_home() {
+        let home =
+            home(false, drawer(INSTANT)).open(OnExternal(ExternalEvent::LastWindowClosed), INSTANT);
+        let mut roots = rest(home);
+        roots[1] = container(RUNNING, Dummy)
+            .initially_open()
+            .close(OnExternal(ExternalEvent::LastWindowClosed), INSTANT);
+        let mut stack = build(roots);
+        assert_eq!(open_ones(&stack), [RUNNING]);
+        stack.handle(Input::External(ExternalEvent::LastWindowClosed));
+        assert_eq!(open_ones(&stack), [HOME_ID]);
+        assert!(settled(&stack));
+    }
+
+    #[test]
+    fn a_bar_makes_way_for_fullscreen_and_comes_back() {
+        const BAR: ContainerId = ContainerId("bar");
+        let mut roots = rest(home(true, drawer(INSTANT)));
+        roots.push(
+            container(BAR, Dummy)
+                .initially_open()
+                .close(OnExternal(ExternalEvent::FullscreenEntered), INSTANT)
+                .open(OnExternal(ExternalEvent::FullscreenLeft), INSTANT),
+        );
+        let mut stack = build(roots);
+        assert!(stack.state(BAR).visible());
+        stack.handle(Input::External(ExternalEvent::FullscreenEntered));
+        assert!(!stack.state(BAR).visible());
+        assert!(stack.state(HOME_ID).visible(), "nothing else moves");
+        stack.handle(Input::External(ExternalEvent::FullscreenLeft));
+        assert!(stack.state(BAR).visible());
+        assert!(settled(&stack));
+    }
+
     /// Records every `follow` progress; otherwise behaves like `INSTANT`.
     #[derive(Clone)]
     struct Recorder(Rc<RefCell<Vec<f32>>>);

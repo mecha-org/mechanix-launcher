@@ -5,11 +5,13 @@ use crate::util::load_icon;
 pub mod action;
 pub mod battery;
 pub mod bluetooth;
+pub mod keep_awake;
 pub mod wifi;
 
 pub use action::{action_tile, svg};
 pub use battery::BatteryBuilder;
 pub use bluetooth::BluetoothBuilder;
+pub use keep_awake::KeepAwakeTileBuilder;
 pub use wifi::WifiBuilder;
 
 pub(crate) const MAX_TILE_HEIGHT: f32 = 106.0;

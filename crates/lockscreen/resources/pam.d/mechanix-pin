@@ -1,0 +1,10 @@
+#%PAM-1.0
+# The lock screen's PIN method. Install to /etc/pam.d/mechanix-pin.
+#
+# The PIN is checked in mechanix-pin-check. Extra factors go below it: the
+# lock screen asks for each after the PIN, in its text field.
+#
+# This stack doesn't include system-auth: a factor added there (pam_u2f,
+# say) guards the password method, not the PIN. Add it here as well, or
+# turn the PIN method off.
+auth     substack  mechanix-pin-check

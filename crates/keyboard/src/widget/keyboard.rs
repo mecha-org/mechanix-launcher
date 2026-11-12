@@ -73,12 +73,15 @@ impl Build for KeyboardBuilder {
 impl Widget for Keyboard {
     type Builder = KeyboardBuilder;
     fn build(b: KeyboardBuilder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
-        // Keyboard container: column filling the window, surface background.
-        // Its gap only separates views, and just one view is ever shown.
+        // Keyboard container: a column as wide as its parent and as tall as
+        // the keys, surface background, wherever it is. Its gap only
+        // separates views, and just one view is ever shown.
         let style = b.keymap.keyboard;
         *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
             .column()
-            .fill()
+            .width(percent(100.0))
+            .height(px(style.height))
+            .shrink(0.0)
             .gap(px(style.row_gap))
             .padding_all(px(style.padding));
         let bg_role = b.keymap.keyboard.background_color;

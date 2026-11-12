@@ -1,7 +1,8 @@
 use mecha_wayland::mechanix_widgets::prelude::{ButtonVariant, ClockInterval, button, clock};
 use mecha_wayland::prelude::*;
 
-use crate::power_overlay::{OpenPowerOverlay, POWER_ICON};
+use power_menu::ShowPowerMenu;
+
 use crate::util::{full_width, load_icon_sized};
 
 pub const HEADER_HEIGHT: f32 = 80.0;
@@ -55,7 +56,11 @@ impl Widget for Header {
                 .color(ColorRole::OnSurfaceVariant),
         );
 
-        let sprite = load_icon_sized(&mut s.resource_mut::<Atlas>(), POWER_ICON, POWER_ICON_SIZE);
+        let sprite = load_icon_sized(
+            &mut s.resource_mut::<Atlas>(),
+            assets::icons::POWER,
+            POWER_ICON_SIZE,
+        );
 
         let power = s.spawn(
             me,
@@ -69,9 +74,7 @@ impl Widget for Header {
                 .height(px(32.))
                 .text_color(ColorRole::OnSurface),
         );
-        s.on::<Clicked>(power, |ctx, _| {
-            ctx.emit(OpenPowerOverlay, ctx.tree().root());
-        });
+        s.on::<Clicked>(power, |ctx, _| ctx.signal(ShowPowerMenu));
 
         Header
     }

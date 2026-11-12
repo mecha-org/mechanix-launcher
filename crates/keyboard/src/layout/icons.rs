@@ -15,13 +15,14 @@ macro_rules! include_icon {
 
 /// Every bundled SVG icon, keyed by the name layouts refer to it by.
 const BUNDLED: &[(&str, &[u8])] = &[
-    include_icon!("edit-clear-symbolic"),
+    // Shared with the lock screen's numpad.
+    ("edit-clear-symbolic", assets::icons::BACKSPACE),
     include_icon!("face-smile-symbolic"),
     include_icon!("go-down-symbolic"),
     include_icon!("go-next-symbolic"),
     include_icon!("go-previous-symbolic"),
     include_icon!("go-up-symbolic"),
-    include_icon!("key-enter-symbolic"),
+    ("key-enter-symbolic", assets::icons::ENTER),
     include_icon!("key-shift-symbolic"),
     include_icon!("preferences-system-symbolic"),
     include_icon!("view-reserve-bottom-symbolic"),

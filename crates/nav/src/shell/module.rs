@@ -112,7 +112,7 @@ impl Module for NavModule {
             }
             let layer = match &w.role {
                 Role::Layer(l) => Some(l.layer),
-                Role::Toplevel => None,
+                Role::Toplevel | Role::Lock(_) => None,
             };
             let node = app
                 .spawn_with(
@@ -184,7 +184,7 @@ impl Module for NavModule {
         app.system(on_resized);
         app.system(on_contact);
         app.system(on_frame);
-        app.insert_resource(SeenToplevels(Vec::new()));
+        app.insert_resource(SeenToplevels::default());
         app.system(on_app_launched);
         app.system(on_toplevels_changed);
         apply(app);
@@ -199,35 +199,101 @@ fn on_app_launched(app: &mut App, _: &AppLaunched) {
     apply(app);
 }
 
-/// The open windows that have had focus.
-struct SeenToplevels(Vec<ToplevelId>);
+#[derive(Default)]
+struct SeenToplevels {
+    /// The open windows that have had focus.
+    focused: Vec<ToplevelId>,
+    /// Whether any app window, not a dialog, was open.
+    any_app: bool,
+    /// Whether the focused window is fullscreen.
+    fullscreen: bool,
+    /// Whether a fullscreen app is what shows: the stack last heard
+    /// `FullscreenEntered`.
+    fullscreen_shown: bool,
+}
 impl Resource for SeenToplevels {}
 
-/// Feeds an app window's first focus to the stack, so an app opened from
-/// elsewhere shows rather than staying behind the shell. Dialogs and focus
-/// returning to a window, as when another closes, do not count.
+/// Feeds the app windows' comings and goings to the stack:
+///
+/// - An app window's first focus, so an app opened from elsewhere shows
+///   rather than staying behind the shell. Dialogs and focus returning to
+///   a window, as when another closes, do not count.
+/// - The last app window closing, so the shell shows rather than nothing,
+///   whether the app was closed or exited by itself.
+/// - The focused window going fullscreen or back (see
+///   [`feed_fullscreen`]).
 fn on_toplevels_changed(app: &mut App, _: &ToplevelsChanged) {
     if !app.has_resource::<Toplevels>() {
         return;
     }
-    let opened = {
+    let (opened, last_closed, fullscreen_changed) = {
         let (toplevels, mut seen) = app.query::<(Res<Toplevels>, ResMut<SeenToplevels>)>();
         let opened = toplevels
             .iter()
-            .any(|t| t.activated && t.parent.is_none() && !seen.0.contains(&t.id));
-        seen.0 = toplevels
+            .any(|t| t.activated && t.parent.is_none() && !seen.focused.contains(&t.id));
+        seen.focused = toplevels
             .iter()
             .filter(|t| t.last_activated != 0)
             .map(|t| t.id)
             .collect();
-        opened
+        let any_app = toplevels.iter().any(|t| t.parent.is_none());
+        let last_closed = std::mem::replace(&mut seen.any_app, any_app) && !any_app;
+        let fullscreen = toplevels.iter().any(|t| t.activated && t.fullscreen);
+        let fullscreen_changed = std::mem::replace(&mut seen.fullscreen, fullscreen) != fullscreen;
+        (opened, last_closed, fullscreen_changed)
     };
-    if opened {
-        app.resource_mut::<Nav>()
-            .stack
-            .handle(Input::External(ExternalEvent::WindowOpened));
+    for (happened, event) in [
+        (opened, ExternalEvent::WindowOpened),
+        (last_closed, ExternalEvent::LastWindowClosed),
+    ] {
+        if happened {
+            app.resource_mut::<Nav>()
+                .stack
+                .handle(Input::External(event));
+        }
+    }
+    if opened || last_closed || fullscreen_changed {
         apply(app);
     }
+}
+
+/// Tell the stack whether a fullscreen app is what shows: the focused
+/// window is fullscreen and no shell view covers it. A view is any
+/// container in a window that takes input (Home, Recent Apps, the
+/// panel); the bars and edges don't count. Home over a fullscreen app
+/// leaves the app focused underneath, so focus alone can't say.
+/// `FullscreenEntered` and `FullscreenLeft` go out only when the answer
+/// changes. [`apply`] runs it first, as any view opening or closing can
+/// change it.
+pub(crate) fn feed_fullscreen(app: &mut App) {
+    if !app.has_resource::<SeenToplevels>() {
+        return;
+    }
+    let shown = {
+        let nav = app.resource::<Nav>();
+        let covered = nav
+            .windows
+            .iter()
+            .filter(|w| !w.no_input)
+            .flat_map(|w| &w.containers)
+            .any(|id| nav.stack.state(*id).visible());
+        app.resource::<SeenToplevels>().fullscreen && !covered
+    };
+    let was = std::mem::replace(
+        &mut app.resource_mut::<SeenToplevels>().fullscreen_shown,
+        shown,
+    );
+    if shown == was {
+        return;
+    }
+    let event = if shown {
+        ExternalEvent::FullscreenEntered
+    } else {
+        ExternalEvent::FullscreenLeft
+    };
+    app.resource_mut::<Nav>()
+        .stack
+        .handle(Input::External(event));
 }
 
 #[cfg(test)]
@@ -595,6 +661,51 @@ pub(crate) mod tests {
             app.resource::<Signalled>().0,
             [shown(DRAWER, true), shown(DRAWER, false)]
         );
+    }
+
+    #[test]
+    fn the_bar_hides_only_while_a_fullscreen_app_shows() {
+        const BAR_AREA: AreaId = AreaId("bar");
+        const BAR: ContainerId = ContainerId("bar");
+        let home = home_spec(false)
+            .open(OnExternal(ExternalEvent::LastWindowClosed), INSTANT)
+            .close(OnExternal(ExternalEvent::WindowOpened), INSTANT);
+        let bar = container(BAR, Label("Bar"))
+            .initially_open()
+            .close(OnExternal(ExternalEvent::FullscreenEntered), INSTANT)
+            .open(OnExternal(ExternalEvent::FullscreenLeft), INSTANT);
+        let m = module_with(home).window(
+            nav_window(
+                BAR_AREA,
+                role(Layer::Overlay, "bar"),
+                LayoutStyle::default().height(px(20.0)),
+            )
+            .container(bar)
+            .no_input(),
+        );
+        let mut app = app_with(m);
+        let external = |app: &mut App, event| {
+            app.resource_mut::<Nav>()
+                .stack
+                .handle(Input::External(event));
+            apply(app);
+        };
+        assert_eq!(display(&app, node_of(&app, BAR)), Display::Flex);
+
+        // A fullscreen app takes the focus, nothing over it.
+        app.resource_mut::<SeenToplevels>().fullscreen = true;
+        apply(&mut app);
+        assert_eq!(display(&app, node_of(&app, BAR)), Display::Hidden);
+
+        // Home over it: the bar is back, though the app keeps the focus.
+        external(&mut app, ExternalEvent::LastWindowClosed);
+        assert_eq!(display(&app, node_of(&app, HOME)), Display::Flex);
+        assert_eq!(display(&app, node_of(&app, BAR)), Display::Flex);
+
+        // Back to the app: out of the way again.
+        external(&mut app, ExternalEvent::WindowOpened);
+        assert_eq!(display(&app, node_of(&app, HOME)), Display::Hidden);
+        assert_eq!(display(&app, node_of(&app, BAR)), Display::Hidden);
     }
 
     #[test]

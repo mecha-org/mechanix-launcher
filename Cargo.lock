@@ -535,13 +535,16 @@ dependencies = [
  "control-center",
  "home",
  "keyboard",
+ "lockscreen",
  "mecha-pulseaudio",
  "mecha-wayland",
  "nav",
  "notifications",
+ "power-menu",
  "quick-settings",
  "running-apps",
  "screen",
+ "services",
  "status-bar",
  "tracing",
  "tracing-subscriber",
@@ -609,6 +612,23 @@ name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
+
+[[package]]
+name = "lockscreen"
+version = "0.1.0"
+dependencies = [
+ "assets",
+ "gestures",
+ "keyboard",
+ "libc",
+ "mecha-wayland",
+ "nav",
+ "power-menu",
+ "services",
+ "status-bar",
+ "tracing",
+ "zeroize",
+]
 
 [[package]]
 name = "log"
@@ -731,6 +751,7 @@ version = "0.1.0"
 dependencies = [
  "mecha-wayland",
  "screen",
+ "services",
 ]
 
 [[package]]
@@ -833,6 +854,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "power-menu"
+version = "0.1.0"
+dependencies = [
+ "assets",
+ "mecha-wayland",
+ "services",
+]
+
+[[package]]
 name = "presentation"
 version = "0.1.0"
 source = "git+https://github.com/mecha-org/mecha-wayland?branch=dev#c1b7bb410cda4dff26b81c9a4273c3c4597424fd"
@@ -876,6 +906,7 @@ dependencies = [
  "assets",
  "mecha-pulseaudio",
  "mecha-wayland",
+ "power-menu",
  "screen",
  "services",
  "tracing",
@@ -1061,7 +1092,9 @@ dependencies = [
 name = "services"
 version = "0.1.0"
 dependencies = [
+ "dbus",
  "mecha-wayland",
+ "wayland",
 ]
 
 [[package]]
@@ -1595,6 +1628,12 @@ dependencies = [
  "ryu",
  "serde",
 ]
+
+[[package]]
+name = "zeroize"
+version = "1.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
 
 [[package]]
 name = "zlib-rs"

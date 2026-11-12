@@ -232,6 +232,7 @@ mod tests {
             title: String::new(),
             app_id: app_id.into(),
             activated: false,
+            fullscreen: false,
             parent: None,
             last_activated,
         }

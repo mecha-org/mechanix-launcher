@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 mecha-wayland.workspace = true
 screen.workspace = true
+services.workspace = true
