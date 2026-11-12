@@ -1,3 +1,5 @@
+use crate::hints::Hints;
+use crate::image::{self, Image};
 use crate::markup::Markup;
 use crate::millis::Millis;
 use crate::{
@@ -9,22 +11,14 @@ use std::time::SystemTime;
 
 #[derive(Default, Debug, Clone)]
 pub struct Notification {
-    pub desktop_entry: String,
     pub app_name: String,
     pub app_icon: String,
     pub summary: String,
     pub body: Markup,
     pub actions: Vec<(String, String)>,
     pub expire_timeout: Option<Millis>,
-    pub hints: Categories,
-}
-
-#[derive(Default, Debug, Clone)]
-pub enum Categories {
-    #[default]
-    LOW,
-    NORMAL,
-    CRITICAL,
+    pub image: Option<Image>,
+    pub hints: Option<Hints>,
 }
 
 #[derive(Debug)]
@@ -52,34 +46,27 @@ impl From<NotifyArgs> for Notify {
 
         let replaces_id = (replaces_id != 0).then_some(replaces_id);
 
+        let image = image::select(&hints, &app_icon);
+        let hints = Hints::parse(hints);
+
         let actions = actions
             .chunks_exact(2)
             .map(|pair| (pair[0].clone(), pair[1].clone()))
             .collect();
-
-        let urgency = match hints.get_as::<u8>("urgency") {
-            Some(Ok(0)) => Categories::LOW,
-            Some(Ok(2)) => Categories::CRITICAL,
-            _ => Categories::NORMAL,
-        };
-        let desktop_entry = hints
-            .get_as::<String>("desktop-entry")
-            .and_then(Result::ok)
-            .unwrap_or_default();
 
         let body = Markup::parse(&body);
 
         Notify {
             replaces_id,
             notification: Notification {
-                desktop_entry,
                 app_name,
                 app_icon,
                 summary,
                 body,
                 actions,
                 expire_timeout: Millis::from_expire_timeout(expire_timeout),
-                hints: urgency,
+                image,
+                hints: Some(hints),
             },
         }
     }

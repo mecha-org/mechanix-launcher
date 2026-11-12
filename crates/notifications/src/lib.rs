@@ -3,10 +3,13 @@ use screen::Screen;
 
 pub mod card;
 pub mod card_drag;
+pub mod card_icon;
 pub mod card_list;
 pub mod card_options;
 pub mod dbus;
 pub mod dbus_spec;
+pub mod hints;
+pub mod image;
 pub mod markup;
 pub mod millis;
 pub mod module;
