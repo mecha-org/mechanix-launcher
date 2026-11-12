@@ -8,43 +8,62 @@ use mecha_wayland::prelude::*;
 use xkbcommon::xkb::Keysym;
 
 use super::resolve::{KeyGeom, ResolveParams, SIGMA_RATIO, resolve};
-use crate::layout::{DEFAULT_STRENGTH, KeyAction, Keymap, load_keymap};
+use crate::layout::{
+    Cell, DEFAULT_STRENGTH, KeyAction, KeyboardStyle, Keymap, Row, View, load_keymap,
+};
 use crate::predict::{Dictionary, Predictor};
 use crate::protocol::virtual_keyboard::keysym_text;
+use crate::widget::surface::{row_weight, view_height};
 
 /// Tap noise as a fraction of the median letter key width.
 const NOISE: f32 = 0.35;
 const EN_TSV: &str = include_str!("../../resources/dict/en.tsv");
 
-/// Approximate flex layout of the `base` view: equal-height rows, key widths
-/// proportional to `Key.width` after subtracting gaps.
+/// Approximate flex layout of the `base` view.
 fn base_geometry(keymap: &Keymap) -> Vec<KeyGeom> {
-    let kb = &keymap.keyboard;
-    let view = keymap.view("base").expect("base view");
-    let rows = view.rows.len() as f32;
-    let row_h = (kb.height - 2.0 * kb.padding - (rows - 1.0) * kb.row_gap) / rows;
+    view_geometry(&keymap.keyboard, keymap.view("base").expect("base view"))
+}
+
+/// Approximate flex layout of a view: rows share the height by weight, cells
+/// (keys and spacers) share the width by width, minus gaps. Only keys get a
+/// rectangle; spacers take width and are never hit.
+fn view_geometry(kb: &KeyboardStyle, view: &View) -> Vec<KeyGeom> {
+    let weights: Vec<f32> = view.rows.iter().map(|r| row_weight(r.height)).collect();
+    let rows = weights.len() as f32;
+    let avail_h = view_height(kb, view) - 2.0 * kb.padding - (rows - 1.0) * kb.row_gap;
     let row_w = kb.width.unwrap_or(540.0) - 2.0 * kb.padding;
     let mut out = Vec::new();
-    for (r, row) in view.rows.iter().enumerate() {
-        let n = row.keys.len() as f32;
-        let total: f32 = row.keys.iter().map(|k| k.width).sum();
+    let mut y = kb.padding;
+    for (row, weight) in view.rows.iter().zip(&weights) {
+        let row_h = avail_h * weight / weights.iter().sum::<f32>();
+        let n = row.cells.len() as f32;
+        let total: f32 = row.cells.iter().map(cell_width).sum();
         let avail = row_w - (n - 1.0) * kb.gap;
-        let y = kb.padding + r as f32 * (row_h + kb.row_gap);
         let mut x = kb.padding;
-        for key in &row.keys {
-            let w = key.width / total * avail;
-            let letter = match &key.action {
-                KeyAction::EmitKeysym(ks) => letter_of(*ks),
-                _ => None,
-            };
-            out.push(KeyGeom {
-                rect: Rect::new(x, y, w, row_h),
-                letter,
-            });
+        for cell in &row.cells {
+            let w = cell_width(cell) / total * avail;
+            if let Cell::Key(key) = cell {
+                let letter = match &key.action {
+                    KeyAction::EmitKeysym(ks) => letter_of(*ks),
+                    _ => None,
+                };
+                out.push(KeyGeom {
+                    rect: Rect::new(x, y, w, row_h),
+                    letter,
+                });
+            }
             x += w + kb.gap;
         }
+        y += row_h + kb.row_gap;
     }
     out
+}
+
+fn cell_width(cell: &Cell) -> f32 {
+    match cell {
+        Cell::Key(k) => k.width,
+        Cell::Spacer(w) => *w,
+    }
 }
 
 fn letter_of(ks: Keysym) -> Option<char> {
@@ -181,6 +200,27 @@ mod tests {
         letters.sort();
         letters.dedup();
         assert_eq!(letters.len(), 26);
+    }
+
+    #[test]
+    fn spacers_take_width_but_are_never_hit() {
+        let km = load_keymap();
+        let key = |i: usize| km.view("base").unwrap().keys().nth(i).unwrap().clone();
+        let (a, b) = (key(0), key(1));
+        let w = a.width;
+        let view = View {
+            name: "v".into(),
+            family: crate::layout::Family::Text,
+            page: crate::layout::Page::Letters,
+            rows: vec![Row {
+                cells: vec![Cell::Spacer(w), Cell::Key(a), Cell::Key(b), Cell::Spacer(w)],
+                height: 1.0,
+            }],
+        };
+        let geoms = view_geometry(&km.keyboard, &view);
+        assert_eq!(geoms.len(), 2, "one rect per key, none per spacer");
+        // The leading spacer pushes the first key right of the padding.
+        assert!(geoms[0].rect.x() > km.keyboard.padding + w * 0.5);
     }
 
     #[test]

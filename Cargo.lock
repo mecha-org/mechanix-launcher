@@ -470,6 +470,7 @@ name = "keyboard"
 version = "0.1.0"
 dependencies = [
  "assets",
+ "gestures",
  "mecha-wayland",
  "rustix",
  "serde",

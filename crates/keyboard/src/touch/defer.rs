@@ -151,6 +151,7 @@ mod tests {
             resolve(&k, p, &FLAT, &ResolveParams::for_keys(&k, 0.0)).map(|index| KeyRef {
                 index,
                 repeats: false,
+                choices: false,
             })
         };
         for (i, &(event, laid)) in events.iter().enumerate() {

@@ -2,12 +2,14 @@
 
 use mecha_wayland::prelude::*;
 
-use crate::latch::LatchedState;
 use crate::layout;
 use crate::layout::icons::Icons;
 use crate::layout::tokens::Fonts;
+use crate::modifiers::latch::LatchedState;
+use crate::modifiers::shift::Shift;
 use crate::protocol::input_method::InputMethodModule;
 use crate::protocol::virtual_keyboard::VirtualKeyboardModule;
+use crate::scale::{KeyboardGeometry, on_resized};
 use crate::view::on_text_input_focused;
 use crate::widget::surface::{InputRegion, KeyboardUI, KeyboardUIBuilder, ensure_input_region};
 use crate::zone::ExclusiveZone;
@@ -29,7 +31,8 @@ use crate::zone::ExclusiveZone;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct KeyboardModule {
     /// Empty space under the keys, logical px: room for a host's bottom-edge
-    /// swipe strip, which should sit in a layer above the keyboard.
+    /// swipe strip, which should sit in a layer above the keyboard. Unlike
+    /// the keys it does not follow the output width.
     pub bottom_gap: f32,
 }
 
@@ -42,6 +45,8 @@ impl Module for KeyboardModule {
             .add_module(InputMethodModule);
         app.system(on_text_input_focused);
         spawn_ui(app, self.bottom_gap);
+        // The output's width, which the keyboard spans and scales to.
+        app.system(on_resized);
     }
 }
 
@@ -55,12 +60,14 @@ pub fn spawn_ui(app: &mut App, bottom_gap: f32) {
     let keymap = layout::load_keymap();
 
     app.insert_resource(LatchedState::default());
+    app.insert_resource(Shift::default());
     app.insert_resource(crate::predict::TypingContext::default());
     app.insert_resource(crate::predict::Prediction::from_config(&keymap.prediction));
     app.insert_resource(ExclusiveZone::default());
     crate::feedbackd::install(app);
+    app.insert_resource(KeyboardGeometry::new(keymap.keyboard));
     // Keyboard surface visibility — starts hidden; IM2 `activate`, a
-    // corner swipe and the hide key flip it through `KeyboardVisibilityExt`.
+    // corner swipe and a downward flick flip it through `KeyboardVisibilityExt`.
     crate::visibility::install(app);
 
     let fonts = Fonts::load(&mut app.resource_mut::<Atlas>());

@@ -18,13 +18,18 @@ use xkbcommon::xkb::Keysym;
 use super::KeyFeedback;
 use super::defer::PendingPress;
 use super::flow::{self, Board, Flow};
+use super::long_press::{ChoicesRow, LONG_PRESS};
 use super::resolve::KeyGeom;
 use super::tracker::{TouchOut, TouchTracker};
 use crate::feedbackd;
-use crate::input::{dispatch, field_kind, hold, release, repeats};
+use crate::field::Field;
+use crate::input::{dispatch, dispatch_choice, hold, release, repeats};
 use crate::layout::KeyAction;
+use crate::modifiers::shift::{self, Shift};
 use crate::predict::{LetterPrior, Prediction, TypingContext};
+use crate::visibility::KeyboardVisibilityExt;
 use crate::widget::keyboard::Keyboard;
+use crate::widget::more_keys::ChoicesFeedback;
 
 /// Bookkeeping the input layer keeps besides the tracker.
 #[derive(Default)]
@@ -55,6 +60,28 @@ impl Board for Kb<'_, '_> {
         let me = self.0.me();
         repeats(&me.keys[me.current_view][index].action)
     }
+    fn has_choices(&mut self, index: usize) -> bool {
+        let me = self.0.me();
+        !me.keys[me.current_view][index].choices.is_empty()
+    }
+    fn choices_row(&mut self, index: usize) -> Option<ChoicesRow> {
+        let me = self.0.me();
+        let choices = me.keys[me.current_view].get(index)?.choices.clone();
+        let (headroom, gap) = (me.headroom, me.popup_gap);
+        if choices.is_empty() {
+            return None;
+        }
+        let key = *key_geoms(self.0).get(index)?;
+        let container = self.0.component::<ComputedLayout>()?.rect;
+        // The row may rise into the headroom strip, as the pop-up does.
+        let bounds = Rect::new(
+            container.origin.x,
+            container.origin.y - headroom,
+            container.size.width,
+            container.size.height + headroom,
+        );
+        Some(ChoicesRow::open(key.rect, bounds, gap, choices))
+    }
     fn tracker(&mut self) -> &mut TouchTracker {
         &mut self.0.me().tracker
     }
@@ -63,6 +90,9 @@ impl Board for Kb<'_, '_> {
     }
     fn act(&mut self, out: Vec<TouchOut>, time: u32) {
         run(self.0, out, time);
+    }
+    fn close(&mut self) {
+        self.0.set_keyboard_visibility(false);
     }
 }
 
@@ -98,23 +128,35 @@ pub(crate) fn attach(s: &mut Spawner<'_, Keyboard>, me: Handle<Keyboard>) {
     });
 }
 
-/// The view changed from `old` outside a touch event (a focused field asked
-/// for another view): cancel any active contact against `old`.
-pub(crate) fn view_switched(ctx: &mut Context<'_, Keyboard>, old: usize) {
+/// The focused field changed or the keyboard hid: cancel any active contact
+/// against the current view (nothing is typed, its row closes, its hold and
+/// timers end). Call before switching the view.
+pub(crate) fn abort(ctx: &mut Context<'_, Keyboard>) {
     let me = ctx.me();
     let time = me
         .tracker
         .contact()
         .and_then(|c| me.touch.last_time.get(&c).copied())
         .unwrap_or(0);
-    settle(ctx, old, time);
+    flow::abort(&mut Kb(ctx), time);
+}
+
+/// The long-press timer fired: open the held key's choices row.
+pub(crate) fn long_pressed(ctx: &mut Context<'_, Keyboard>) {
+    let me = ctx.me();
+    let time = me
+        .tracker
+        .contact()
+        .and_then(|c| me.touch.last_time.get(&c).copied())
+        .unwrap_or(0);
+    flow::long_pressed(&mut Kb(ctx), time);
 }
 
 /// The prior over the next letter, the prediction strength and whether the
 /// pop-up is on, for the focused field and the word typed so far.
 fn predict(ctx: &Context<'_, Keyboard>) -> (LetterPrior, f32, bool) {
-    let (purpose, hint) = field_kind(ctx);
-    let (profile, predictor) = ctx.resource::<Prediction>().active(purpose, hint);
+    let field = Field::current(ctx);
+    let (profile, predictor) = ctx.resource::<Prediction>().active(field);
     let prior = predictor.prior(&ctx.resource::<TypingContext>().prefix());
     (prior, profile.strength, profile.popup)
 }
@@ -141,7 +183,7 @@ fn key_geoms(ctx: &mut Context<'_, Keyboard>) -> Vec<KeyGeom> {
 /// the active contact if acting switched the view.
 fn run(ctx: &mut Context<'_, Keyboard>, out: Vec<TouchOut>, time: u32) {
     let view = ctx.me().current_view;
-    apply(ctx, view, out);
+    apply(ctx, view, out, time);
     settle(ctx, view, time);
 }
 
@@ -151,7 +193,7 @@ fn settle(ctx: &mut Context<'_, Keyboard>, view: usize, time: u32) {
     let me = ctx.me();
     let now = me.current_view;
     let out = finish_stale(&mut me.tracker, view, now, time);
-    apply(ctx, view, out);
+    apply(ctx, view, out, time);
 }
 
 /// The outputs that end `tracker`'s active contact if its view `then` is no
@@ -164,17 +206,36 @@ fn finish_stale(tracker: &mut TouchTracker, then: usize, now: usize, time: u32) 
 }
 
 /// Act on the tracker's outputs, in order; indices refer to `view`.
-fn apply(ctx: &mut Context<'_, Keyboard>, view: usize, out: Vec<TouchOut>) {
+fn apply(ctx: &mut Context<'_, Keyboard>, view: usize, out: Vec<TouchOut>, time: u32) {
     for o in out {
         match o {
             TouchOut::Pressed(i) => {
                 feedbackd::key_pressed(ctx);
+                if let Some(KeyAction::Shift) = entry_action(ctx, view, i) {
+                    shift::pressed(ctx);
+                }
+                // Holding a key with choices opens them; sliding onto
+                // another key restarts the wait.
+                if ctx.me().keys[view]
+                    .get(i)
+                    .is_some_and(|k| !k.choices.is_empty())
+                {
+                    let id = ctx.me().long_press_timer;
+                    ctx.start_timer_for(id, LONG_PRESS);
+                }
                 feedback(ctx, view, i, |key| KeyFeedback::Pressed { key });
             }
-            TouchOut::Unpressed(i) => feedback(ctx, view, i, |key| KeyFeedback::Released { key }),
+            TouchOut::Unpressed(i) => {
+                if let Some(KeyAction::Shift) = entry_action(ctx, view, i) {
+                    shift::unpressed(ctx);
+                }
+                let id = ctx.me().long_press_timer;
+                ctx.cancel_timer(id);
+                feedback(ctx, view, i, |key| KeyFeedback::Released { key });
+            }
             TouchOut::Commit(i) => {
                 if let Some(action) = entry_action(ctx, view, i) {
-                    dispatch(ctx, &action);
+                    dispatch(ctx, &action, time);
                 }
             }
             TouchOut::Hold(i) => {
@@ -189,8 +250,66 @@ fn apply(ctx: &mut Context<'_, Keyboard>, view: usize, out: Vec<TouchOut>) {
                     ctx.resource_mut::<TypingContext>().backspace_held(held_ms);
                 }
             }
+            TouchOut::OpenChoices(i) => open_choices(ctx, view, i),
+            TouchOut::HighlightChoice(h) => {
+                let slot = ctx
+                    .me()
+                    .tracker
+                    .choices()
+                    .and_then(|row| h.map(|c| row.choice_at(c)));
+                show_choices(ctx, ChoicesFeedback::Highlight(slot));
+            }
+            TouchOut::CommitChoice { key, choice } => {
+                show_choices(ctx, ChoicesFeedback::Close);
+                let entry = ctx.me().keys[view].get(key);
+                let picked = entry.and_then(|k| Some((k.choices.get(choice)?.clone(), k.letter)));
+                if let Some((text, letter)) = picked {
+                    dispatch_choice(ctx, &text, letter, time);
+                }
+            }
+            TouchOut::CloseChoices => show_choices(ctx, ChoicesFeedback::Close),
         }
     }
+}
+
+/// Key `i` of `view` was long-pressed and the tracker opened its row: hide
+/// the key's pop-up and show the row, cased as shift will type it.
+fn open_choices(ctx: &mut Context<'_, Keyboard>, view: usize, i: usize) {
+    if let Some(node) = ctx.me().keys[view].get(i).map(|k| k.node.id()) {
+        let popup = ctx.me().popup.id();
+        ctx.emit(KeyFeedback::Released { key: node }, [popup]);
+    }
+    let Some(row) = ctx.me().tracker.choices().cloned() else {
+        return;
+    };
+    let Some(container) = ctx.component::<ComputedLayout>().map(|l| l.rect) else {
+        return;
+    };
+    let state = ctx.resource::<Shift>().state();
+    let cells = (0..row.choices.len())
+        .map(|slot| shift::cased_choice(&row.choices[row.choice_at(slot)], state))
+        .collect();
+    let rect = Rect::new(
+        row.rect.origin.x - container.origin.x,
+        row.rect.origin.y - container.origin.y,
+        row.rect.size.width,
+        row.rect.size.height,
+    );
+    let highlighted = row.highlighted.map(|c| row.choice_at(c));
+    show_choices(
+        ctx,
+        ChoicesFeedback::Open {
+            rect,
+            cells,
+            highlighted,
+        },
+    );
+}
+
+/// Tell the choices row widget.
+fn show_choices(ctx: &mut Context<'_, Keyboard>, e: ChoicesFeedback) {
+    let row = ctx.me().choices_row.id();
+    ctx.emit(e, [row]);
 }
 
 /// The action of key `i` in `view`, if it exists.
@@ -233,12 +352,40 @@ mod tests {
             Some(KeyRef {
                 index: 4,
                 repeats: false,
+                choices: false,
             }),
             0,
         );
         assert_eq!(finish_stale(&mut t, 0, 0, 10), vec![]);
         assert_eq!(finish_stale(&mut t, 0, 1, 10), vec![TouchOut::Unpressed(4)]);
         assert_eq!(t.release(A, 20), vec![]);
+    }
+
+    #[test]
+    fn view_change_closes_choices_and_types_nothing() {
+        let mut t = TouchTracker::default();
+        t.press(
+            A,
+            Some(KeyRef {
+                index: 2,
+                repeats: false,
+                choices: true,
+            }),
+            0,
+        );
+        let row = ChoicesRow::open(
+            Rect::new(0.0, 100.0, 40.0, 40.0),
+            Rect::new(0.0, 0.0, 400.0, 200.0),
+            4.0,
+            vec!["1".into()],
+        );
+        t.long_pressed(A, row);
+        assert_eq!(
+            finish_stale(&mut t, 0, 1, 400),
+            vec![TouchOut::CloseChoices, TouchOut::Unpressed(2)]
+        );
+        assert!(!t.choices_open());
+        assert_eq!(t.release(A, 450), vec![]);
     }
 
     #[test]
