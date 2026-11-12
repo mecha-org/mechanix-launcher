@@ -1,0 +1,4 @@
+# `cross build --release --target aarch64-unknown-linux-gnu` builds the
+# launcher for the Comet (aarch64 Fedora 44). See cross/aarch64.Dockerfile.
+[target.aarch64-unknown-linux-gnu]
+dockerfile = { file = "cross/aarch64.Dockerfile", context = "cross" }
