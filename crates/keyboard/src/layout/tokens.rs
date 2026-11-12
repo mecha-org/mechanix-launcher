@@ -2,8 +2,8 @@
 //! `layout.yaml` can refer to colours, shapes, spacing and fonts by token
 //! instead of hard-coded values.
 
-use mecha_wayland::prelude::{Atlas, ColorRole, FontId, Shape, Spacing};
 use assets::fonts::GEIST_MONO as GEIST_MONO_BYTES;
+use mecha_wayland::prelude::{Atlas, ColorRole, FontId, Shape, Spacing};
 
 /// The [`ColorRole`] for a kebab-case role name, or `None` if it isn't one.
 pub fn color_role(name: &str) -> Option<ColorRole> {
