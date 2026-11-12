@@ -96,7 +96,7 @@ impl Widget for ScreenSelector {
             let label = s.spawn(
                 cell,
                 text(screen.label())
-                    .variant(TextVariant::HeadlineSmall)
+                    .variant(TextVariant::LabelLarge)
                     .emphasised()
                     .style(LayoutStyle::default().shrink(0.0))
                     .color(label_color(on)),

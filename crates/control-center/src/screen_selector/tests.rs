@@ -112,6 +112,12 @@ impl Fixture {
     }
 }
 
+/// The tab row's height in a panel `panel_height` tall: the bar's percent
+/// share less the divider, but never less than the label.
+fn row_height(panel_height: f32, label_height: f32) -> f32 {
+    (panel_height * TAB_BAR_HEIGHT_PERCENT / 100.0 - DIVIDER).max(label_height)
+}
+
 // Layout snaps to pixels, so adjacent rounded edges can differ by one unit.
 fn close(actual: f32, expected: f32) {
     assert!(
@@ -147,7 +153,7 @@ fn full_labels_fit_and_spacers_shrink_then_recover_on_resize() {
             close(cell.x(), previous_right);
             assert!(cell.right() <= row.right());
             previous_right = cell.right();
-            close(cell.height(), 47.0);
+            close(cell.height(), row_height(347.0, label_rect.height()));
             close(label_rect.width(), natural_widths[index]);
             let themed = f.app.widget::<Text>(label).unwrap();
             assert_eq!(themed.variant, TextVariant::HeadlineSmall);
@@ -203,8 +209,8 @@ fn tabs_stay_flush_with_the_top_without_squeezing_content_on_resize() {
         .min_height = px(230.0);
     let label_heights = f.cells.map(|cell| f.rect(f.parts(cell)[1]).height());
 
-    // 47-unit tabs + 1-unit divider + at least 230-unit content + 4.47% handle strip.
-    for height in [400.0, 336.0, 326.0, 400.0] {
+    // Percent tabs + 1-unit divider + at least 230-unit content + 4.47% handle strip.
+    for height in [400.0, 336.0, 326.0, 620.0, 400.0] {
         *f.app.component_mut::<LayoutStyle>(f.window).unwrap() =
             LayoutStyle::default().size(px(308.0), px(height));
         f.settle();
@@ -213,8 +219,9 @@ fn tabs_stay_flush_with_the_top_without_squeezing_content_on_resize() {
         let divider_rect = f.rect(divider);
         close(row.y(), selector_rect.y());
         close(selector_rect.y(), f.rect(f.center.id()).y());
-        close(selector_rect.height(), 48.0);
-        close(row.height(), 47.0);
+        let expected = row_height(height, label_heights[0]);
+        close(row.height(), expected);
+        close(selector_rect.height(), expected + DIVIDER);
         close(divider_rect.y(), row.bottom());
         close(divider_rect.height(), 1.0);
         close(divider_rect.bottom(), selector_rect.bottom());
