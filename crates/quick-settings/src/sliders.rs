@@ -6,9 +6,9 @@ mod volume;
 use brightness::BrightnessSliderBuilder;
 use volume::VolumeSliderBuilder;
 
-const MIN_SLIDER_GAP: f32 = 10.0;
-const MAX_SLIDER_GAP: f32 = 40.0;
-const SLIDER_HEIGHT: f32 = 40.0;
+const MIN_SLIDER_GAP: f32 = 15.0;
+const MAX_SLIDER_GAP: f32 = 30.0;
+const SLIDER_HEIGHT: f32 = 32.0;
 
 /// single style, used for both volume and brightness sliders (and future
 //sliders)
@@ -188,8 +188,8 @@ mod tests {
     fn compact_sliders_keep_ten_units_between_controls() {
         let (section, volume, brightness) = slider_layout(90.0);
         assert_eq!(section.height(), 90.0);
-        assert_eq!(volume.height(), 40.0);
-        assert_eq!(brightness.height(), 40.0);
+        assert_eq!(volume.height(), SLIDER_HEIGHT);
+        assert_eq!(brightness.height(), SLIDER_HEIGHT);
         assert_eq!(
             brightness.origin.y - (volume.origin.y + volume.height()),
             10.0
@@ -200,7 +200,7 @@ mod tests {
 
     #[test]
     fn slider_gap_uses_the_height_between_compact_and_spacious() {
-        let (_, volume, brightness) = slider_layout(110.0);
+        let (_, volume, brightness) = slider_layout(2.0 * SLIDER_HEIGHT + 30.0);
         assert_eq!(
             brightness.origin.y - (volume.origin.y + volume.height()),
             30.0

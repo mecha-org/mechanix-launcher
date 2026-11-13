@@ -1,6 +1,6 @@
 use mecha_wayland::prelude::*;
 // TODO: need to refactor this file
-const ICON_SIZE: u32 = 32;
+const ICON_SIZE: u32 = 24;
 
 pub fn full_width(height: f32) -> LayoutStyle {
     LayoutStyle::default()

@@ -151,11 +151,11 @@ fn render(
     let mut ssid = String::new();
 
     // Connection state takes precedence over any cached SSID or strength.
-    let (sprite, on, connected) = match wifi.state {
-        WifiState::Unavailable | WifiState::Off => (sprites.wifi, false, false),
+    let (sprite, on, dot_on, connected) = match wifi.state {
+        WifiState::Unavailable | WifiState::Off => (sprites.wifi, false, false, false),
         // Enabled but not connected (On is the fallback before a device is known).
-        WifiState::On | WifiState::Disconnected => (sprites.wifi, true, false),
-        WifiState::Connecting | WifiState::Disconnecting => (sprites.connecting, true, false),
+        WifiState::On | WifiState::Disconnected => (sprites.wifi, true, false, false),
+        WifiState::Connecting | WifiState::Disconnecting => (sprites.connecting, true, true, false),
         WifiState::Connected => {
             // Only a connected AP supplies the visible SSID and signal icon.
             ssid = short_name(&wifi.ssid);
@@ -165,7 +165,7 @@ fn render(
                 50..75 => sprites.medium,
                 _ => sprites.high,
             };
-            (sprite, true, true)
+            (sprite, true, true, true)
         }
     };
 
@@ -176,8 +176,8 @@ fn render(
     };
     let tile = tile_quad(background, border_colour, wifi_borders);
     let icon_colour = if on { on_icon_colour } else { off_icon_colour };
-    let dot_paint = if on {
-        Paint::Quad(Quad::new(ctx.color(ColorRole::Primary)).radius(DOT_RADIUS))
+    let dot_paint = if dot_on {
+        Paint::Quad(Quad::new(ctx.color(ColorRole::Primary)).radius(DOT_RADIUS / 2.0))
     } else {
         Paint::None
     };

@@ -17,6 +17,8 @@ const ICON_SIZE: f32 = 24.0;
 const SLIDER_LENGTH_PERCENT: f32 = 80.0;
 
 const HIGH_LEVEL: u32 = 65; // after what value we use the high icon
+const MUTED_ACTIVE_TICK_COLOR: ColorRole = ColorRole::SecondaryFixedDim;
+const MUTED_INACTIVE_TICK_COLOR: ColorRole = ColorRole::SecondaryFixed;
 
 pub struct VolumeSlider;
 
@@ -97,6 +99,8 @@ impl Widget for VolumeSlider {
                 );
 
                 if let Some(mut slider) = ctx.at(slider_handle) {
+                    slider.set_active_color(muted.then_some(MUTED_ACTIVE_TICK_COLOR.into()));
+                    slider.set_inactive_color(muted.then_some(MUTED_INACTIVE_TICK_COLOR.into()));
                     slider.set_value(volume_percent.min(100) as f32);
                 };
 

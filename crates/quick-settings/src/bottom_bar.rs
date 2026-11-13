@@ -7,7 +7,7 @@ use crate::tiles::{
 
 const BOTTOM_BAR_HEIGHT: f32 = MAX_TILE_HEIGHT * 2.0;
 // In portrait, leave room in the body for the sliders as the panel gets shorter.
-const PORTRAIT_BODY_PERCENT: f32 = 60.0;
+const PORTRAIT_BODY_PERCENT: f32 = 55.0;
 
 pub struct BottomBar;
 
@@ -67,13 +67,11 @@ impl Widget for BottomBar {
                 borders: borders::ALL,
             },
         );
-        s.spawn(top, action_tile(svg::TERMINAL, borders::ALL));
-        s.spawn(top, action_tile(svg::MICROPHONE, borders::NO_RIGHT));
+        s.spawn(top, action_tile(svg::TERMINAL, borders::NO_RIGHT));
 
         let bottom = s.spawn(me, div().style(row));
         s.spawn(bottom, action_tile(svg::RECORD, borders::NO_LEFT));
         s.spawn(bottom, action_tile(svg::SETTINGS, borders::ALL));
-        s.spawn(bottom, action_tile(svg::CAMERA, borders::ALL));
         s.spawn(bottom, action_tile(svg::ROTATE, borders::ALL));
         s.spawn(
             bottom,
@@ -109,7 +107,7 @@ mod tests {
         let size = |height| LayoutStyle::default().size(px(308.0), px(height));
         let window = app.spawn(app.root(), window().layout(size(878.0)));
         let bar = app.spawn(window, BottomBarBuilder);
-        for (parent_height, expected_height) in [(878.0, 212.0), (150.0, 90.0)] {
+        for (parent_height, expected_height) in [(878.0, BOTTOM_BAR_HEIGHT), (150.0, 90.0)] {
             *app.component_mut::<LayoutStyle>(window).unwrap() = size(parent_height);
             app.tick();
 
@@ -176,7 +174,7 @@ mod tests {
     }
 
     #[test]
-    fn battery_service_updates_bottom_bar_label() {
+    fn battery_service_updates_bottom_bar_label_and_icon_colour() {
         let mut app = App::new();
         app.add_module(LayoutModule)
             .add_module(PaintModule)
@@ -188,16 +186,36 @@ mod tests {
         app.spawn(app.root(), BottomBarBuilder);
         app.tick();
 
-        let (_, battery) = app.widgets::<Battery>().next().unwrap();
+        let (battery_id, battery) = app.widgets::<Battery>().next().unwrap();
         let percentage = battery.percentage;
-        for (value, label) in [(Some(42), "42%"), (None, "N/A")] {
+        let icon = battery.icon;
+        let spacer = app.children(battery_id).unwrap()[1];
+        let assert_state = |app: &App, label: &str, display, colour| {
+            let native = app.widget::<Text>(percentage).unwrap().native();
+            assert_eq!(app.widget::<NativeText>(native).unwrap().string, label);
+            for id in [percentage.id(), spacer] {
+                assert_eq!(app.component::<LayoutStyle>(id).unwrap().display, display);
+            }
+            assert_eq!(app.widget::<Icon>(icon).unwrap().color(), app.color(colour));
+        };
+        assert_state(
+            &app,
+            "",
+            Display::Hidden,
+            ColorRole::OnSecondaryFixedVariant,
+        );
+        for (value, label) in [(Some(42), "42%"), (None, ""), (Some(0), "0%"), (None, "")] {
             app.emit(
                 BatteryPercentageChanged { percentage: value },
                 app.descendants(app.root()).collect::<Vec<_>>(),
             );
             app.tick();
-            let native = app.widget::<Text>(percentage).unwrap().native();
-            assert_eq!(app.widget::<NativeText>(native).unwrap().string, label);
+            let (display, colour) = if value.is_some() {
+                (Display::Flex, ColorRole::OnSurface)
+            } else {
+                (Display::Hidden, ColorRole::OnSecondaryFixedVariant)
+            };
+            assert_state(&app, label, display, colour);
         }
     }
 
@@ -218,8 +236,8 @@ mod tests {
         let text_handle = bluetooth.name;
         let dot_handle = bluetooth.dot;
 
-        for (state, label, is_on) in [
-            (BluetoothState::On, None, true),
+        for (state, label, has_dot) in [
+            (BluetoothState::On, None, false),
             (
                 BluetoothState::Connected {
                     count: 1,
@@ -264,7 +282,7 @@ mod tests {
                 None => assert_eq!(display, Display::Hidden),
             }
             let dot_paint = app.component::<Paint>(dot_handle.id()).unwrap();
-            if is_on {
+            if has_dot {
                 assert!(matches!(dot_paint, Paint::Quad(_)));
             } else {
                 assert_eq!(dot_paint, &Paint::None);

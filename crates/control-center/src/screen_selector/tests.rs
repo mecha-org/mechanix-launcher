@@ -29,7 +29,7 @@ impl Fixture {
             },
         );
         let selector = app.children(center).unwrap()[0];
-        let row = app.children(selector).unwrap()[1];
+        let row = app.children(selector).unwrap()[0];
         let cells = app.children(row).unwrap().try_into().unwrap();
         let mut fixture = Self {
             app,
@@ -112,6 +112,12 @@ impl Fixture {
     }
 }
 
+/// The tab row's height in a panel `panel_height` tall: the bar's percent
+/// share less the divider, but never less than the label.
+fn row_height(panel_height: f32, label_height: f32) -> f32 {
+    (panel_height * TAB_BAR_HEIGHT_PERCENT / 100.0 - DIVIDER).max(label_height)
+}
+
 // Layout snaps to pixels, so adjacent rounded edges can differ by one unit.
 fn close(actual: f32, expected: f32) {
     assert!(
@@ -147,7 +153,7 @@ fn full_labels_fit_and_spacers_shrink_then_recover_on_resize() {
             close(cell.x(), previous_right);
             assert!(cell.right() <= row.right());
             previous_right = cell.right();
-            close(cell.height(), 47.0);
+            close(cell.height(), row_height(347.0, label_rect.height()));
             close(label_rect.width(), natural_widths[index]);
             let themed = f.app.widget::<Text>(label).unwrap();
             assert_eq!(themed.variant, TextVariant::HeadlineSmall);
@@ -190,11 +196,10 @@ fn full_labels_fit_and_spacers_shrink_then_recover_on_resize() {
 }
 
 #[test]
-fn top_spacing_yields_to_content_and_recovers_without_squeezing_tabs() {
+fn tabs_stay_flush_with_the_top_without_squeezing_content_on_resize() {
     let mut f = Fixture::new(AppScreen::NotificationsScreen);
     let selector = f.app.children(f.center).unwrap()[0];
-    let spacer = f.app.children(selector).unwrap()[0];
-    let divider = f.app.children(selector).unwrap()[2];
+    let divider = f.app.children(selector).unwrap()[1];
     let content = f.app.widget::<ControlCenter>(f.center).unwrap().containers[0].1;
     // Reserve a realistic content height to put pressure on the selector through
     // its parent, rather than imposing a smaller selector height directly.
@@ -204,25 +209,26 @@ fn top_spacing_yields_to_content_and_recovers_without_squeezing_tabs() {
         .min_height = px(230.0);
     let label_heights = f.cells.map(|cell| f.rect(f.parts(cell)[1]).height());
 
-    // 47-unit tabs + 1-unit divider + 230-unit content + 48-unit drag handle.
-    for (height, gap) in [(400.0, 20.0), (336.0, 10.0), (326.0, 0.0), (400.0, 20.0)] {
+    // Percent tabs + 1-unit divider + at least 230-unit content + 4.47% handle strip.
+    for height in [400.0, 336.0, 326.0, 620.0, 400.0] {
         *f.app.component_mut::<LayoutStyle>(f.window).unwrap() =
             LayoutStyle::default().size(px(308.0), px(height));
         f.settle();
         let selector_rect = f.rect(selector);
-        let spacer_rect = f.rect(spacer);
         let row = f.rect(f.row);
         let divider_rect = f.rect(divider);
-        close(spacer_rect.height(), gap);
-        close(spacer_rect.y(), selector_rect.y());
-        close(row.y(), spacer_rect.bottom());
-        close(row.height(), 47.0);
+        close(row.y(), selector_rect.y());
+        close(selector_rect.y(), f.rect(f.center.id()).y());
+        let expected = row_height(height, label_heights[0]);
+        close(row.height(), expected);
+        close(selector_rect.height(), expected + DIVIDER);
         close(divider_rect.y(), row.bottom());
         close(divider_rect.height(), 1.0);
         close(divider_rect.bottom(), selector_rect.bottom());
         close(f.rect(content.id()).y(), selector_rect.bottom());
         assert!(f.rect(content.id()).height() >= 230.0);
         let handle = *f.app.children(f.center).unwrap().last().unwrap();
+        close(f.rect(handle).height(), height * 0.0447);
         close(f.rect(handle).bottom(), height);
         for (cell, expected_height) in f.cells.into_iter().zip(label_heights) {
             close(f.rect(f.parts(cell)[1]).height(), expected_height);
