@@ -296,19 +296,19 @@ fn main() {
         .add_module(QuickSettingsModule)
         .add_module(PowerMenuModule)
         .add_module(SessionModule)
-        .add_module(KeepAwakeModule);
-    // Last, so its lock windows stack above everything else's.
-    /*.add_module(LockscreenModule {
-        settings: LockSettings {
-            // Until the configuration has it: `MECHANIX_SUSPEND=1` for a
-            // device that resumes.
-            suspend: std::env::var("MECHANIX_SUSPEND").is_ok_and(|v| v == "1"),
-            ..LockSettings::default()
-        },
-    })*/
-    /*.add_module(IdleModule {
-        settings: IdleSettings::default(),
-    });*/
+        .add_module(KeepAwakeModule)
+        // Last, so its lock windows stack above everything else's.
+        .add_module(LockscreenModule {
+            settings: LockSettings {
+                // Until the configuration has it: `MECHANIX_SUSPEND=1` for a
+                // device that resumes.
+                suspend: std::env::var("MECHANIX_SUSPEND").is_ok_and(|v| v == "1"),
+                ..LockSettings::default()
+            },
+        })
+        .add_module(IdleModule {
+            settings: IdleSettings::default(),
+        });
 
     // Home starts open.
     app.insert_resource(OpenCovers(vec![HOME_ID]));
