@@ -30,17 +30,19 @@ impl Widget for CardIcon {
     type Builder = CardIconBuilder;
 
     fn build(b: CardIconBuilder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
-        *s.component_mut::<LayoutStyle>(me).unwrap() = square();
+        *s.component_mut::<LayoutStyle>(me).unwrap() = square().relative();
+
+        let holder = s.spawn(me, div().style(square()));
 
         let sprite = b
             .image
             .and_then(|img| load(&mut s.resource_mut::<Atlas>(), &img));
         // TODO: app glyph from `desktop-entry`, centred in the tile.
         let slot = match sprite {
-            Some(sprite) => s.spawn(me, image(sprite).style(square())).id(),
+            Some(sprite) => s.spawn(holder, image(sprite).style(square())).id(),
             None => {
                 let tile = s.color(color::ICON_TILE);
-                s.spawn(me, div().background(tile).style(square())).id()
+                s.spawn(holder, div().background(tile).style(square())).id()
             }
         };
 
@@ -51,10 +53,11 @@ impl Widget for CardIcon {
             let old = ctx.me().slot;
             ctx.remove(old);
             let slot = match sprite {
-                Some(sprite) => ctx.spawn(me, image(sprite).style(square())).id(),
+                Some(sprite) => ctx.spawn(holder, image(sprite).style(square())).id(),
                 None => {
                     let tile = ctx.color(color::ICON_TILE);
-                    ctx.spawn(me, div().background(tile).style(square())).id()
+                    ctx.spawn(holder, div().background(tile).style(square()))
+                        .id()
                 }
             };
             ctx.me().slot = slot;
