@@ -40,6 +40,7 @@ outlines:
     wide:        { width: 15 }
     space:       { width: 40 }
     space_short: { width: 30 }
+    space_emoji: { width: 50 }
     strip:       { width: 12.5 }
 
 # AOSP LatinIME English pages in the Mecha theme (see NOTICE-aosp.txt).
@@ -72,6 +73,17 @@ views:
             - "[5] £ ¢ € ¥ ^ ° = { } [5]"
             - "to_symbols \\ © ® ™ § [ ] BackSpace"
             - "to_letters comma < space_short > . Return"
+    # Any key here without a button entry is an emoji, drawn in colour from
+    # Noto Color Emoji. Single codepoints only for now (a trailing VS16 is
+    # fine); ZWJ sequences, flags and skin tones need shaping.
+    emoji:
+        family: text
+        page: emoji
+        rows:
+            - "😂 ❤️ 😍 🤣 😊 🙏 💕 😭 😘 👍"
+            - "😅 👏 😁 🔥 🥰 💔 💖 😢 🤔 😆"
+            - "[5] 🙄 💪 😉 👌 🤗 😎 ✨ 🎉 BackSpace"
+            - "to_letters comma space_emoji period Return"
     email:
         family: email
         more_keys: letters
@@ -185,13 +197,16 @@ buttons:
         key_style: function
         action: { page: letters }
         label: "123"
-    # No emoji page until Part 2: tapping logs "no view for page".
     emoji:
         key_style: emoji
         action: { page: emoji }
         icon: face-smile-symbolic
     space:
         outline: space
+        label: " "
+        text: " "
+    space_emoji:
+        outline: space_emoji
         label: " "
         text: " "
     space_short:

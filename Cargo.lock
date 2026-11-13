@@ -483,6 +483,7 @@ dependencies = [
  "serde",
  "tracing",
  "tracing-subscriber",
+ "ttf-parser",
  "xkbcommon",
  "yaml_serde",
 ]

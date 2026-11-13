@@ -5,6 +5,7 @@
 
 use mecha_wayland::prelude::*;
 
+use crate::layout::emoji::Emoji;
 use crate::layout::icons::Icons;
 use crate::layout::style::{KeyLook, KeyState};
 use crate::layout::{KeyAction, KeyFace};
@@ -66,6 +67,8 @@ pub(crate) fn key_roles(look: KeyLook, kind: KeyKind, state: KeyState) -> (Color
 pub(crate) enum Label {
     Text(Handle<Text>),
     Icon(Handle<Icon>),
+    /// A colour emoji: keeps its own colours whatever the key state.
+    Image,
 }
 
 /// Recolour a key's label, whichever kind it is.
@@ -73,6 +76,7 @@ pub(crate) fn set_label_color<W: Widget>(ctx: &mut Context<'_, W>, label: Label,
     match label {
         Label::Text(h) => ctx.at(h).unwrap().set_color(fg),
         Label::Icon(h) => ctx.at(h).unwrap().set_color(fg),
+        Label::Image => {}
     }
 }
 
@@ -138,6 +142,14 @@ impl Widget for Key {
             KeyFace::Text(t) => {
                 Label::Text(s.spawn(me, text(b.font, t).color(fg).size(b.font_size)))
             }
+            KeyFace::Emoji(e) => match s.resource::<Emoji>().get(e) {
+                Some(e) => {
+                    let style = LayoutStyle::default().size(px(e.width), px(e.height));
+                    s.spawn(me, image(e.sprite).style(style));
+                    Label::Image
+                }
+                None => Label::Text(s.spawn(me, text(b.font, "").color(fg).size(b.font_size))),
+            },
         };
 
         // Corner hint: top-right, half the label size, not on icon keys.

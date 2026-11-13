@@ -3,6 +3,8 @@
 use mecha_wayland::prelude::*;
 
 use crate::layout;
+use crate::layout::KeyFace;
+use crate::layout::emoji::Emoji;
 use crate::layout::icons::Icons;
 use crate::layout::tokens::Fonts;
 use crate::modifiers::latch::LatchedState;
@@ -13,6 +15,9 @@ use crate::scale::{KeyboardGeometry, on_resized};
 use crate::view::on_text_input_focused;
 use crate::widget::surface::{InputRegion, KeyboardUI, KeyboardUIBuilder, ensure_input_region};
 use crate::zone::ExclusiveZone;
+
+/// Emoji draw this many times the keyboard's font size.
+const EMOJI_SCALE: f32 = 1.4;
 
 /// Installs the on-screen keyboard: binds `zwp_virtual_keyboard_v1` and
 /// `zwp_input_method_v2`, loads the keymap, fonts and icons, and spawns the
@@ -76,6 +81,19 @@ pub fn spawn_ui(app: &mut App, bottom_gap: f32) {
         keymap.keyboard.font_size as u32,
     );
     app.insert_resource(icons);
+    let emoji = Emoji::load(
+        &mut app.resource_mut::<Atlas>(),
+        keymap
+            .views
+            .iter()
+            .flat_map(|v| v.keys())
+            .filter_map(|k| match &k.face {
+                KeyFace::Emoji(e) => Some(e.as_str()),
+                _ => None,
+            }),
+        (f32::from(keymap.keyboard.font_size) * EMOJI_SCALE).round() as u32,
+    );
+    app.insert_resource(emoji);
 
     let root = app.root();
     let ui = app

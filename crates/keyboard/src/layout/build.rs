@@ -112,7 +112,7 @@ impl View {
             None => Page::from_name(name).unwrap_or(Page::Letters),
         };
 
-        let out_rows = expand_rows(layout, name, &mut Vec::new())
+        let mut out_rows: Vec<Row> = expand_rows(layout, name, &mut Vec::new())
             .into_iter()
             .map(|row| {
                 let cells = row
@@ -129,6 +129,17 @@ impl View {
                 }
             })
             .collect();
+
+        // On the emoji page every key without a button entry is an emoji:
+        // drawn in colour from the emoji font and typed as its text.
+        if page == Page::Emoji {
+            for key in out_rows.iter_mut().flat_map(Row::keys_mut) {
+                if !layout.buttons.contains_key(&key.token) {
+                    key.face = KeyFace::Emoji(key.token.clone());
+                    key.action = KeyAction::EmitText(key.token.clone());
+                }
+            }
+        }
 
         let mut view = View {
             name: name.to_string(),

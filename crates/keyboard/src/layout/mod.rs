@@ -4,6 +4,7 @@
 //! [`Key`]s, and the long-press choices from `more_keys.yaml`.
 
 mod build;
+pub(crate) mod emoji;
 pub(crate) mod icons;
 mod keymap;
 mod more_keys;
