@@ -32,6 +32,9 @@ key_styles:
     done:     { background: on-secondary-container,    foreground: on-primary-container, font-size: 18 }
     latched:  { background: primary,                   foreground: on-primary }
     emoji:    { background: surface-container-highest, foreground: primary }
+    emoji_tab: { background: surface-container-highest, foreground: on-surface }
+    # A tab key for the view being shown.
+    current:  { background: secondary-container,       foreground: on-secondary-container }
 
 # Widths are flex weights within a row. AOSP's: a letter key is 10 % of the row;
 # shift, backspace, ?123/ABC and enter are 15 %; space fills the rest.
@@ -40,7 +43,6 @@ outlines:
     wide:        { width: 15 }
     space:       { width: 40 }
     space_short: { width: 30 }
-    space_emoji: { width: 50 }
     strip:       { width: 12.5 }
 
 # AOSP LatinIME English pages in the Mecha theme (see NOTICE-aosp.txt).
@@ -73,17 +75,92 @@ views:
             - "[5] £ ¢ € ¥ ^ ° = { } [5]"
             - "to_symbols \\ © ® ™ § [ ] BackSpace"
             - "to_letters comma < space_short > . Return"
-    # Any key here without a button entry is an emoji, drawn in colour from
-    # Noto Color Emoji. Single codepoints only for now (a trailing VS16 is
-    # fine); ZWJ sequences, flags and skin tones need shaping.
+    # Emoji pages, one per category, all `page: emoji`. Any key here without
+    # a button entry is an emoji drawn in colour from Noto Color Emoji and
+    # typed as its text; sequences (keycaps, flags, skin tones, ZWJ) work
+    # when the font ligates them. The bottom row is the category tabs; the
+    # tab for the shown page uses the `current` key style.
+    # Smileys and faces. `emoji` is the page the emoji key opens.
     emoji:
         family: text
         page: emoji
         rows:
-            - "😂 ❤️ 😍 🤣 😊 🙏 💕 😭 😘 👍"
-            - "😅 👏 😁 🔥 🥰 💔 💖 😢 🤔 😆"
-            - "[5] 🙄 💪 😉 👌 🤗 😎 ✨ 🎉 BackSpace"
-            - "to_letters comma space_emoji period Return"
+            - "😀 😃 😄 😁 😆 😅 🤣 😂 🙂 🙃"
+            - "😉 😊 😇 🥰 😍 🤩 😘 😋 😜 🤪"
+            - "[5] 🤔 😎 🥳 😏 😢 😭 😡 😱 BackSpace"
+            - "to_letters tab_faces tab_people tab_hearts tab_animals tab_food tab_activities tab_travel tab_objects tab_symbols"
+    # Hands and people.
+    emoji_people:
+        family: text
+        page: emoji
+        rows:
+            - "👍 👎 👌 ✌️ 🤞 🤟 🤘 🤙 👈 👉"
+            - "👆 👇 ☝️ 👋 🤚 ✋ 🖐️ 👏 🙌 🙏"
+            - "[5] 🤝 💪 ✍️ 💅 🤳 👀 🧠 👶 BackSpace"
+            - "to_letters tab_faces tab_people tab_hearts tab_animals tab_food tab_activities tab_travel tab_objects tab_symbols"
+    # Hearts and feelings.
+    emoji_hearts:
+        family: text
+        page: emoji
+        rows:
+            - "❤️ 🧡 💛 💚 💙 💜 🖤 🤍 🤎 💔"
+            - "💕 💞 💓 💗 💖 💘 💝 💟 ❣️ 💯"
+            - "[5] 💢 💥 💫 💦 💨 💬 💭 💤 BackSpace"
+            - "to_letters tab_faces tab_people tab_hearts tab_animals tab_food tab_activities tab_travel tab_objects tab_symbols"
+    # Animals and nature.
+    emoji_animals:
+        family: text
+        page: emoji
+        rows:
+            - "🐶 🐱 🐭 🐹 🐰 🦊 🐻 🐼 🐨 🐯"
+            - "🦁 🐮 🐷 🐸 🐵 🐔 🐧 🐦 🦄 🐝"
+            - "[5] 🌸 🌹 🌻 🌲 🌵 🍀 🍁 🌈 BackSpace"
+            - "to_letters tab_faces tab_people tab_hearts tab_animals tab_food tab_activities tab_travel tab_objects tab_symbols"
+    # Food and drink.
+    emoji_food:
+        family: text
+        page: emoji
+        rows:
+            - "🍎 🍊 🍋 🍌 🍉 🍇 🍓 🍒 🍑 🥭"
+            - "🍍 🥥 🥑 🍅 🥕 🌽 🍞 🧀 🍔 🍟"
+            - "[5] 🍕 🌭 🌮 🍣 🍩 🍪 🎂 ☕ BackSpace"
+            - "to_letters tab_faces tab_people tab_hearts tab_animals tab_food tab_activities tab_travel tab_objects tab_symbols"
+    # Sports, games and music.
+    emoji_activities:
+        family: text
+        page: emoji
+        rows:
+            - "⚽ 🏀 🏈 ⚾ 🎾 🏐 🏉 🎱 🏓 🏸"
+            - "🥊 ⛳ 🎣 🎿 🏆 🥇 🎮 🎲 🎯 🎳"
+            - "[5] 🎸 🎹 🎺 🎻 🥁 🎤 🎧 🎨 BackSpace"
+            - "to_letters tab_faces tab_people tab_hearts tab_animals tab_food tab_activities tab_travel tab_objects tab_symbols"
+    # Travel and places.
+    emoji_travel:
+        family: text
+        page: emoji
+        rows:
+            - "🚗 🚕 🚙 🚌 🚎 🏎️ 🚓 🚑 🚒 🚐"
+            - "🚲 🛵 🏍️ ✈️ 🚀 🚁 ⛵ 🚢 🚂 🚇"
+            - "[5] 🏠 🏢 🏰 🗽 🌍 🌙 ⭐ ☀️ BackSpace"
+            - "to_letters tab_faces tab_people tab_hearts tab_animals tab_food tab_activities tab_travel tab_objects tab_symbols"
+    # Objects.
+    emoji_objects:
+        family: text
+        page: emoji
+        rows:
+            - "⌚ 📱 💻 ⌨️ 🖥️ 🖨️ 🖱️ 💾 💿 📷"
+            - "📺 📻 ⏰ 💡 🔦 🕯️ 💰 💳 💎 🔧"
+            - "[5] 🔨 🔑 🔒 📦 ✏️ 📌 📎 ✂️ BackSpace"
+            - "to_letters tab_faces tab_people tab_hearts tab_animals tab_food tab_activities tab_travel tab_objects tab_symbols"
+    # Numbers and symbols.
+    emoji_symbols:
+        family: text
+        page: emoji
+        rows:
+            - "0️⃣ 1️⃣ 2️⃣ 3️⃣ 4️⃣ 5️⃣ 6️⃣ 7️⃣ 8️⃣ 9️⃣"
+            - "🔟 #️⃣ *️⃣ ➕ ➖ ✖️ ➗ ❓ ❗ 💯"
+            - "[5] ✅ ❌ ⭕ 🔴 🟢 🔵 ⚠️ ♻️ BackSpace"
+            - "to_letters tab_faces tab_people tab_hearts tab_animals tab_food tab_activities tab_travel tab_objects tab_symbols"
     email:
         family: email
         more_keys: letters
@@ -201,12 +278,45 @@ buttons:
         key_style: emoji
         action: { page: emoji }
         icon: face-smile-symbolic
+    # Emoji category tabs.
+    tab_faces:
+        key_style: emoji_tab
+        action: { set_view: emoji }
+        emoji: "😀"
+    tab_people:
+        key_style: emoji_tab
+        action: { set_view: emoji_people }
+        emoji: "👋"
+    tab_hearts:
+        key_style: emoji_tab
+        action: { set_view: emoji_hearts }
+        emoji: "❤️"
+    tab_animals:
+        key_style: emoji_tab
+        action: { set_view: emoji_animals }
+        emoji: "🐶"
+    tab_food:
+        key_style: emoji_tab
+        action: { set_view: emoji_food }
+        emoji: "🍔"
+    tab_activities:
+        key_style: emoji_tab
+        action: { set_view: emoji_activities }
+        emoji: "⚽"
+    tab_travel:
+        key_style: emoji_tab
+        action: { set_view: emoji_travel }
+        emoji: "🚗"
+    tab_objects:
+        key_style: emoji_tab
+        action: { set_view: emoji_objects }
+        emoji: "💡"
+    tab_symbols:
+        key_style: emoji_tab
+        action: { set_view: emoji_symbols }
+        emoji: "🔣"
     space:
         outline: space
-        label: " "
-        text: " "
-    space_emoji:
-        outline: space_emoji
         label: " "
         text: " "
     space_short:

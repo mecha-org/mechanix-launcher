@@ -17,7 +17,7 @@ use crate::widget::surface::{InputRegion, KeyboardUI, KeyboardUIBuilder, ensure_
 use crate::zone::ExclusiveZone;
 
 /// Emoji draw this many times the keyboard's font size.
-const EMOJI_SCALE: f32 = 1.4;
+const EMOJI_SCALE: f32 = 1.2;
 
 /// Installs the on-screen keyboard: binds `zwp_virtual_keyboard_v1` and
 /// `zwp_input_method_v2`, loads the keymap, fonts and icons, and spawns the

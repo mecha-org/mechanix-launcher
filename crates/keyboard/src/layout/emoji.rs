@@ -7,11 +7,14 @@
 //! are shared by thousands (one is 14 MB). A glyph is a `<g id="glyphN">` of
 //! `<path>`s and `<use>`s referring by id to top-level children of the one
 //! `<defs>`. Cutting one out keeps that `<g>` and only the defs it reaches.
+//! A sequence (keycap, flag, skin tone, ZWJ) is found through its GSUB
+//! ligature.
 
 use mecha_wayland::prelude::{Atlas, Resource, SpriteId};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use tracing::warn;
+use ttf_parser::gsub::SubstitutionSubtable;
 use ttf_parser::{Face, GlyphId};
 
 static NOTO_COLOR_EMOJI: &[u8] = include_bytes!("../../resources/fonts/NotoColorEmoji-Regular.ttf");
@@ -77,31 +80,79 @@ impl Emoji {
     }
 }
 
-/// The parsed font, with each shared SVG document's defs indexed once.
+/// One SVG document's top-level elements: `<defs>` children by id, and
+/// glyph `<g>`s by glyph id.
+#[derive(Default)]
+struct DocIndex {
+    defs: HashMap<&'static str, &'static str>,
+    glyphs: HashMap<u16, &'static str>,
+}
+
+/// The parsed font, with each shared SVG document indexed once.
 struct EmojiFont {
     face: Face<'static>,
-    /// Per SVG document (keyed by its start address): `<defs>` child by id.
-    defs: HashMap<usize, HashMap<&'static str, &'static str>>,
+    /// Per SVG document, keyed by its start address.
+    docs: HashMap<usize, DocIndex>,
 }
 
 impl EmojiFont {
     fn new() -> Self {
         Self {
             face: Face::parse(NOTO_COLOR_EMOJI, 0).expect("bundled Noto Color Emoji parses"),
-            defs: HashMap::new(),
+            docs: HashMap::new(),
         }
     }
 
-    /// A standalone SVG for a single-codepoint emoji (a trailing VS16
-    /// allowed). Sequences (ZWJ families, flags, skin tones) need GSUB
-    /// shaping and aren't supported yet: `None`.
+    /// A standalone SVG for `emoji`: one codepoint, or a sequence (keycap,
+    /// flag, skin tone, ZWJ) the font ligates to a single glyph.
     fn svg(&mut self, emoji: &str) -> Option<String> {
-        let mut chars = emoji.chars().filter(|&c| c != VS16);
-        let (Some(ch), None) = (chars.next(), chars.next()) else {
-            return None;
-        };
-        let glyph = self.face.glyph_index(ch)?;
+        let glyph = self.glyph(emoji)?;
         self.glyph_svg(glyph)
+    }
+
+    /// The one glyph `emoji` draws as. A VS16 only selects presentation, so
+    /// it is tried with and then without; the whole sequence must ligate.
+    fn glyph(&self, emoji: &str) -> Option<GlyphId> {
+        let all: Option<Vec<GlyphId>> = emoji.chars().map(|c| self.face.glyph_index(c)).collect();
+        let bare: Option<Vec<GlyphId>> = emoji
+            .chars()
+            .filter(|&c| c != VS16)
+            .map(|c| self.face.glyph_index(c))
+            .collect();
+        [all, bare]
+            .into_iter()
+            .flatten()
+            .find_map(|glyphs| match glyphs[..] {
+                [] => None,
+                [glyph] => Some(glyph),
+                _ => self.ligature(&glyphs),
+            })
+    }
+
+    /// The glyph a GSUB ligature substitutes for exactly `glyphs`.
+    fn ligature(&self, glyphs: &[GlyphId]) -> Option<GlyphId> {
+        let (first, rest) = glyphs.split_first()?;
+        let gsub = self.face.tables().gsub?;
+        for lookup in gsub.lookups {
+            for i in 0..lookup.subtables.len() {
+                let Some(SubstitutionSubtable::Ligature(lig)) = lookup.subtables.get(i) else {
+                    continue;
+                };
+                let Some(set) = lig
+                    .coverage
+                    .get(*first)
+                    .and_then(|i| lig.ligature_sets.get(i))
+                else {
+                    continue;
+                };
+                for l in set {
+                    if l.components.into_iter().eq(rest.iter().copied()) {
+                        return Some(l.glyph);
+                    }
+                }
+            }
+        }
+        None
     }
 
     fn glyph_svg(&mut self, glyph: GlyphId) -> Option<String> {
@@ -111,11 +162,12 @@ impl EmojiFont {
             return None;
         }
         let doc: &'static str = std::str::from_utf8(doc).ok()?;
-        let defs = self
-            .defs
+        let index = self
+            .docs
             .entry(doc.as_ptr() as usize)
-            .or_insert_with(|| index_defs(doc));
-        let body = element(doc, &format!("<g id=\"glyph{}\"", glyph.0))?;
+            .or_insert_with(|| index_doc(doc));
+        let defs = &index.defs;
+        let body = *index.glyphs.get(&glyph.0)?;
 
         // Every def the glyph reaches, in document order.
         let mut seen = HashSet::new();
@@ -145,30 +197,42 @@ impl EmojiFont {
     }
 }
 
-/// The top-level children of `doc`'s `<defs>`, by `id`.
-fn index_defs(doc: &str) -> HashMap<&str, &str> {
-    let mut out = HashMap::new();
-    let Some(start) = doc.find("<defs>") else {
-        return out;
+/// Index `doc` in one pass: the children of its `<defs>`, then the glyphs
+/// after it, both top-level and each read whole.
+fn index_doc(doc: &'static str) -> DocIndex {
+    let mut index = DocIndex::default();
+    let Some(open) = doc.find('>') else {
+        return index;
     };
-    let mut rest = &doc[start + "<defs>".len()..];
+    // Past the `<svg …>` start tag.
+    let mut rest = &doc[open + 1..];
+    let mut in_defs = false;
     while let Some(lt) = rest.find('<') {
         rest = &rest[lt..];
+        if rest.starts_with("<defs>") {
+            in_defs = true;
+            rest = &rest["<defs>".len()..];
+            continue;
+        }
         if rest.starts_with("</defs>") {
+            in_defs = false;
+            rest = &rest["</defs>".len()..];
+            continue;
+        }
+        if rest.starts_with("</") {
             break;
         }
         let Some(el) = element_at(rest) else { break };
         if let Some(id) = attr(el, "id") {
-            out.insert(id, el);
+            if in_defs {
+                index.defs.insert(id, el);
+            } else if let Some(gid) = id.strip_prefix("glyph").and_then(|n| n.parse().ok()) {
+                index.glyphs.insert(gid, el);
+            }
         }
         rest = &rest[el.len()..];
     }
-    out
-}
-
-/// The whole element in `doc` whose start tag begins with `open`.
-fn element<'a>(doc: &'a str, open: &str) -> Option<&'a str> {
-    element_at(&doc[doc.find(open)?..])
+    index
 }
 
 /// The element `s` starts with: self-closing, or up to its matching end tag.
@@ -246,8 +310,8 @@ mod tests {
     #[test]
     fn element_matches_nested_tags() {
         let doc = r#"<g id="a"><g x="1"><path/></g><g/></g><g id="b"/>"#;
-        assert_eq!(element(doc, "<g id=\"a\""), Some(&doc[..38]));
-        assert_eq!(element(doc, "<g id=\"b\""), Some("<g id=\"b\"/>"));
+        assert_eq!(element_at(doc), Some(&doc[..38]));
+        assert_eq!(element_at(&doc[38..]), Some("<g id=\"b\"/>"));
     }
 
     #[test]
@@ -262,7 +326,15 @@ mod tests {
         assert!(can_draw("🔥"), "from its own document");
         assert!(can_draw("❤️"), "a trailing VS16 is fine");
         assert!(!can_draw("a"), "letters have no colour glyph");
-        assert!(!can_draw("👍🏽"), "skin-tone sequences aren't supported yet");
+    }
+
+    #[test]
+    fn sequences_ligate_to_one_glyph() {
+        assert!(can_draw("1️⃣"), "keycap");
+        assert!(can_draw("👍🏽"), "skin tone");
+        assert!(can_draw("🇮🇳"), "flag");
+        assert!(can_draw("👨‍👩‍👧"), "ZWJ family");
+        assert!(!can_draw("😂😂"), "two emoji are not one glyph");
     }
 
     /// A cut-out from the 14 MB shared document keeps only what it uses,

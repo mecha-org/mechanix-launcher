@@ -141,6 +141,15 @@ impl View {
             }
         }
 
+        // A key switching to this very view is the shown tab.
+        if let Some(&current) = styles.get(style::CURRENT) {
+            for key in out_rows.iter_mut().flat_map(Row::keys_mut) {
+                if matches!(&key.action, KeyAction::SetView(v) if v == name) {
+                    key.look = key.look.with_normal(current);
+                }
+            }
+        }
+
         let mut view = View {
             name: name.to_string(),
             family,
@@ -202,15 +211,24 @@ impl Keymap {
     }
 }
 
-/// Resolve a button token's face. Icon wins over label when both are set
-/// (matching squeekboard) — and warns. With neither icon nor label, the
-/// button's own name is the label.
+/// Resolve a button token's face. Icon wins over emoji, and either over
+/// label (matching squeekboard) — and warns. With none of them, the button's
+/// own name is the label.
 fn resolve_face(token: &str, button: Option<&Button>) -> KeyFace {
     if let Some(icon) = button.and_then(|b| b.icon.as_deref()) {
-        if button.and_then(|b| b.label.as_deref()).is_some() {
-            warn!("button {token:?} sets both `icon` and `label`; using icon {icon:?}");
+        if button
+            .and_then(|b| b.label.as_deref().or(b.emoji.as_deref()))
+            .is_some()
+        {
+            warn!("button {token:?} sets `icon` and `label` or `emoji`; using icon {icon:?}");
         }
         return KeyFace::Icon(icon.to_string());
+    }
+    if let Some(emoji) = button.and_then(|b| b.emoji.as_deref()) {
+        if button.and_then(|b| b.label.as_deref()).is_some() {
+            warn!("button {token:?} sets both `emoji` and `label`; using emoji {emoji:?}");
+        }
+        return KeyFace::Emoji(emoji.to_string());
     }
     let label = button
         .and_then(|b| b.label.clone())
@@ -669,6 +687,10 @@ mod tests {
                 view.name,
                 last.token
             );
+            // Emoji pages trade the bottom row for their category tabs.
+            if view.page == Page::Emoji {
+                continue;
+            }
             let last = rows.last().unwrap().keys().last().unwrap();
             assert!(
                 is_keysym(&last.action, "Return"),
@@ -677,6 +699,67 @@ mod tests {
                 last.token
             );
         }
+    }
+
+    /// Every emoji page ends in the same tab row: back to letters, then a
+    /// tab per emoji page, the page's own tab drawn `current`.
+    #[test]
+    fn emoji_pages_share_a_tab_row_marking_their_own_tab() {
+        let km = bundled();
+        let pages: Vec<&View> = km.views.iter().filter(|v| v.page == Page::Emoji).collect();
+        assert!(pages.len() >= 8, "one page per category");
+        let current = style::resolve_all(
+            &yaml_serde::from_str::<Layout>(FALLBACK_LAYOUT)
+                .unwrap()
+                .key_styles,
+        )[style::CURRENT];
+        for view in &pages {
+            let tabs: Vec<&Key> = view.rows.last().unwrap().keys().collect();
+            assert!(matches!(tabs[0].action, KeyAction::Page(Page::Letters)));
+            let targets: Vec<&str> = tabs[1..]
+                .iter()
+                .map(|k| match &k.action {
+                    KeyAction::SetView(v) => v.as_str(),
+                    other => panic!("{}: tab {} is {other:?}", view.name, k.token),
+                })
+                .collect();
+            for page in &pages {
+                assert!(
+                    targets.contains(&page.name.as_str()),
+                    "{}: no tab for {}",
+                    view.name,
+                    page.name
+                );
+            }
+            for tab in &tabs[1..] {
+                assert!(
+                    matches!(tab.face, KeyFace::Emoji(_)),
+                    "{} has an emoji face",
+                    tab.token
+                );
+                let shown = matches!(&tab.action, KeyAction::SetView(v) if *v == view.name);
+                let normal = tab.look.style(style::KeyState::Normal);
+                assert_eq!(
+                    normal == current,
+                    shown,
+                    "{}: {} current-ness",
+                    view.name,
+                    tab.token
+                );
+            }
+        }
+        // The emoji key opens the faces page.
+        let views: Vec<_> = km
+            .views
+            .iter()
+            .map(|v| (v.name.as_str(), v.family, v.page))
+            .collect();
+        let first = views
+            .iter()
+            .filter(|(_, f, p)| *f == Family::Text && *p == Page::Emoji)
+            .min_by_key(|(n, ..)| *n)
+            .unwrap();
+        assert_eq!(first.0, "emoji");
     }
 
     #[test]
