@@ -28,7 +28,6 @@ struct WifiSprites {
     /// Shown while Wi-Fi is off or on but not connected; only its tint changes.
     wifi: SpriteId,
     connecting: SpriteId,
-    none: SpriteId,
     low: SpriteId,
     medium: SpriteId,
     high: SpriteId,
@@ -55,7 +54,6 @@ impl Widget for Wifi {
         let sprites = WifiSprites {
             wifi: load_icon(atlas, icons::HIGH),
             connecting: load_icon(atlas, icons::CONNECTING),
-            none: load_icon(atlas, icons::NONE),
             low: load_icon(atlas, icons::LOW),
             medium: load_icon(atlas, icons::MEDIUM),
             high: load_icon(atlas, icons::HIGH),
@@ -160,8 +158,7 @@ fn render(
             // Only a connected AP supplies the visible SSID and signal icon.
             ssid = short_name(&wifi.ssid);
             let sprite = match wifi.strength {
-                0..25 => sprites.none,
-                25..50 => sprites.low,
+                0..50 => sprites.low,
                 50..75 => sprites.medium,
                 _ => sprites.high,
             };
