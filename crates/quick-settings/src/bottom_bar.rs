@@ -236,8 +236,8 @@ mod tests {
         let text_handle = bluetooth.name;
         let dot_handle = bluetooth.dot;
 
-        for (state, label, is_on) in [
-            (BluetoothState::On, None, true),
+        for (state, label, has_dot) in [
+            (BluetoothState::On, None, false),
             (
                 BluetoothState::Connected {
                     count: 1,
@@ -282,7 +282,7 @@ mod tests {
                 None => assert_eq!(display, Display::Hidden),
             }
             let dot_paint = app.component::<Paint>(dot_handle.id()).unwrap();
-            if is_on {
+            if has_dot {
                 assert!(matches!(dot_paint, Paint::Quad(_)));
             } else {
                 assert_eq!(dot_paint, &Paint::None);

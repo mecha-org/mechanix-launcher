@@ -107,7 +107,9 @@ impl BluetoothContext for Context<'_, Bluetooth> {
         let border_color = self.color(ColorRole::SecondaryFixedDim);
         let icon_color = self.color(ColorRole::OnSurface);
         let text_color = self.color(ColorRole::OnSurfaceVariant);
-        let dot_paint = if is_on {
+        // On alone fills the tile; only a connection adds the dot.
+        let is_connected = matches!(state, BluetoothState::Connected { .. });
+        let dot_paint = if is_connected {
             Paint::Quad(Quad::new(self.color(ColorRole::Primary)).radius(DOT_RADIUS / 2.0))
         } else {
             Paint::None
