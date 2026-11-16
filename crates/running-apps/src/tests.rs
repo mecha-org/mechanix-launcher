@@ -485,6 +485,39 @@ fn a_dialog_open_before_close_is_not_an_answer() {
 }
 
 #[test]
+fn a_modal_dialog_already_open_is_brought_forward_not_closed() {
+    let mut app = RunningApp {
+        key: AppKey::Entry("files".into()),
+        entry: Some(2),
+        windows: vec![id(7)],
+        dialogs: vec![id(10)],
+        modal: true,
+        pids: Vec::new(),
+        front: id(7),
+        last_used: 1,
+        title: String::new(),
+    };
+    let mut ui = ui("modal", Registry::fixture(entries(), vec![app.clone()]));
+    ui.emit(Shown);
+    let files = ui.cards()[0];
+    let close = ui.card(files).close_button();
+    ui.click(close);
+    assert!(ui.closed.borrow().is_empty(), "nothing is closed");
+    assert!(!ui.card(files).closing());
+    assert_eq!(*ui.activated.borrow(), [id(7)]);
+    assert_eq!(ui.app.resource::<Launched>().0, 1);
+
+    // Answered: the next ✕ closes.
+    app.dialogs.clear();
+    app.modal = false;
+    ui.set_registry(Registry::fixture(entries(), vec![app]));
+    let files = ui.cards()[0];
+    let close = ui.card(files).close_button();
+    ui.click(close);
+    assert_eq!(*ui.closed.borrow(), [id(7)]);
+}
+
+#[test]
 fn an_app_that_stays_open_is_brought_forward() {
     let mut ui = ui("stays", registry(&[("files", Some(2), &[7])]));
     ui.emit(Shown);

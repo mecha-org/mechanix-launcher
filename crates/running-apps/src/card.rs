@@ -58,6 +58,8 @@ pub(crate) struct CardBuilder {
     pub front: ToplevelId,
     pub windows: Vec<ToplevelId>,
     pub dialogs: Vec<ToplevelId>,
+    /// One of the dialogs is modal.
+    pub modal: bool,
     /// The screen the card is on.
     pub view: NodeId,
     pub width: f32,
@@ -83,6 +85,7 @@ pub(crate) struct Card {
     pub(crate) front: ToplevelId,
     pub(crate) windows: Vec<ToplevelId>,
     pub(crate) dialogs: Vec<ToplevelId>,
+    pub(crate) modal: bool,
     view: NodeId,
     closing: Option<Closing>,
     /// Runs while closing: [`CLOSE_WAIT`].
@@ -288,6 +291,7 @@ impl Widget for Card {
             front: b.front,
             windows: b.windows,
             dialogs: b.dialogs,
+            modal: b.modal,
             view: b.view,
             closing: b.closing,
             wait,
@@ -374,9 +378,19 @@ pub(crate) fn reset_gesture(app: &mut App, card: NodeId) {
 }
 
 /// ✕ and swipe-away: every window is asked to close; the card dims and
-/// ignores input until the registry drops it, or the app stays open.
+/// ignores input until the registry drops it, or the app stays open. An
+/// app with a modal dialog open is asking something already: it comes to
+/// the front on the dialog instead, and nothing is closed.
 fn close_app(ctx: &mut Context<'_, Card>) {
     if ctx.me().closing.is_some() {
+        return;
+    }
+    if ctx.me().modal {
+        ctx.me().dy = 0.0;
+        restyle(ctx);
+        let front = ctx.me().front;
+        ctx.signal(Activate(front));
+        ctx.signal(AppLaunched);
         return;
     }
     let (windows, dialogs, wait) = {

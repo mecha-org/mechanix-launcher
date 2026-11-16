@@ -212,6 +212,7 @@ struct Want {
     front: ToplevelId,
     windows: Vec<ToplevelId>,
     dialogs: Vec<ToplevelId>,
+    modal: bool,
 }
 
 fn wanted(app: &mut App, view: NodeId) -> Vec<Want> {
@@ -245,6 +246,7 @@ fn wanted(app: &mut App, view: NodeId) -> Vec<Want> {
             front: a.front,
             windows: a.windows,
             dialogs: a.dialogs,
+            modal: a.modal,
         })
         .collect()
 }
@@ -280,6 +282,7 @@ fn sync(app: &mut App, view: NodeId) {
             card.front = w.front;
             card.windows = w.windows.clone();
             card.dialogs = w.dialogs.clone();
+            card.modal = w.modal;
         }
     } else {
         let closing: Vec<(AppKey, card::Closing)> = kept
@@ -310,6 +313,7 @@ fn sync(app: &mut App, view: NodeId) {
                         front: w.front,
                         windows: w.windows,
                         dialogs: w.dialogs,
+                        modal: w.modal,
                         view,
                         width,
                         hole_height,
