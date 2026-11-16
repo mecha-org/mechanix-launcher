@@ -4,7 +4,7 @@ use mecha_wayland::mechanix_widgets::prelude::{
 use mecha_wayland::prelude::*;
 
 use super::{Borders, DOT_RADIUS, build_tile, label_spacer, tile_quad};
-use crate::util::{load_icon, short_name};
+use crate::util::load_icon;
 use services::{BluetoothState, BluetoothStateChanged, ToggleBluetooth};
 
 use assets::icons::bluetooth as svg;
@@ -21,7 +21,6 @@ pub struct Bluetooth {
 }
 
 pub struct BluetoothBuilder {
-    /// Which sides get a border, e.g. [`borders::ALL`](super::borders::ALL).
     pub borders: Borders,
 }
 
@@ -42,7 +41,7 @@ impl Widget for Bluetooth {
         let spacer = label_spacer(me, s);
 
         // Only shown while connected, so the icon sits centred otherwise.
-        // `short_name` abbreviates device names; ellipsis overflow is a fallback for narrow tiles.
+        // Names too wide for the tile end in an ellipsis.
         let name = s.spawn(
             me,
             text("")
@@ -122,7 +121,7 @@ impl BluetoothContext for Context<'_, Bluetooth> {
             BluetoothState::Connected { count, name } => (
                 icon_connected,
                 Some(match name {
-                    Some(name) if count == 1 => short_name(&name),
+                    Some(name) if count == 1 => name,
                     _ if count <= 1 => "Connected".to_string(),
                     _ => format!("{count} devices"),
                 }),

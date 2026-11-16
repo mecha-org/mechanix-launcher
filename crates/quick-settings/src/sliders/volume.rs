@@ -1,6 +1,9 @@
 use mecha_pulseaudio::*;
-use mecha_wayland::mechanix_widgets::prelude::{SliderChange, SliderContextExt, slider};
+use mecha_wayland::mechanix_widgets::prelude::{
+    SliderChange, SliderContextExt, SliderSize, slider,
+};
 use mecha_wayland::prelude::*;
+use std::time::Duration;
 
 use super::control_style;
 use crate::util::load_icon;
@@ -15,12 +18,17 @@ const LEVEL_PERCENT: f32 = 70.0; // initial value
 
 const ICON_SIZE: f32 = 24.0;
 const SLIDER_LENGTH_PERCENT: f32 = 80.0;
+const ICON_GAP_PERCENT: f32 = 5.0; // space between the icon and the slider, of the row width
+const THROTTLE: Duration = Duration::from_millis(50);
 
 const HIGH_LEVEL: u32 = 65; // after what value we use the high icon
 const MUTED_ACTIVE_TICK_COLOR: ColorRole = ColorRole::SecondaryFixedDim;
 const MUTED_INACTIVE_TICK_COLOR: ColorRole = ColorRole::SecondaryFixed;
 
-pub struct VolumeSlider;
+pub struct VolumeSlider {
+    throttle: TimerId,
+    pending: Option<u32>,
+}
 
 pub struct VolumeSliderBuilder;
 
@@ -46,7 +54,7 @@ impl Widget for VolumeSlider {
                     .width(percent(100.0))
                     .height(percent(100.0))
                     .center()
-                    .gap(px(Spacing::Space300.dp())),
+                    .gap(percent(ICON_GAP_PERCENT)),
             ),
         );
 
@@ -65,8 +73,10 @@ impl Widget for VolumeSlider {
                 .range(0.0, 100.0)
                 .length(percent(SLIDER_LENGTH_PERCENT))
                 .style(LayoutStyle::default().height(percent(100.0)))
-                .tick_height(percent(100.0))
-                .tick_gap(4.0),
+                .size(SliderSize::Small)
+                .tick_height(percent(80.0))
+                .tick_gap(4.0)
+                .show_value(false),
         );
 
         s.on::<Clicked>(icon_handle, |ctx, _| {
@@ -75,16 +85,23 @@ impl Widget for VolumeSlider {
             }
         });
 
+        let throttle = s.add_timeout(THROTTLE, |ctx, event| {
+            if let Some(volume) = ctx.me().pending.take() {
+                ctx.signal(SetVolume(volume));
+                ctx.start_timer(event.id);
+            }
+        });
         s.on::<SliderChange>(slider_handle, |ctx, e| {
             println!("[volume] slider changed: value = {:.2}", e.value);
 
-            ctx.signal(SetVolume(if e.value > 100.0 {
-                100
-            } else if e.value < 0.0 {
-                0
+            let volume = e.value.clamp(0.0, 100.0) as u32;
+            let throttle = ctx.me().throttle;
+            if ctx.timer_running(throttle) {
+                ctx.me().pending = Some(volume);
             } else {
-                e.value as u32
-            }));
+                ctx.signal(SetVolume(volume));
+                ctx.start_timer(throttle);
+            }
         });
 
         s.on::<VolumeStateEvent>(slider_handle, move |ctx, e| {
@@ -121,6 +138,9 @@ impl Widget for VolumeSlider {
             }
         });
 
-        VolumeSlider
+        VolumeSlider {
+            throttle,
+            pending: None,
+        }
     }
 }

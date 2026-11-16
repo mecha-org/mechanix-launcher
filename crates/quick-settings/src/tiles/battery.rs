@@ -30,7 +30,6 @@ pub struct Battery {
 }
 
 pub struct BatteryBuilder {
-    /// Which sides get a border, e.g. [`borders::ALL`](super::borders::ALL).
     pub borders: Borders,
 }
 

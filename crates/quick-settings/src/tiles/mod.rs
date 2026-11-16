@@ -42,12 +42,23 @@ pub mod borders {
     use super::Borders;
 
     const W: f32 = 1.0;
-    /// Every side.
+    /// Every side. Only tests use it; real tiles use [`grid`].
+    #[cfg(test)]
     pub const ALL: Borders = Borders::new(W, W, W, W);
-    /// Every side but the left, for tiles on the left screen edge.
-    pub const NO_LEFT: Borders = Borders::new(W, W, W, 0.0);
-    /// Every side but the right, for tiles on the right screen edge.
-    pub const NO_RIGHT: Borders = Borders::new(W, 0.0, W, W);
+
+    /// For a tile in a grid of tiles that touch. A line two tiles share is
+    /// drawn by only one of them, so it stays one line thick: each tile
+    /// draws its top and left, and the bottom row also draws the grid's
+    /// bottom edge. The grid's left and right edges are the screen edges
+    /// and get no border.
+    pub const fn grid(first_column: bool, last_row: bool) -> Borders {
+        Borders::new(
+            W,
+            0.0,
+            if last_row { W } else { 0.0 },
+            if first_column { 0.0 } else { W },
+        )
+    }
 }
 
 /// A tile's background quad. Tiles that repaint call this with their stored

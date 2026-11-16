@@ -48,35 +48,38 @@ impl Widget for BottomBar {
             .row()
             .shrink(0.0);
         let top = s.spawn(me, div().style(row.clone()));
-        // Edge tiles drop the border on their screen-edge side.
+
         s.spawn(
             top,
             WifiBuilder {
-                borders: borders::NO_LEFT,
+                borders: borders::grid(true, false),
             },
         );
         s.spawn(
             top,
             BluetoothBuilder {
-                borders: borders::ALL,
+                borders: borders::grid(false, false),
             },
         );
         s.spawn(
             top,
             KeepAwakeTileBuilder {
-                borders: borders::ALL,
+                borders: borders::grid(false, false),
             },
         );
-        s.spawn(top, action_tile(svg::TERMINAL, borders::NO_RIGHT));
+        s.spawn(top, action_tile(svg::TERMINAL, borders::grid(false, false)));
 
         let bottom = s.spawn(me, div().style(row));
-        s.spawn(bottom, action_tile(svg::RECORD, borders::NO_LEFT));
-        s.spawn(bottom, action_tile(svg::SETTINGS, borders::ALL));
-        s.spawn(bottom, action_tile(svg::ROTATE, borders::ALL));
+        s.spawn(bottom, action_tile(svg::RECORD, borders::grid(true, true)));
+        s.spawn(
+            bottom,
+            action_tile(svg::SETTINGS, borders::grid(false, true)),
+        );
+        s.spawn(bottom, action_tile(svg::ROTATE, borders::grid(false, true)));
         s.spawn(
             bottom,
             BatteryBuilder {
-                borders: borders::NO_RIGHT,
+                borders: borders::grid(false, true),
             },
         );
 
@@ -107,7 +110,11 @@ mod tests {
         let size = |height| LayoutStyle::default().size(px(308.0), px(height));
         let window = app.spawn(app.root(), window().layout(size(878.0)));
         let bar = app.spawn(window, BottomBarBuilder);
-        for (parent_height, expected_height) in [(878.0, BOTTOM_BAR_HEIGHT), (150.0, 90.0)] {
+        // Tall: capped at two tiles. Short: its share of the parent.
+        for (parent_height, expected_height) in [
+            (878.0, BOTTOM_BAR_HEIGHT),
+            (150.0, 150.0 * PORTRAIT_BODY_PERCENT / 100.0),
+        ] {
             *app.component_mut::<LayoutStyle>(window).unwrap() = size(parent_height);
             app.tick();
 
@@ -135,7 +142,7 @@ mod tests {
     }
 
     #[test]
-    fn edge_tiles_drop_their_screen_edge_border() {
+    fn shared_tile_edges_are_drawn_once() {
         let mut app = App::new();
         app.add_module(LayoutModule)
             .add_module(PaintModule)
@@ -151,17 +158,18 @@ mod tests {
             Paint::Quad(quad) => quad.border,
             other => panic!("tile is not a quad: {other:?}"),
         };
-        for row in app.children(bar.id()).unwrap().to_vec() {
+        let rows = app.children(bar.id()).unwrap().to_vec();
+        for (r, &row) in rows.iter().enumerate() {
             let tiles = app.children(row).unwrap().to_vec();
-            let (first, last) = (tiles[0], *tiles.last().unwrap());
-            assert_eq!(border(&app, first), borders::NO_LEFT);
-            assert_eq!(border(&app, last), borders::NO_RIGHT);
-            for &tile in &tiles[1..tiles.len() - 1] {
-                assert_eq!(border(&app, tile), borders::ALL);
+            for (c, &tile) in tiles.iter().enumerate() {
+                let b = border(&app, tile);
+                assert_eq!(b, borders::grid(c == 0, r == rows.len() - 1));
+                // The neighbour on the right draws the line between them.
+                assert_eq!(b.right, 0.0);
             }
         }
 
-        // Wi-Fi repaints on state changes; the trimmed side must survive that.
+        // Wi-Fi repaints on state changes; its borders must survive that.
         let wifi = app.children(app.children(bar.id()).unwrap()[0]).unwrap()[0];
         app.emit(
             services::StateUpdate {
@@ -170,7 +178,7 @@ mod tests {
             app.descendants(app.root()).collect::<Vec<_>>(),
         );
         app.tick();
-        assert_eq!(border(&app, wifi), borders::NO_LEFT);
+        assert_eq!(border(&app, wifi), borders::grid(true, false));
     }
 
     #[test]
@@ -243,7 +251,9 @@ mod tests {
                     count: 1,
                     name: Some("Headphones".into()),
                 },
-                Some("Headp..."),
+                // The full name; a name too wide for the tile is cut off
+                // with an ellipsis when drawn, not in the string.
+                Some("Headphones"),
                 true,
             ),
             (

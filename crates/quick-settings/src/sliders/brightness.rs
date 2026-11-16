@@ -1,5 +1,8 @@
-use mecha_wayland::mechanix_widgets::prelude::{Slider, SliderChange, SliderContextExt, slider};
+use mecha_wayland::mechanix_widgets::prelude::{
+    Slider, SliderChange, SliderContextExt, SliderSize, slider,
+};
 use mecha_wayland::prelude::*;
+use std::time::Duration;
 
 use super::control_style;
 use crate::util::load_icon;
@@ -11,9 +14,13 @@ mod svg {
 
 const ICON_SIZE: f32 = 24.0;
 const SLIDER_LENGTH_PERCENT: f32 = 80.0;
+const ICON_GAP_PERCENT: f32 = 5.0;
+const THROTTLE: Duration = Duration::from_millis(50);
 
 pub struct BrightnessSlider {
     pub slider: Handle<Slider>,
+    throttle: TimerId,
+    pending: Option<f32>,
 }
 
 pub struct BrightnessSliderBuilder;
@@ -38,7 +45,7 @@ impl Widget for BrightnessSlider {
                     .width(percent(100.0))
                     .height(percent(100.0))
                     .center()
-                    .gap(px(Spacing::Space300.dp())),
+                    .gap(percent(ICON_GAP_PERCENT)),
             ),
         );
 
@@ -57,13 +64,25 @@ impl Widget for BrightnessSlider {
                 .range(MIN_BRIGHTNESS, MAX_BRIGHTNESS)
                 .length(percent(SLIDER_LENGTH_PERCENT))
                 .style(LayoutStyle::default().height(percent(100.0)))
-                .tick_height(percent(100.0))
-                .tick_gap(4.0),
+                .size(SliderSize::Small)
+                .tick_height(percent(80.0))
+                .tick_gap(4.0)
+                .show_value(false),
         );
-        // Sent on every step change; the display service coalesces these so
-        // only one D-Bus write is in flight and stale values are dropped.
+        let throttle = s.add_timeout(THROTTLE, |ctx, event| {
+            if let Some(value) = ctx.me().pending.take() {
+                ctx.signal(SetBrightness(value));
+                ctx.start_timer(event.id);
+            }
+        });
         s.on::<SliderChange>(slider_handle, |ctx, event| {
-            ctx.signal(SetBrightness(event.value));
+            let throttle = ctx.me().throttle;
+            if ctx.timer_running(throttle) {
+                ctx.me().pending = Some(event.value);
+            } else {
+                ctx.signal(SetBrightness(event.value));
+                ctx.start_timer(throttle);
+            }
         });
 
         s.on::<BrightnessChanged>(me, |ctx, event| {
@@ -79,6 +98,8 @@ impl Widget for BrightnessSlider {
 
         BrightnessSlider {
             slider: slider_handle,
+            throttle,
+            pending: None,
         }
     }
 }

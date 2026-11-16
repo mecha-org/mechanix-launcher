@@ -3,7 +3,6 @@ use mecha_wayland::prelude::*;
 use super::{Borders, frame};
 use crate::util::load_icon;
 
-/// One-colour SVGs for the [`ActionTile`]s.
 pub mod svg {
     pub const CAMERA: &[u8] = include_bytes!("../../assets/camera.svg");
     pub const MICROPHONE: &[u8] = include_bytes!("../../assets/microphone.svg");
@@ -13,19 +12,14 @@ pub mod svg {
     pub const TERMINAL: &[u8] = include_bytes!("../../assets/terminal.svg");
 }
 
-/// A stateless tile that only shows an icon (camera, terminal, settings, ...).
 pub struct ActionTile;
 
 pub struct ActionTileBuilder {
-    /// SVG, usually one of [`svg`]. Its colours are dropped and it is tinted
-    /// with `OnSecondaryFixedVariant`.
     pub icon: &'static [u8],
-    /// Which sides get a border, e.g. [`borders::ALL`](super::borders::ALL).
     pub borders: Borders,
 }
 
 /// Builds an [`ActionTile`] showing `icon` with the given border sides,
-/// e.g. `action_tile(svg::CAMERA, borders::ALL)`.
 pub fn action_tile(icon: &'static [u8], borders: Borders) -> ActionTileBuilder {
     ActionTileBuilder { icon, borders }
 }

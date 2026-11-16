@@ -306,8 +306,16 @@ mod tests {
             assert!(!ticks.is_empty());
             for &tick in ticks {
                 let tick = rect(&app, tick);
-                assert_eq!(tick.origin.y, control_rect.origin.y);
-                assert_eq!(tick.height(), control_rect.height());
+                // Centred on the control, 80% of the (thumb-tall) track.
+                let center = control_rect.origin.y + control_rect.height() / 2.0;
+                assert!(
+                    (tick.origin.y + tick.height() / 2.0 - center).abs() <= 1.0,
+                    "{tick:?} not centred on {control_rect:?}"
+                );
+                assert!(
+                    (tick.height() - rect(&app, track).height() * 0.8).abs() <= 1.0,
+                    "{tick:?}"
+                );
                 assert!(tick.origin.y >= bottom(header), "{header:?} {tick:?}");
                 assert!(bottom(tick) <= top_row.origin.y, "{tick:?} {top_row:?}");
             }
