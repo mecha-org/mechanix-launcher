@@ -109,6 +109,7 @@ fn entries() -> Vec<DesktopApp> {
         exec: vec![id.into()],
         icon: Some(id.into()),
         startup_wm_class: None,
+        path: PathBuf::from(format!("/usr/share/applications/{id}.desktop")),
     };
     vec![
         entry("camera", "Camera"),

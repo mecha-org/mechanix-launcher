@@ -13,6 +13,8 @@ pub struct DesktopApp {
     pub icon: Option<String>,
     /// `StartupWMClass`: the app id its windows are expected to carry.
     pub startup_wm_class: Option<String>,
+    /// The `.desktop` file it was read from.
+    pub path: PathBuf,
 }
 
 /// The fields of one displayable `[Desktop Entry]`.
@@ -214,6 +216,7 @@ pub fn scan(data_dirs: &[PathBuf]) -> Vec<DesktopApp> {
                     exec: p.exec,
                     icon: p.icon,
                     startup_wm_class: p.startup_wm_class,
+                    path: file.clone(),
                 });
             }
         }

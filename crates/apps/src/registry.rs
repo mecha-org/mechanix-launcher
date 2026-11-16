@@ -380,6 +380,7 @@ mod tests {
             exec: exec.split(' ').map(String::from).collect(),
             icon: None,
             startup_wm_class: wm_class.map(String::from),
+            path: PathBuf::from(format!("/usr/share/applications/{id}")),
         }
     }
 
