@@ -182,6 +182,9 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
             )
             .container(running),
         )
+        // FIXME: the compositor never draws the edge strips; give them a
+        // single-pixel buffer scaled by wp_viewporter instead of rendering
+        // them.
         .window(
             nav_window(
                 BOTTOM_EDGE,
