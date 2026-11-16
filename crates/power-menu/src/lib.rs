@@ -43,9 +43,7 @@ impl Event for OpenPowerMenu {}
 pub struct ClosePowerMenu;
 impl Event for ClosePowerMenu {}
 
-/// The namespace prefix stacks it above everything, fullscreen apps and
-/// the shell's bars included.
-const NAMESPACE: &str = "mx-prompt-power";
+const NAMESPACE: &str = "power-menu";
 
 const ALL_SIDES: Anchor = Anchor::from_bits_truncate(
     Anchor::TOP.bits() | Anchor::BOTTOM.bits() | Anchor::LEFT.bits() | Anchor::RIGHT.bits(),
@@ -78,6 +76,7 @@ impl Module for PowerMenuModule {
             exclusive_zone: -1,
             namespace: NAMESPACE.into(),
             keyboard_interactivity: KeyboardInteractivity::None,
+            shell_role: Some(ShellRole::Prompt),
         });
         let window = app
             .spawn_with(

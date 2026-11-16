@@ -334,6 +334,7 @@ pub(crate) mod tests {
             exclusive_zone: 0,
             namespace: namespace.into(),
             keyboard_interactivity: KeyboardInteractivity::None,
+            shell_role: None,
         })
     }
 
