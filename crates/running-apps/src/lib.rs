@@ -21,7 +21,8 @@ use thumbs::{ThumbSink, WaylandThumbs};
 type WindowAction = Rc<dyn Fn(&mut App, ToplevelId)>;
 
 /// The running-apps screen. Its window must be a layer surface for the
-/// previews, and the app must have `Registry` for any cards to show.
+/// previews, and the app must have `Registry` for any cards to show and
+/// `TimerModule` for closing them.
 pub struct RunningApps {
     icon_dirs: Rc<IconDirs>,
     activator: WindowAction,

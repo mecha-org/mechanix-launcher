@@ -3,13 +3,15 @@
 
 use std::rc::Rc;
 
-use apps::{AppKey, IconCache, IconDirs, Registry, RegistryChanged, RowIcon};
+use apps::{AppKey, IconCache, IconDirs, Registry, RegistryChanged, RowIcon, RunningApp};
 use mecha_wayland::mechanix_widgets::{self as mw, TextWrap};
 use mecha_wayland::prelude::*;
 use screen::{Hidden, Shown};
 
 use crate::WindowAction;
-use crate::card::{self, Activate, Card, CardBuilder, CloseWindows, HEADER, SIDE, hole_style};
+use crate::card::{
+    self, Activate, Card, CardBuilder, CloseWindows, HEADER, SIDE, WindowsChanged, hole_style,
+};
 use crate::thumbs::{Place, ThumbKey, ThumbSink};
 
 /// Glyph size of the ✕.
@@ -58,6 +60,10 @@ impl View {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn empty(&self) -> NodeId {
         self.empty
+    }
+
+    pub(crate) fn shown(&self) -> bool {
+        self.shown
     }
 }
 
@@ -205,6 +211,7 @@ struct Want {
     icon: RowIcon,
     front: ToplevelId,
     windows: Vec<ToplevelId>,
+    dialogs: Vec<ToplevelId>,
 }
 
 fn wanted(app: &mut App, view: NodeId) -> Vec<Want> {
@@ -212,13 +219,8 @@ fn wanted(app: &mut App, view: NodeId) -> Vec<Want> {
         return Vec::new();
     }
     let dirs = app.widget::<View>(view).unwrap().icon_dirs.clone();
-    let found: Vec<(
-        AppKey,
-        String,
-        Option<apps::IconFile>,
-        ToplevelId,
-        Vec<ToplevelId>,
-    )> = {
+    // Each app with the name and icon file its card shows.
+    let found: Vec<(RunningApp, String, Option<apps::IconFile>)> = {
         let registry = app.resource::<Registry>();
         registry
             .apps()
@@ -229,19 +231,20 @@ fn wanted(app: &mut App, view: NodeId) -> Vec<Want> {
                 let file = entry
                     .and_then(|e| e.icon.as_deref())
                     .and_then(|i| dirs.find(i));
-                (a.key.clone(), name, file, a.front, a.windows.clone())
+                (a.clone(), name, file)
             })
             .collect()
     };
     let (mut atlas, mut cache) = app.query::<(ResMut<Atlas>, ResMut<IconCache>)>();
     found
         .into_iter()
-        .map(|(key, name, file, front, windows)| Want {
-            key,
+        .map(|(a, name, file)| Want {
+            key: a.key,
             name,
             icon: cache.get(&mut atlas, file.as_ref()),
-            front,
-            windows,
+            front: a.front,
+            windows: a.windows,
+            dialogs: a.dialogs,
         })
         .collect()
 }
@@ -276,13 +279,13 @@ fn sync(app: &mut App, view: NodeId) {
             let card = app.widget_mut::<Card>(slot.card).unwrap();
             card.front = w.front;
             card.windows = w.windows.clone();
+            card.dialogs = w.dialogs.clone();
         }
     } else {
-        let closing: Vec<AppKey> = kept
+        let closing: Vec<(AppKey, card::Closing)> = kept
             .iter()
             .filter_map(|s| app.widget::<Card>(s.card))
-            .filter(|c| c.closing())
-            .map(|c| c.key().clone())
+            .filter_map(|c| Some((c.key().clone(), c.closing_state()?)))
             .collect();
         for slot in std::mem::take(&mut kept) {
             drop_slot(app, &*sink, slot);
@@ -292,7 +295,10 @@ fn sync(app: &mut App, view: NodeId) {
             (v.list, v.cross, v.card_width, v.hole_height)
         };
         for w in want {
-            let closing = closing.contains(&w.key);
+            let closing = closing
+                .iter()
+                .find(|(k, _)| *k == w.key)
+                .map(|(_, c)| c.clone());
             let card = app
                 .spawn(
                     list,
@@ -303,6 +309,8 @@ fn sync(app: &mut App, view: NodeId) {
                         cross,
                         front: w.front,
                         windows: w.windows,
+                        dialogs: w.dialogs,
+                        view,
                         width,
                         hole_height,
                         closing,
@@ -315,6 +323,10 @@ fn sync(app: &mut App, view: NodeId) {
                 sent: None,
             });
         }
+    }
+
+    for slot in &kept {
+        app.emit(WindowsChanged, slot.card);
     }
 
     let (list, empty, none) = {

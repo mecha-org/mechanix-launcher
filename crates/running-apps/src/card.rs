@@ -1,9 +1,13 @@
 //! One running app: a header (icon, name, ✕) over the preview hole.
 
+use std::time::Duration;
+
 use apps::{AppKey, RowIcon};
 use mecha_wayland::mechanix_widgets::{self as mw, TextWrap};
 use mecha_wayland::prelude::*;
 use screen::AppLaunched;
+
+use crate::view::View;
 
 /// Between the screen's edges and a card.
 pub(crate) const SIDE: f32 = 24.0;
@@ -24,6 +28,8 @@ const FADE_OVER: f32 = 240.0;
 const FADE_TO: f32 = 0.2;
 /// A card whose app was asked to close.
 const DIMMED: f32 = 0.4;
+/// How long an app asked to close has to go before it is brought back.
+pub(crate) const CLOSE_WAIT: Duration = Duration::from_secs(1);
 
 /// Asks the screen's hooks to activate a window.
 pub(crate) struct Activate(pub ToplevelId);
@@ -33,6 +39,17 @@ impl Signal for Activate {}
 pub(crate) struct CloseWindows(pub Vec<ToplevelId>);
 impl Signal for CloseWindows {}
 
+/// The app's windows changed: a closing card looks for a new dialog.
+pub(crate) struct WindowsChanged;
+impl Event for WindowsChanged {}
+
+/// An app asked to close, as it was when asked.
+#[derive(Clone)]
+pub(crate) struct Closing {
+    /// The dialogs open then. One opened since is the app asking something.
+    dialogs: Vec<ToplevelId>,
+}
+
 pub(crate) struct CardBuilder {
     pub key: AppKey,
     pub name: String,
@@ -40,9 +57,12 @@ pub(crate) struct CardBuilder {
     pub cross: SpriteId,
     pub front: ToplevelId,
     pub windows: Vec<ToplevelId>,
+    pub dialogs: Vec<ToplevelId>,
+    /// The screen the card is on.
+    pub view: NodeId,
     pub width: f32,
     pub hole_height: f32,
-    pub closing: bool,
+    pub closing: Option<Closing>,
 }
 
 impl Build for CardBuilder {
@@ -62,7 +82,11 @@ pub(crate) struct Card {
     icon: RowIcon,
     pub(crate) front: ToplevelId,
     pub(crate) windows: Vec<ToplevelId>,
-    closing: bool,
+    pub(crate) dialogs: Vec<ToplevelId>,
+    view: NodeId,
+    closing: Option<Closing>,
+    /// Runs while closing: [`CLOSE_WAIT`].
+    wait: TimerId,
     drag: Option<Drag>,
     /// How far a swipe has moved the card up (negative).
     dy: f32,
@@ -93,8 +117,19 @@ impl Card {
         self.front
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn closing(&self) -> bool {
-        self.closing
+        self.closing.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn wait(&self) -> TimerId {
+        self.wait
+    }
+
+    /// For a card rebuilt in its place.
+    pub(crate) fn closing_state(&self) -> Option<Closing> {
+        self.closing.clone()
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -119,7 +154,7 @@ impl Card {
 
     /// How opaque the card draws, its preview included.
     pub(crate) fn opacity(&self) -> f32 {
-        if self.closing {
+        if self.closing.is_some() {
             return DIMMED;
         }
         let t = (self.dy.abs() / FADE_OVER).min(1.0);
@@ -219,7 +254,24 @@ impl Widget for Card {
             ),
         );
 
+        // Rebuilt while closing, it waits again from now.
+        let wait = if b.closing.is_some() {
+            s.set_timeout(CLOSE_WAIT, |ctx, _| still_open(ctx, None))
+        } else {
+            s.add_timeout(CLOSE_WAIT, |ctx, _| still_open(ctx, None))
+        };
+
         s.on::<Clicked>(close.id(), |ctx, _| close_app(ctx))
+            .on::<WindowsChanged>(me, |ctx, _| {
+                let me = ctx.me();
+                let asked = me
+                    .closing
+                    .as_ref()
+                    .and_then(|c| me.dialogs.iter().find(|d| !c.dialogs.contains(d)).copied());
+                if asked.is_some() {
+                    still_open(ctx, asked);
+                }
+            })
             .on::<Press>(me, on_press)
             .on::<PressMoved>(me, on_moved)
             .on::<PressCancelled>(me, |ctx, _| {
@@ -235,7 +287,10 @@ impl Widget for Card {
             icon: b.icon,
             front: b.front,
             windows: b.windows,
+            dialogs: b.dialogs,
+            view: b.view,
             closing: b.closing,
+            wait,
             drag: None,
             dy: 0.0,
             width: b.width,
@@ -319,19 +374,43 @@ pub(crate) fn reset_gesture(app: &mut App, card: NodeId) {
 }
 
 /// ✕ and swipe-away: every window is asked to close; the card dims and
-/// ignores input until the registry drops it.
+/// ignores input until the registry drops it, or the app stays open.
 fn close_app(ctx: &mut Context<'_, Card>) {
-    if ctx.me().closing {
+    if ctx.me().closing.is_some() {
         return;
     }
-    ctx.me().closing = true;
-    let windows = ctx.me().windows.clone();
+    let (windows, dialogs, wait) = {
+        let c = ctx.me();
+        (c.windows.clone(), c.dialogs.clone(), c.wait)
+    };
+    ctx.me().closing = Some(Closing { dialogs });
+    ctx.start_timer(wait);
     ctx.signal(CloseWindows(windows));
     restyle(ctx);
 }
 
+/// The app asked to close is still open: it opened `dialog`, asking
+/// something (save first?), or it didn't go within [`CLOSE_WAIT`]. The
+/// card takes input again and, while the screen is up, the app comes to
+/// the front on the dialog, or on its own modal one, to be answered.
+fn still_open(ctx: &mut Context<'_, Card>, dialog: Option<ToplevelId>) {
+    if ctx.me().closing.take().is_none() {
+        return;
+    }
+    let (wait, view, front) = {
+        let c = ctx.me();
+        (c.wait, c.view, c.front)
+    };
+    ctx.cancel_timer(wait);
+    restyle(ctx);
+    if ctx.widget::<View>(view).is_some_and(View::shown) {
+        ctx.signal(Activate(dialog.unwrap_or(front)));
+        ctx.signal(AppLaunched);
+    }
+}
+
 fn tap(ctx: &mut Context<'_, Card>) {
-    if std::mem::take(&mut ctx.me().swallow_click) || ctx.me().closing {
+    if std::mem::take(&mut ctx.me().swallow_click) || ctx.me().closing.is_some() {
         return;
     }
     let front = ctx.me().front;
@@ -341,7 +420,7 @@ fn tap(ctx: &mut Context<'_, Card>) {
 
 fn on_press(ctx: &mut Context<'_, Card>, e: &Press) {
     let c = ctx.me();
-    if c.closing || c.drag.is_some() {
+    if c.closing.is_some() || c.drag.is_some() {
         return;
     }
     c.swallow_click = false;

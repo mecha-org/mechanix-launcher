@@ -121,17 +121,26 @@ fn entries() -> Vec<DesktopApp> {
 /// `(app id, entry, windows)`, most recently used first; the first window
 /// is the front.
 fn registry(apps: &[(&str, Option<usize>, &[u32])]) -> Registry {
+    let apps: Vec<_> = apps.iter().map(|&(a, e, w)| (a, e, w, &[][..])).collect();
+    registry_with_dialogs(&apps)
+}
+
+/// `(app id, entry, windows, dialogs)`.
+type WithDialogs<'a> = (&'a str, Option<usize>, &'a [u32], &'a [u32]);
+
+/// [`registry`], with each app's dialogs last.
+fn registry_with_dialogs(apps: &[WithDialogs<'_>]) -> Registry {
     let apps = apps
         .iter()
         .enumerate()
-        .map(|(i, &(app_id, entry, windows))| RunningApp {
+        .map(|(i, &(app_id, entry, windows, dialogs))| RunningApp {
             key: match entry {
                 Some(_) => AppKey::Entry(app_id.into()),
                 None => AppKey::Process(windows[0]),
             },
             entry,
             windows: windows.iter().map(|&n| id(n)).collect(),
-            dialogs: Vec::new(),
+            dialogs: dialogs.iter().map(|&n| id(n)).collect(),
             modal: false,
             pids: Vec::new(),
             front: id(windows[0]),
@@ -189,6 +198,8 @@ fn ui_with(name: &str, registry: Registry, sink: Rc<Sink>) -> Ui {
         .init_resource::<Launched>()
         .system(count_launch);
     app.insert_resource(Atlas::new());
+    // Timers that never fire on their own: a test fires one with `timeout`.
+    app.init_resource::<Timers>();
     let regular = app
         .resource_mut::<Atlas>()
         .add_font(assets::fonts::GEIST_MONO)
@@ -269,6 +280,13 @@ impl Ui {
             },
             node,
         );
+        self.app.tick();
+    }
+
+    /// `card`'s close wait runs out.
+    fn timeout(&mut self, card: NodeId) {
+        let id = self.card(card).wait();
+        self.app.emit(Timeout { id }, card);
         self.app.tick();
     }
 
@@ -425,6 +443,75 @@ fn x_closes_every_window_and_dims() {
     // Gone.
     ui.set_registry(registry(&[("clock", Some(1), &[9])]));
     assert_eq!(ui.names(), ["Clock"]);
+}
+
+#[test]
+fn a_dialog_opened_on_close_is_brought_forward() {
+    let mut ui = ui(
+        "asks",
+        registry(&[("files", Some(2), &[7]), ("clock", Some(1), &[9])]),
+    );
+    ui.emit(Shown);
+    let files = ui.cards()[0];
+    let close = ui.card(files).close_button();
+    ui.click(close);
+    assert!(ui.card(files).closing());
+
+    // "Save first?"
+    ui.set_registry(registry_with_dialogs(&[
+        ("files", Some(2), &[7], &[10]),
+        ("clock", Some(1), &[9], &[]),
+    ]));
+    let files = ui.cards()[0];
+    assert!(!ui.card(files).closing());
+    assert_eq!(*ui.activated.borrow(), [id(10)]);
+    assert_eq!(ui.app.resource::<Launched>().0, 1);
+}
+
+#[test]
+fn a_dialog_open_before_close_is_not_an_answer() {
+    let mut ui = ui(
+        "open-dialog",
+        registry_with_dialogs(&[("files", Some(2), &[7, 8], &[10])]),
+    );
+    ui.emit(Shown);
+    let files = ui.cards()[0];
+    let close = ui.card(files).close_button();
+    ui.click(close);
+    ui.set_registry(registry_with_dialogs(&[("files", Some(2), &[7], &[10])]));
+    let files = ui.cards()[0];
+    assert!(ui.card(files).closing());
+    assert!(ui.activated.borrow().is_empty());
+}
+
+#[test]
+fn an_app_that_stays_open_is_brought_forward() {
+    let mut ui = ui("stays", registry(&[("files", Some(2), &[7])]));
+    ui.emit(Shown);
+    let files = ui.cards()[0];
+    let close = ui.card(files).close_button();
+    ui.click(close);
+    ui.timeout(files);
+    assert!(!ui.card(files).closing());
+    assert_eq!(*ui.activated.borrow(), [id(7)]);
+    assert_eq!(ui.app.resource::<Launched>().0, 1);
+    // It takes taps again.
+    ui.click(files);
+    assert_eq!(*ui.activated.borrow(), [id(7), id(7)]);
+}
+
+#[test]
+fn an_app_that_stays_open_while_hidden_only_wakes_its_card() {
+    let mut ui = ui("stays-hidden", registry(&[("files", Some(2), &[7])]));
+    ui.emit(Shown);
+    let files = ui.cards()[0];
+    let close = ui.card(files).close_button();
+    ui.click(close);
+    ui.emit(Hidden);
+    ui.timeout(files);
+    assert!(!ui.card(files).closing());
+    assert!(ui.activated.borrow().is_empty());
+    assert_eq!(ui.app.resource::<Launched>().0, 0);
 }
 
 #[test]
