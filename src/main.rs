@@ -320,9 +320,11 @@ fn main() {
         // Last, so its lock windows stack above everything else's.
         .add_module(LockscreenModule {
             settings: LockSettings {
-                // Until the configuration has it: `MECHANIX_SUSPEND=1` for a
-                // device that resumes.
-                suspend: std::env::var("MECHANIX_SUSPEND").is_ok_and(|v| v == "1"),
+                // Until the configuration has it: `MECHANIX_SUSPEND=1` or `=0`
+                // overrides the default.
+                suspend: std::env::var("MECHANIX_SUSPEND")
+                    .map(|v| v == "1")
+                    .unwrap_or(LockSettings::default().suspend),
                 ..LockSettings::default()
             },
         })
