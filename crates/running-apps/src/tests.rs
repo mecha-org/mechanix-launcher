@@ -93,6 +93,11 @@ fn id(n: u32) -> ToplevelId {
     ToplevelId::from_raw(n)
 }
 
+/// The process of the app whose first window is `n`, in the fixtures.
+fn pid(n: u32) -> u32 {
+    1000 + n
+}
+
 fn data_dir(name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("running-apps-{}-{name}", std::process::id()));
     let _ = fs::remove_dir_all(&d);
@@ -134,6 +139,7 @@ fn registry_with_dialogs(apps: &[WithDialogs<'_>]) -> Registry {
         .iter()
         .enumerate()
         .map(|(i, &(app_id, entry, windows, dialogs))| RunningApp {
+            // Without an entry, a process named by its app id.
             key: match entry {
                 Some(_) => AppKey::Entry(app_id.into()),
                 None => AppKey::Process(windows[0]),
@@ -142,7 +148,7 @@ fn registry_with_dialogs(apps: &[WithDialogs<'_>]) -> Registry {
             windows: windows.iter().map(|&n| id(n)).collect(),
             dialogs: dialogs.iter().map(|&n| id(n)).collect(),
             modal: false,
-            pids: Vec::new(),
+            pids: vec![pid(windows[0])],
             front: id(windows[0]),
             last_used: 100 - i as u64,
             title: if entry.is_some() {
@@ -178,6 +184,7 @@ struct Ui {
     sink: Rc<Sink>,
     activated: Rc<RefCell<Vec<ToplevelId>>>,
     closed: Rc<RefCell<Vec<ToplevelId>>>,
+    killed: Rc<RefCell<Vec<u32>>>,
 }
 
 fn ui(name: &str, registry: Registry) -> Ui {
@@ -215,11 +222,13 @@ fn ui_with(name: &str, registry: Registry, sink: Rc<Sink>) -> Ui {
 
     let activated: Rc<RefCell<Vec<ToplevelId>>> = Rc::default();
     let closed: Rc<RefCell<Vec<ToplevelId>>> = Rc::default();
-    let (a, c) = (activated.clone(), closed.clone());
+    let killed: Rc<RefCell<Vec<u32>>> = Rc::default();
+    let (a, c, k) = (activated.clone(), closed.clone(), killed.clone());
     let dirs = vec![data_dir(name)];
     let screen = RunningApps::with_icon_dirs(IconDirs::new(&dirs, None))
         .activator(move |_, t| a.borrow_mut().push(t))
         .closer(move |_, t| c.borrow_mut().push(t))
+        .killer(move |_, pids| k.borrow_mut().extend(pids))
         .thumbs(sink.clone());
     let view = screen.build(&mut app, win);
     app.tick();
@@ -231,6 +240,7 @@ fn ui_with(name: &str, registry: Registry, sink: Rc<Sink>) -> Ui {
         sink,
         activated,
         closed,
+        killed,
     }
 }
 
@@ -469,6 +479,19 @@ fn a_dialog_opened_on_close_is_brought_forward() {
 }
 
 #[test]
+fn a_dialog_opened_on_force_close_is_not_brought_forward() {
+    let mut ui = ui("force-asks", registry(&[("files", Some(2), &[7])]));
+    ui.emit(Shown);
+    let files = ui.cards()[0];
+    let kill = ui.card(files).kill_button();
+    ui.click(kill);
+    ui.set_registry(registry_with_dialogs(&[("files", Some(2), &[7], &[10])]));
+    let files = ui.cards()[0];
+    assert!(ui.card(files).closing(), "the kill comes anyway");
+    assert!(ui.activated.borrow().is_empty());
+}
+
+#[test]
 fn a_dialog_open_before_close_is_not_an_answer() {
     let mut ui = ui(
         "open-dialog",
@@ -485,6 +508,58 @@ fn a_dialog_open_before_close_is_not_an_answer() {
 }
 
 #[test]
+fn the_skull_kills_the_apps_processes_and_dims() {
+    let mut ui = ui(
+        "kill",
+        registry(&[("files", Some(2), &[7]), ("clock", Some(1), &[9])]),
+    );
+    ui.emit(Shown);
+    let files = ui.cards()[0];
+    let kill = ui.card(files).kill_button();
+    ui.click(kill);
+    assert_eq!(*ui.killed.borrow(), [pid(7)]);
+    assert!(ui.closed.borrow().is_empty(), "no close is asked first");
+    assert!(ui.activated.borrow().is_empty());
+    assert!(ui.card(files).closing());
+    ui.click(kill);
+    // A second press kills nothing more.
+    assert_eq!(ui.killed.borrow().len(), 1);
+}
+
+#[test]
+fn without_a_process_there_is_no_skull() {
+    let mut app = RunningApp {
+        key: AppKey::Window(id(5)),
+        entry: None,
+        windows: vec![id(5)],
+        dialogs: Vec::new(),
+        modal: false,
+        pids: Vec::new(),
+        front: id(5),
+        last_used: 1,
+        title: "Scratch".into(),
+    };
+    let mut ui = ui("no-pid", Registry::fixture(entries(), vec![app.clone()]));
+    ui.emit(Shown);
+    let card = ui.cards()[0];
+    let kill = ui.card(card).kill_button();
+    let display = ui.app.component::<LayoutStyle>(kill).unwrap().display;
+    assert_eq!(display, Display::Hidden);
+    ui.click(kill);
+    assert!(ui.killed.borrow().is_empty());
+    assert!(!ui.card(card).closing());
+
+    app.pids = vec![42];
+    ui.set_registry(Registry::fixture(entries(), vec![app]));
+    let card = ui.cards()[0];
+    let kill = ui.card(card).kill_button();
+    let display = ui.app.component::<LayoutStyle>(kill).unwrap().display;
+    assert_ne!(display, Display::Hidden);
+    ui.click(kill);
+    assert_eq!(*ui.killed.borrow(), [42]);
+}
+
+#[test]
 fn a_modal_dialog_already_open_is_brought_forward_not_closed() {
     let mut app = RunningApp {
         key: AppKey::Entry("files".into()),
@@ -492,7 +567,7 @@ fn a_modal_dialog_already_open_is_brought_forward_not_closed() {
         windows: vec![id(7)],
         dialogs: vec![id(10)],
         modal: true,
-        pids: Vec::new(),
+        pids: vec![pid(7)],
         front: id(7),
         last_used: 1,
         title: String::new(),

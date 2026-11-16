@@ -1,11 +1,13 @@
 //! Running apps: one card per running app, its icon, name and ✕ over a
 //! live preview the compositor draws into a hole in our layer surface.
 //!
-//! Cards scroll vertically; a card swiped sideways (either way) past
-//! `card::SWIPE_AWAY` closes its app, as does its ✕. Tapping a card
+//! Cards scroll sideways; a card swiped up past `card::SWIPE_AWAY` closes
+//! its app, as does its ✕. Its skull force closes the app: its processes
+//! get SIGTERM, then SIGKILL if they stay (see `kill`). Tapping a card
 //! brings the app to the front and signals [`screen::AppLaunched`].
 
 mod card;
+mod kill;
 mod thumbs;
 mod view;
 
@@ -20,6 +22,9 @@ use thumbs::{ThumbSink, WaylandThumbs};
 /// Does something to one window: activate it, or ask it to close.
 type WindowAction = Rc<dyn Fn(&mut App, ToplevelId)>;
 
+/// Kills an app's processes.
+type Killer = Rc<dyn Fn(&mut App, &[u32])>;
+
 /// The running-apps screen. Its window must be a layer surface for the
 /// previews, and the app must have `Registry` for any cards to show and
 /// `TimerModule` for closing them.
@@ -27,6 +32,7 @@ pub struct RunningApps {
     icon_dirs: Rc<IconDirs>,
     activator: WindowAction,
     closer: WindowAction,
+    killer: Killer,
     thumbs: Rc<dyn ThumbSink>,
 }
 
@@ -42,8 +48,15 @@ impl RunningApps {
             icon_dirs: Rc::new(icon_dirs),
             activator: Rc::new(activate_toplevel),
             closer: Rc::new(close_toplevel),
+            killer: Rc::new(kill::kill_processes),
             thumbs: Rc::new(WaylandThumbs::default()),
         }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn killer(mut self, f: impl Fn(&mut App, &[u32]) + 'static) -> Self {
+        self.killer = Rc::new(f);
+        self
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -73,7 +86,13 @@ impl Default for RunningApps {
 
 impl Screen for RunningApps {
     fn build(&self, app: &mut App, parent: NodeId) -> NodeId {
-        view::install(app, self.activator.clone(), self.closer.clone());
+        kill::install(app);
+        view::install(
+            app,
+            self.activator.clone(),
+            self.closer.clone(),
+            self.killer.clone(),
+        );
         let view = app
             .spawn(
                 parent,
