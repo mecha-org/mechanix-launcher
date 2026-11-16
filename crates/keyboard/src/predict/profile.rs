@@ -6,7 +6,8 @@ use std::collections::HashMap;
 use mecha_wayland::prelude::*;
 
 use super::{Dictionary, FLAT, LetterPrior, Predictor};
-use crate::layout::PredictionConfig;
+use crate::field::Field;
+use crate::layout::{Family, PredictionConfig};
 
 /// How prediction behaves for one kind of field.
 #[derive(Debug, Clone, PartialEq)]
@@ -24,30 +25,56 @@ pub(crate) struct Profile {
 
 /// The profile for each kind of field.
 pub(crate) struct Profiles {
-    default: Profile,
+    /// Ordinary text.
+    text: Profile,
+    /// Email addresses and URLs.
+    email_url: Profile,
+    /// Terminal input.
+    terminal: Profile,
+    /// Sensitive, numeric and phone fields: no knowledge, nothing learned.
+    off: Profile,
 }
 
 impl Profiles {
     /// Profiles derived from the layout's prediction block.
     pub(crate) fn from_config(cfg: &PredictionConfig) -> Profiles {
+        let strength = if cfg.enabled { cfg.strength } else { 0.0 };
+        let profile = |dictionary: &str, strength: f32| Profile {
+            predictor: Some(dictionary.to_string()),
+            strength,
+            popup: cfg.popup,
+            may_record: true,
+        };
         Profiles {
-            default: Profile {
-                predictor: Some(cfg.dictionary.clone()),
-                strength: if cfg.enabled { cfg.strength } else { 0.0 },
+            text: profile(&cfg.dictionary, strength),
+            // Addresses follow the word list less closely: half strength.
+            email_url: profile(&cfg.dictionary, strength * 0.5),
+            terminal: profile(&cfg.terminal_dictionary, strength),
+            off: Profile {
+                predictor: None,
+                strength: 0.0,
                 popup: cfg.popup,
-                may_record: true,
+                may_record: false,
             },
         }
     }
 
-    /// The profile for a field with this purpose and hints. Every field uses
-    /// the default for now.
-    pub(crate) fn select(
-        &self,
-        _purpose: ZwpTextInputV3ContentPurpose,
-        _hint: ZwpTextInputV3ContentHint,
-    ) -> &Profile {
-        &self.default
+    /// The profile for this field. Sensitive fields are always off.
+    pub(crate) fn select(&self, field: Field) -> &Profile {
+        if field.sensitive {
+            return &self.off;
+        }
+        match field.family {
+            Family::Text => &self.text,
+            Family::Email | Family::Url => &self.email_url,
+            Family::Terminal => &self.terminal,
+            _ => &self.off,
+        }
+    }
+
+    /// Every profile, for deciding which dictionaries are needed.
+    fn all(&self) -> [&Profile; 4] {
+        [&self.text, &self.email_url, &self.terminal, &self.off]
     }
 }
 
@@ -87,17 +114,20 @@ pub(crate) struct Prediction {
 impl Resource for Prediction {}
 
 impl Prediction {
-    /// Build from the layout's prediction block: loads the dictionary once and
-    /// registers it under its spec string. With prediction off (strength 0)
-    /// nothing is loaded and the flat predictor stands in.
+    /// Build from the layout's prediction block: loads each dictionary a
+    /// profile with strength above 0 refers to, once, under its spec string.
+    /// With prediction off nothing is loaded and the flat predictor stands in.
     pub(crate) fn from_config(cfg: &PredictionConfig) -> Prediction {
         let profiles = Profiles::from_config(cfg);
         let mut predictors: HashMap<String, Box<dyn Predictor>> = HashMap::new();
-        if profiles.default.strength > 0.0 {
-            predictors.insert(
-                cfg.dictionary.clone(),
-                Box::new(Dictionary::load(&cfg.dictionary)),
-            );
+        for profile in profiles.all() {
+            if profile.strength > 0.0
+                && let Some(key) = &profile.predictor
+            {
+                predictors
+                    .entry(key.clone())
+                    .or_insert_with(|| Box::new(Dictionary::load(key)));
+            }
         }
         Prediction {
             profiles,
@@ -108,12 +138,8 @@ impl Prediction {
 
     /// The profile and predictor for a field; a missing or unset predictor
     /// gives a flat one.
-    pub(crate) fn active(
-        &self,
-        purpose: ZwpTextInputV3ContentPurpose,
-        hint: ZwpTextInputV3ContentHint,
-    ) -> (&Profile, &dyn Predictor) {
-        let profile = self.profiles.select(purpose, hint);
+    pub(crate) fn active(&self, field: Field) -> (&Profile, &dyn Predictor) {
+        let profile = self.profiles.select(field);
         let predictor = profile
             .predictor
             .as_ref()
@@ -131,18 +157,21 @@ mod tests {
         PredictionConfig {
             enabled,
             strength: 0.7,
-            dictionary: "bundled".into(),
+            dictionary: "en".into(),
+            terminal_dictionary: "terminal".into(),
             popup: false,
         }
     }
 
-    const NONE: ZwpTextInputV3ContentHint = ZwpTextInputV3ContentHint::NONE;
+    fn field(family: Family, sensitive: bool) -> Field {
+        Field { family, sensitive }
+    }
 
     #[test]
-    fn default_profile_follows_config() {
+    fn text_uses_en_at_configured_strength() {
         let profiles = Profiles::from_config(&cfg(true));
-        let p = profiles.select(ZwpTextInputV3ContentPurpose::Normal, NONE);
-        assert_eq!(p.predictor.as_deref(), Some("bundled"));
+        let p = profiles.select(field(Family::Text, false));
+        assert_eq!(p.predictor.as_deref(), Some("en"));
         assert_eq!(p.strength, 0.7);
         assert!(!p.popup);
         assert!(p.may_record);
@@ -151,23 +180,58 @@ mod tests {
     #[test]
     fn disabled_config_gives_zero_strength() {
         let profiles = Profiles::from_config(&cfg(false));
-        let p = profiles.select(ZwpTextInputV3ContentPurpose::Normal, NONE);
-        assert_eq!(p.strength, 0.0);
+        for family in [Family::Text, Family::Email, Family::Terminal] {
+            assert_eq!(profiles.select(field(family, false)).strength, 0.0);
+        }
     }
 
     #[test]
-    fn every_purpose_selects_default_for_now() {
+    fn terminal_field_uses_terminal_dictionary() {
         let profiles = Profiles::from_config(&cfg(true));
-        let normal = profiles
-            .select(ZwpTextInputV3ContentPurpose::Normal, NONE)
-            .clone();
-        for purpose in [
-            ZwpTextInputV3ContentPurpose::Password,
-            ZwpTextInputV3ContentPurpose::Url,
-            ZwpTextInputV3ContentPurpose::Email,
-            ZwpTextInputV3ContentPurpose::Terminal,
-        ] {
-            assert_eq!(*profiles.select(purpose, NONE), normal);
+        let p = profiles.select(field(Family::Terminal, false));
+        assert_eq!(p.predictor.as_deref(), Some("terminal"));
+        assert_eq!(p.strength, 0.7);
+        assert!(p.may_record);
+    }
+
+    #[test]
+    fn sensitive_terminal_is_off_and_records_nothing() {
+        let profiles = Profiles::from_config(&cfg(true));
+        let p = profiles.select(field(Family::Terminal, true));
+        assert_eq!(p.predictor, None);
+        assert_eq!(p.strength, 0.0);
+        assert!(!p.may_record);
+    }
+
+    #[test]
+    fn password_is_off() {
+        let profiles = Profiles::from_config(&cfg(true));
+        let p = profiles.select(field(Family::Password, true));
+        assert_eq!((p.predictor.as_deref(), p.strength), (None, 0.0));
+        assert!(!p.may_record);
+        assert_eq!(
+            profiles.select(field(Family::Password, false)).strength,
+            0.0
+        );
+    }
+
+    #[test]
+    fn email_and_url_are_half_strength() {
+        let profiles = Profiles::from_config(&cfg(true));
+        for family in [Family::Email, Family::Url] {
+            let p = profiles.select(field(family, false));
+            assert_eq!(p.predictor.as_deref(), Some("en"));
+            assert_eq!(p.strength, 0.35);
+        }
+    }
+
+    #[test]
+    fn number_and_phone_are_off() {
+        let profiles = Profiles::from_config(&cfg(true));
+        for family in [Family::Number, Family::Phone] {
+            let p = profiles.select(field(family, false));
+            assert_eq!((p.predictor.as_deref(), p.strength), (None, 0.0));
+            assert!(!p.may_record);
         }
     }
 
@@ -175,16 +239,23 @@ mod tests {
     fn disabled_config_loads_no_dictionary() {
         let prediction = Prediction::from_config(&cfg(false));
         assert!(prediction.predictors.is_empty());
-        let (_, predictor) = prediction.active(ZwpTextInputV3ContentPurpose::Normal, NONE);
+        let (_, predictor) = prediction.active(field(Family::Text, false));
         assert_eq!(predictor.prior("th"), FLAT);
-        assert!(!Prediction::from_config(&cfg(true)).predictors.is_empty());
+    }
+
+    #[test]
+    fn enabled_config_loads_both_dictionaries() {
+        let prediction = Prediction::from_config(&cfg(true));
+        assert_eq!(prediction.predictors.len(), 2);
+        let (_, terminal) = prediction.active(field(Family::Terminal, false));
+        assert_ne!(terminal.prior("sys"), FLAT);
     }
 
     #[test]
     fn missing_predictor_is_flat() {
         let mut prediction = Prediction::from_config(&cfg(true));
         prediction.predictors.clear();
-        let (_, predictor) = prediction.active(ZwpTextInputV3ContentPurpose::Normal, NONE);
+        let (_, predictor) = prediction.active(field(Family::Text, false));
         assert_eq!(predictor.prior("th"), FLAT);
     }
 }

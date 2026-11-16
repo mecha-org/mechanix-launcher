@@ -59,6 +59,9 @@ impl Dictionary {
     pub(crate) fn bundled(name: &str) -> Option<Dictionary> {
         match name {
             "en" => Some(Self::parse(include_str!("../../resources/dict/en.tsv"))),
+            "terminal" => Some(Self::parse(include_str!(
+                "../../resources/dict/terminal.tsv"
+            ))),
             _ => None,
         }
     }
@@ -193,6 +196,15 @@ mod tests {
         let d = Dictionary::load("/nonexistent/dictionary.tsv");
         assert_eq!(d.len(), 0);
         assert_eq!(d.prior("th"), FLAT);
+    }
+
+    #[test]
+    fn bundled_terminal_loads() {
+        let d = Dictionary::bundled("terminal").expect("terminal is bundled");
+        assert!(d.len() >= 150, "only {} words", d.len());
+        let prior = d.prior("sys");
+        assert!(prior[idx('t')] > prior[idx('q')]);
+        assert!(prior[idx('t')] > FLAT[idx('t')]);
     }
 
     #[test]

@@ -4,8 +4,10 @@
 //! into keystrokes and [`KeyFeedback`] for the key widgets, which only draw.
 
 mod defer;
+mod flick;
 mod flow;
 mod glue;
+pub(crate) mod long_press;
 mod resolve;
 mod tracker;
 
@@ -18,7 +20,7 @@ use crate::layout::{KeyAction, KeyFace, Keymap};
 use crate::protocol::virtual_keyboard::keysym_text;
 use crate::widget::key::Key;
 
-pub(crate) use glue::{TouchState, attach, view_switched};
+pub(crate) use glue::{TouchState, abort, attach, long_pressed};
 pub(crate) use tracker::TouchTracker;
 
 /// The input layer's word to the UI: a key gained or lost the pressed state.
@@ -39,22 +41,25 @@ pub(crate) struct KeyEntry {
     pub action: KeyAction,
     /// The key's lowercase `a`-`z` letter, if it types one.
     pub letter: Option<char>,
+    /// The key's long-press choices (lowercase), if any.
+    pub choices: Vec<String>,
 }
 
 impl KeyEntry {
-    /// The entry for a spawned key with this action.
-    pub(crate) fn new(node: Handle<Key>, action: KeyAction) -> Self {
+    /// The entry for a spawned key with this action and long-press choices.
+    pub(crate) fn new(node: Handle<Key>, action: KeyAction, choices: Vec<String>) -> Self {
         let letter = letter_of(&action);
         Self {
             node,
             action,
             letter,
+            choices,
         }
     }
 }
 
 /// The single character a key's action types, if it types exactly one.
-fn single_char(action: &KeyAction) -> Option<char> {
+pub(crate) fn single_char(action: &KeyAction) -> Option<char> {
     let text = match action {
         KeyAction::EmitKeysym(ks) => keysym_text(*ks)?,
         KeyAction::EmitText(t) => t.clone(),
@@ -125,12 +130,10 @@ mod tests {
     #[test]
     fn letter_of_counts_a_to_z_lowercased() {
         let keymap = layout::load_keymap();
-        assert_eq!(letter_of(&key(&keymap, "upper", "Q").action), Some('q'));
         assert_eq!(letter_of(&key(&keymap, "base", "q").action), Some('q'));
-        assert_eq!(letter_of(&key(&keymap, "numbers", "1").action), None);
+        assert_eq!(letter_of(&key(&keymap, "symbols", "1").action), None);
         assert_eq!(letter_of(&key(&keymap, "base", ".").action), None);
         assert_eq!(letter_of(&key(&keymap, "base", " ").action), None);
-        assert_eq!(letter_of(&key(&keymap, "eschars", "ä").action), None);
     }
 
     #[test]
@@ -140,8 +143,8 @@ mod tests {
         assert_eq!(flags.len(), keymap.views.len());
         let flag = |name: &str| flags[keymap.views.iter().position(|v| v.name == name).unwrap()];
         assert!(flag("base"));
-        assert!(flag("upper"));
-        assert!(!flag("numbers"));
+        assert!(flag("terminal"));
+        assert!(!flag("number"));
         assert!(!flag("symbols"));
     }
 
@@ -150,11 +153,7 @@ mod tests {
         let keymap = layout::load_keymap();
         assert_eq!(popup_text(key(&keymap, "base", "a")), Some("a".to_string()));
         assert_eq!(
-            popup_text(key(&keymap, "upper", "A")),
-            Some("A".to_string())
-        );
-        assert_eq!(
-            popup_text(key(&keymap, "numbers", "1")),
+            popup_text(key(&keymap, "symbols", "1")),
             Some("1".to_string())
         );
         assert_eq!(popup_text(key(&keymap, "base", " ")), None);

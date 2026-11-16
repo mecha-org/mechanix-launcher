@@ -1,0 +1,6 @@
+Terminal word list for the keyboard's next-letter predictor.
+
+Written by hand for this project (common shell commands, subcommands, flags
+and paths); no third-party word list was used. The counts are hand-ranked,
+not measured: earlier entries are more common. Licensed under the BSD-3-Clause
+licence, the same as the keyboard crate.

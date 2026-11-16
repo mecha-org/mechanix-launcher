@@ -93,11 +93,12 @@ pub(crate) fn commit_text(state: &InputMethodState, wl: &mut Wayland, text: &str
     true
 }
 
-/// `Signal`: a text field gained focus, or changed purpose while focused.
-/// The keyboard picks the view to show from the purpose.
+/// `Signal`: a text field gained focus, or changed purpose or hint while
+/// focused. The keyboard picks the view to show from the purpose and hint.
 #[derive(Debug, Clone, Copy)]
 pub struct TextInputFocused {
     pub purpose: ZwpTextInputV3ContentPurpose,
+    pub hint: ZwpTextInputV3ContentHint,
 }
 impl Signal for TextInputFocused {}
 
@@ -195,11 +196,13 @@ fn on_input_method_event(app: &mut App, event: &ZwpInputMethodV2Event) {
                 let activated = std::mem::take(&mut st.pending_activate);
                 surrounding = st.pending_surrounding.take();
                 let prev = std::mem::replace(&mut st.current, next);
-                // A new field (activate, or a purpose change) or none at all
-                // (deactivate): the word being tracked no longer applies.
+                // A new field (activate, or a purpose or hint change) or none
+                // at all (deactivate): the word being tracked no longer
+                // applies.
                 reset_context = activated
                     || (prev.active && !st.current.active)
-                    || prev.purpose != st.current.purpose;
+                    || prev.purpose != st.current.purpose
+                    || prev.hint != st.current.hint;
                 st.serial = st.serial.wrapping_add(1);
                 let now = &st.current;
                 tracing::info!(
@@ -208,9 +211,11 @@ fn on_input_method_event(app: &mut App, event: &ZwpInputMethodV2Event) {
                     "input-method: state applied"
                 );
 
-                if now.active && (activated || !prev.active || prev.purpose != now.purpose) {
+                let changed = prev.purpose != now.purpose || prev.hint != now.hint;
+                if now.active && (activated || !prev.active || changed) {
                     focused = Some(TextInputFocused {
                         purpose: now.purpose,
+                        hint: now.hint,
                     });
                 }
                 // Only an activate/deactivate moves the surface, so other
@@ -398,5 +403,56 @@ mod tests {
             ZwpTextInputV3ContentHint::from_bits_truncate(0x40)
         );
         assert_eq!(cur.purpose, ZwpTextInputV3ContentPurpose::Email);
+    }
+
+    /// Every `TextInputFocused` signalled, in order.
+    #[derive(Default)]
+    struct Focused(Vec<ZwpTextInputV3ContentHint>);
+    impl Resource for Focused {}
+
+    fn record_focus(app: &mut App, f: &TextInputFocused) {
+        app.resource_mut::<Focused>().0.push(f.hint);
+    }
+
+    /// Same purpose as the default field, `hidden_text` toggled on.
+    fn hidden_text(input_method: ZwpInputMethodV2) -> ZwpInputMethodV2Event {
+        ZwpInputMethodV2Event::ContentType {
+            input_method,
+            hint: ZwpTextInputV3ContentHint::HIDDENTEXT,
+            purpose: InputMethodContext::default().purpose,
+        }
+    }
+
+    #[test]
+    fn hint_only_change_refocuses_and_drops_the_word() {
+        let mut app = app();
+        app.insert_resource(Focused::default());
+        app.system(record_focus);
+        send(&mut app, &[activate, surrounding, done]);
+        app.flush();
+        assert_eq!(app.resource::<Focused>().0.len(), 1);
+        assert_eq!(app.resource::<TypingContext>().prefix(), "th");
+
+        // The field toggles hidden_text, purpose unchanged.
+        send(&mut app, &[hidden_text, done]);
+        app.flush();
+        assert_eq!(
+            app.resource::<Focused>().0,
+            vec![
+                ZwpTextInputV3ContentHint::NONE,
+                ZwpTextInputV3ContentHint::HIDDENTEXT
+            ],
+            "the field is re-evaluated with its new hint"
+        );
+        assert_eq!(
+            app.resource::<TypingContext>().prefix(),
+            "",
+            "the word straddling the toggle is dropped"
+        );
+
+        // A done with nothing changed does not refocus.
+        send(&mut app, &[done]);
+        app.flush();
+        assert_eq!(app.resource::<Focused>().0.len(), 2);
     }
 }
