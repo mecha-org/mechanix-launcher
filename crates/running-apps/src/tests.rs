@@ -34,7 +34,7 @@ struct Sink {
     next: Cell<ThumbKey>,
     /// Windows whose commit was requested, in order.
     commits: RefCell<Vec<NodeId>>,
-    /// Stands for a compositor without `phosh_private`.
+    /// Stands for a compositor without thumbnail views.
     unavailable: Cell<bool>,
 }
 

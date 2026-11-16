@@ -18,7 +18,7 @@ const STEP: i32 = 5;
 pub(crate) const PENDING_WINDOW_MS: u32 = 500;
 
 /// Grabs the volume keys and steps the volume with [`SetVolume`]. Install
-/// after `WaylandModule`. Without `phosh_private` it does nothing.
+/// after `WaylandModule`. Without `mx_accelerators_v1` it does nothing.
 pub struct VolumeKeysModule;
 
 impl Module for VolumeKeysModule {

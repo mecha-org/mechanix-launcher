@@ -390,7 +390,7 @@ fn sync_thumbs(app: &mut App, view: NodeId) {
 /// The preview box keeps the window's aspect: apps on the phone fill the
 /// output, and this screen's window does too. A card takes most of the
 /// width, narrower when header and box would not fit the height. With no
-/// previews to show (a compositor without `phosh_private`) there is no
+/// previews to show (a compositor without thumbnail views) there is no
 /// box: the cards are headers only.
 fn fit_holes(app: &mut App, _: &LayoutDone) {
     for view in views(app) {
