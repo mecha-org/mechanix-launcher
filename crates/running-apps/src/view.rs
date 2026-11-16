@@ -225,11 +225,7 @@ fn wanted(app: &mut App, view: NodeId) -> Vec<Want> {
             .iter()
             .map(|a| {
                 let entry = a.entry.and_then(|i| registry.entries().get(i));
-                let name = match (entry, &a.key) {
-                    (Some(e), _) => e.name.clone(),
-                    (None, AppKey::AppId(id)) => id.clone(),
-                    (None, AppKey::Window(_)) => a.title.clone(),
-                };
+                let name = entry.map_or_else(|| a.title.clone(), |e| e.name.clone());
                 let file = entry
                     .and_then(|e| e.icon.as_deref())
                     .and_then(|i| dirs.find(i));

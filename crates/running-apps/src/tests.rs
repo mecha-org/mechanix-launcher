@@ -124,12 +124,22 @@ fn registry(apps: &[(&str, Option<usize>, &[u32])]) -> Registry {
         .iter()
         .enumerate()
         .map(|(i, &(app_id, entry, windows))| RunningApp {
-            key: AppKey::AppId(app_id.into()),
+            key: match entry {
+                Some(_) => AppKey::Entry(app_id.into()),
+                None => AppKey::Process(windows[0]),
+            },
             entry,
             windows: windows.iter().map(|&n| id(n)).collect(),
+            dialogs: Vec::new(),
+            modal: false,
+            pids: Vec::new(),
             front: id(windows[0]),
             last_used: 100 - i as u64,
-            title: String::new(),
+            title: if entry.is_some() {
+                String::new()
+            } else {
+                app_id.into()
+            },
         })
         .collect();
     Registry::fixture(entries(), apps)
@@ -676,6 +686,9 @@ fn window_keyed_card_follows_its_title() {
                 key: AppKey::Window(id(5)),
                 entry: None,
                 windows: vec![id(5)],
+                dialogs: Vec::new(),
+                modal: false,
+                pids: Vec::new(),
                 front: id(5),
                 last_used: 1,
                 title: title.into(),

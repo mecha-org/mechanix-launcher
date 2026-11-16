@@ -715,9 +715,12 @@ mod tests {
         let apps = running
             .iter()
             .map(|&(app_id, n)| RunningApp {
-                key: AppKey::AppId(app_id.into()),
+                key: AppKey::Entry(app_id.into()),
                 entry: Some(0),
                 windows: vec![ToplevelId::from_raw(n)],
+                dialogs: Vec::new(),
+                modal: false,
+                pids: Vec::new(),
                 front: ToplevelId::from_raw(n),
                 last_used: 1,
                 title: String::new(),
