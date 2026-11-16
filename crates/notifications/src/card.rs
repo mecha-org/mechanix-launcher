@@ -1,7 +1,9 @@
 use crate::card_drag::{CardDrag, Moved, Settle};
 use crate::card_icon::{CardIconBuilder, UpdateIcon};
 use crate::card_options::{self, CardOption, CardOptions, CardOptionsBuilder, CardOptionsPressed};
+use crate::count_badge::{CountBadge, CountBadgeBuilder};
 use crate::dbus_spec::{NOTIFICATIONS_EXPIRY, NOTIFIFICATION_DISMISSED};
+use crate::group::OpenGroup;
 use crate::millis::Millis;
 use crate::notification_store::Entry;
 use crate::notify_signal::NotificationSignal::{RemoveNotification, ShowOptions};
@@ -23,6 +25,7 @@ pub struct Card {
     drag: CardDrag,
     content: Handle<Div>,
     options: Handle<CardOptions>,
+    pub badge: Handle<CountBadge>,
 }
 
 pub struct UpdateCard(pub Entry);
@@ -30,6 +33,9 @@ impl Event for UpdateCard {}
 
 pub struct SnoozeCard(pub Millis);
 impl Event for SnoozeCard {}
+
+pub struct ToggleCard;
+impl Event for ToggleCard {}
 
 impl Build for CardBuilder {
     type Widget = Card;
@@ -51,6 +57,9 @@ impl Widget for Card {
                 image: b.entry.notification.image.take(),
             },
         );
+        let badge = s.spawn(icon, CountBadgeBuilder { count: 1 });
+        let style = s.component::<LayoutStyle>(badge).unwrap().clone();
+        *s.component_mut::<LayoutStyle>(badge).unwrap() = badge_position(style);
 
         let on_expire = move |ctx: &mut Context<'_, Card>, _: &Timeout| {
             ctx.signal(RemoveNotification(b.entry.id, NOTIFICATIONS_EXPIRY));
@@ -145,6 +154,11 @@ impl Widget for Card {
                 }
                 if ctx.me().drag.offset() < 0.0 {
                     set_offset(ctx, 0.0);
+                    return;
+                }
+                let me = ctx.handle();
+                if let Some(cards) = ctx.tree().parent(me) {
+                    ctx.emit(OpenGroup, cards);
                 }
             });
 
@@ -170,6 +184,15 @@ impl Widget for Card {
             };
         });
 
+        s.on::<ToggleCard>(me, |ctx, _| {
+            let shown = ctx.style().display != Display::Hidden;
+            ctx.set_display(if shown {
+                Display::Hidden
+            } else {
+                Display::Flex
+            });
+        });
+
         let snooze = s.add_timeout(Duration::MAX, |ctx, _| {
             ctx.component_mut::<LayoutStyle>().unwrap().display = Display::Flex;
         });
@@ -185,6 +208,7 @@ impl Widget for Card {
             drag: CardDrag::default(),
             content,
             options,
+            badge,
         }
     }
 }
@@ -203,6 +227,13 @@ fn ago(t: SystemTime) -> String {
         3_600..86_400 => format!("{}h", secs / 3_600),
         _ => format!("{}d", secs / 86_400),
     }
+}
+
+fn badge_position(style: LayoutStyle) -> LayoutStyle {
+    let half = -size::COUNT_BADGE / 2.0;
+    style
+        .absolute()
+        .inset(Insets::new(px(half), px(half), auto(), auto()))
 }
 
 fn content_style(offset: f32) -> LayoutStyle {

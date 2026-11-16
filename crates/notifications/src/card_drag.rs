@@ -76,7 +76,7 @@ impl CardDrag {
             return Moved::Claim;
         }
 
-        self.offset = (press.card_offset + dx).clamp(-width, 0.0);
+        self.offset = (press.card_offset + dx).clamp(-width, width);
         Moved::Slide(self.offset)
     }
 
@@ -103,14 +103,14 @@ impl CardDrag {
 
     fn settle(&mut self, width: f32) -> Settle {
         let pulled = if width > 0.0 {
-            -self.offset / width
+            self.offset / width
         } else {
             0.0
         };
         if pulled >= DISMISS {
             return Settle::Dismiss;
         }
-        self.offset = if pulled >= REVEAL_MIN {
+        self.offset = if -pulled >= REVEAL_MIN {
             -OPEN_OFFSET.min(width * REVEAL_MAX)
         } else {
             0.0

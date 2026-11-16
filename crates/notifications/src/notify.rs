@@ -3,7 +3,7 @@ use crate::image::{self, Image};
 use crate::markup::Markup;
 use crate::millis::Millis;
 use crate::{
-    notification_store::{Entry, NotificationStore},
+    notification_store::NotificationStore,
     notify_signal::NotificationSignal::{AddNotification, UpdateNotification},
 };
 use mecha_wayland::prelude::*;
@@ -79,31 +79,20 @@ pub fn append_notifications(app: &mut App, notify: &Notify) -> u32 {
         return id;
     }
     let id = add_notification(app, notify);
-    app.signal(AddNotification(id));
+    app.signal(AddNotification(id, notify.notification.app_name.clone()));
     id
 }
 
 fn replace_notification(app: &mut App, notify: &Notify) -> Option<u32> {
     let mut notifications_store = app.resource_mut::<NotificationStore>();
-    notify.replaces_id.and_then(|replaces_id| {
-        let entry = notifications_store
-            .entries
-            .iter_mut()
-            .find(|entry| entry.id == replaces_id)?;
-        entry.notification = notify.notification.clone();
-        entry.received_time = SystemTime::now();
-        Some(replaces_id)
-    })
+    let replaces_id = notify.replaces_id?;
+    let entry = notifications_store.get_mut(replaces_id)?;
+    entry.notification = notify.notification.clone();
+    entry.received_time = SystemTime::now();
+    Some(replaces_id)
 }
 
 fn add_notification(app: &mut App, notify: &Notify) -> u32 {
-    let mut notifications_store = app.resource_mut::<NotificationStore>();
-    notifications_store.next_id += 1;
-    let id = notifications_store.next_id;
-    notifications_store.entries.push(Entry {
-        id,
-        received_time: SystemTime::now(),
-        notification: notify.notification.clone(),
-    });
-    id
+    app.resource_mut::<NotificationStore>()
+        .add(notify.notification.clone())
 }

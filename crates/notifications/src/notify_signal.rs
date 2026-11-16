@@ -1,7 +1,8 @@
-use crate::card::{Card, CardBuilder, SnoozeCard, UpdateCard};
-use crate::card_list::CardList;
+use crate::card::{Card, SnoozeCard, UpdateCard};
+use crate::card_list::{AddEntry, CardList, ClearGroup};
 use crate::dbus::{DbusSignal, emit_signal};
 use crate::dbus_spec::NOTIFIFICATION_DISMISSED;
+use crate::group::RemoveCard;
 use crate::millis::Millis;
 use crate::notification_store::NotificationStore;
 use crate::notifications::NotificationsCenter;
@@ -11,30 +12,25 @@ use mecha_wayland::prelude::*;
 
 // this is app wide signal, not the the dbus signal
 pub enum NotificationSignal {
-    AddNotification(u32),
+    AddNotification(u32, String),
     RemoveNotification(u32, u32),
     UpdateNotification(u32),
     CloseAllNotifications,
+    CloseGroupNotifications(String),
     SnoozeNotifiation(u32, u32),
     ShowOptions(u32, Rect),
 }
 
 pub fn notify_signal(app: &mut App, notify_signal: &NotificationSignal) {
     match notify_signal {
-        NotificationSignal::AddNotification(id) => {
+        NotificationSignal::AddNotification(id, _) => {
             let Some((list, _)) = app.widgets::<CardList>().next() else {
                 return;
             };
-            let Some(entry) = app
-                .resource::<NotificationStore>()
-                .entries
-                .iter()
-                .find(|e| e.id == *id)
-                .cloned()
-            else {
+            let Some(entry) = app.resource::<NotificationStore>().get(*id).cloned() else {
                 return;
             };
-            app.spawn(list, CardBuilder { entry });
+            app.emit(AddEntry(entry), list);
         }
         NotificationSignal::UpdateNotification(id) => {
             let Some((card, _)) = app
@@ -43,21 +39,13 @@ pub fn notify_signal(app: &mut App, notify_signal: &NotificationSignal) {
             else {
                 return;
             };
-            let Some(entry) = app
-                .resource::<NotificationStore>()
-                .entries
-                .iter()
-                .find(|e| e.id == *id)
-                .cloned()
-            else {
+            let Some(entry) = app.resource::<NotificationStore>().get(*id).cloned() else {
                 return;
             };
             app.emit(UpdateCard(entry), card);
         }
         NotificationSignal::RemoveNotification(id, reason) => {
-            app.resource_mut::<NotificationStore>()
-                .entries
-                .retain(|e| e.id != *id);
+            app.resource_mut::<NotificationStore>().remove(*id);
             let Some((card, _)) = app
                 .widgets::<Card>()
                 .find(|(_, card)| card.notification_id == *id)
@@ -65,15 +53,15 @@ pub fn notify_signal(app: &mut App, notify_signal: &NotificationSignal) {
                 return;
             };
             emit_signal(app, &DbusSignal::NotificationClosed(*id, *reason));
-            app.remove(card);
+
+            if let Some(group) = app.parent(card).and_then(|cards| app.parent(cards)) {
+                app.emit(RemoveCard(card), group);
+            } else {
+                app.remove(card);
+            }
         }
         NotificationSignal::CloseAllNotifications => {
-            let removed_ids: Vec<u32> = app
-                .resource_mut::<NotificationStore>()
-                .entries
-                .drain(..)
-                .map(|x| x.id)
-                .collect();
+            let removed_ids: Vec<u32> = app.resource_mut::<NotificationStore>().drain_ids();
 
             let Some((list, _)) = app.widgets::<CardList>().next() else {
                 return;
@@ -116,6 +104,21 @@ pub fn notify_signal(app: &mut App, notify_signal: &NotificationSignal) {
                 },
                 menu,
             );
+        }
+        NotificationSignal::CloseGroupNotifications(app_name) => {
+            let removed_ids = app.resource_mut::<NotificationStore>().remove_app(app_name);
+
+            let Some((list, _)) = app.widgets::<CardList>().next() else {
+                return;
+            };
+            app.emit(ClearGroup(app_name.clone()), list);
+
+            for id in removed_ids {
+                emit_signal(
+                    app,
+                    &DbusSignal::NotificationClosed(id, NOTIFIFICATION_DISMISSED),
+                );
+            }
         }
     }
 }
