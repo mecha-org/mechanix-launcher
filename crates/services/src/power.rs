@@ -20,6 +20,12 @@ impl Signal for Restart {}
 pub struct Suspend;
 impl Signal for Suspend {}
 
+/// End this session: logind stops every process in it, the shell
+/// included, and the display manager takes over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LogOut;
+impl Signal for LogOut {}
+
 struct PowerStatus {
     pending: Option<(CallId, &'static str)>,
 }
@@ -40,6 +46,7 @@ impl Module for PowerModule {
                     MethodCall::new(LOGIND, MANAGER_PATH, MANAGER, "Suspend").body(&(false,));
                 app.resource_mut::<DBus>().system().send_no_reply(call);
             })
+            .system(on_log_out)
             .system(on_reply)
             .system(on_disconnect);
     }
@@ -65,6 +72,18 @@ fn request(app: &mut App, method: &'static str) {
             .allow_interactive_auth(),
     );
     app.resource_mut::<PowerStatus>().pending = Some((call, method));
+}
+
+/// `loginctl terminate-session <id>`, with the id `mechanix-session`
+/// exported; without it, logind's `auto`.
+fn on_log_out(app: &mut App, _: &LogOut) {
+    let id = std::env::var("XDG_SESSION_ID")
+        .ok()
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| "auto".into());
+    let call =
+        MethodCall::new(LOGIND, MANAGER_PATH, MANAGER, "TerminateSession").body(&(id.as_str(),));
+    app.resource_mut::<DBus>().system().send_no_reply(call);
 }
 
 fn on_reply(app: &mut App, event: &MethodReply) {
