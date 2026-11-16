@@ -5,7 +5,7 @@ use mecha_wayland::prelude::*;
 
 use services::BatteryPercentageChanged;
 
-use super::{Borders, build_tile, label_spacer};
+use super::{Borders, frame, label_spacer};
 use crate::util::load_icon;
 
 /// One icon per 10% step, index 0 = 10% … index 9 = 100%.
@@ -25,6 +25,7 @@ const LEVELS: [&[u8]; 10] = [
 pub struct Battery {
     pub icon: Handle<Icon>,
     pub percentage: Handle<Text>,
+    spacer: Handle<Div>,
     levels: [SpriteId; 10],
 }
 
@@ -43,16 +44,22 @@ impl Widget for Battery {
     fn build(b: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
         let levels = LEVELS.map(|svg| load_icon(&mut s.resource_mut::<Atlas>(), svg));
 
-        let icon = build_tile(me, s, LEVELS[0], b.borders);
+        frame(me, s, b.borders);
+        let icon = s.spawn(
+            me,
+            icon(levels[0])
+                .style(LayoutStyle::default().shrink(0.0))
+                .color(s.color(ColorRole::OnSecondaryFixedVariant)),
+        );
         let spacer = label_spacer(me, s);
-        s.component_mut::<LayoutStyle>(spacer).unwrap().display = Display::Flex;
+
         let percentage = s.spawn(
             me,
-            text("N/A")
+            text("")
                 .variant(TextVariant::LabelLarge)
                 .weight(FontWeight::Regular)
                 .vertical_trim(VerticalTrim::CapHeight)
-                .style(LayoutStyle::default().shrink(0.0))
+                .style(LayoutStyle::default().shrink(0.0).hidden())
                 .color(ColorRole::OnSurface),
         );
 
@@ -63,6 +70,7 @@ impl Widget for Battery {
         Battery {
             icon,
             percentage,
+            spacer,
             levels,
         }
     }
@@ -82,20 +90,38 @@ pub trait BatteryContext {
 
 impl BatteryContext for Context<'_, Battery> {
     fn set_percentage(&mut self, percentage: Option<u8>) {
-        let label = match percentage {
-            Some(value) => format!("{value}%"),
-            None => "N/A".to_owned(),
+        let (display, icon_colour) = if percentage.is_some() {
+            (Display::Flex, self.color(ColorRole::OnSurface))
+        } else {
+            (
+                Display::Hidden,
+                self.color(ColorRole::OnSecondaryFixedVariant),
+            )
         };
-        let (icon, text, sprite) = {
+
+        let label = percentage
+            .map(|value| format!("{value}%"))
+            .unwrap_or_default();
+
+        let (icon, text, spacer, sprite) = {
             let me = self.me();
-            (me.icon, me.percentage, me.levels[level_index(percentage)])
+            (
+                me.icon,
+                me.percentage,
+                me.spacer,
+                me.levels[level_index(percentage)],
+            )
         };
-        let icon_color = self.color(ColorRole::OnSurface);
+
         if let Some(mut ic) = self.at(icon) {
             ic.set_sprite(sprite);
-            ic.set_color(icon_color);
+            ic.set_color(icon_colour);
+        }
+        if let Some(mut gap) = self.at(spacer) {
+            gap.set_display(display);
         }
         if let Some(mut txt) = self.at(text) {
+            txt.set_display(display);
             txt.set_text(label);
         }
     }

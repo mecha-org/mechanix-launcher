@@ -1,7 +1,7 @@
 use mecha_wayland::prelude::*;
 
-/// Height of the strip at the bottom of the panel that holds the handle.
-pub const DRAG_HANDLE_HEIGHT: f32 = 48.0;
+/// Height of the handle strip as a percentage of the panel height.
+pub const DRAG_HANDLE_HEIGHT_PERCENT: f32 = 4.47;
 const BAR_WIDTH: f32 = 32.0;
 const BAR_HEIGHT: f32 = 4.0;
 
@@ -23,7 +23,7 @@ impl Widget for DragHandle {
 
     fn build(_: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
         *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
-            .size(percent(100.0), px(DRAG_HANDLE_HEIGHT))
+            .size(percent(100.0), percent(DRAG_HANDLE_HEIGHT_PERCENT))
             .shrink(0.0)
             .center();
 

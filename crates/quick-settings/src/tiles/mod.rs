@@ -14,11 +14,11 @@ pub use bluetooth::BluetoothBuilder;
 pub use keep_awake::KeepAwakeTileBuilder;
 pub use wifi::WifiBuilder;
 
-pub(crate) const MAX_TILE_HEIGHT: f32 = 106.0;
+pub(crate) const MAX_TILE_HEIGHT: f32 = 98.0;
 pub(crate) const DOT_RADIUS: f32 = 5.0;
 
 /// Preferred icon/label spacing; the spacer yields before either content item.
-const ICON_LABEL_GAP: f32 = 20.0;
+const ICON_LABEL_GAP: f32 = 8.0;
 
 /// Starts hidden; each tile controls visibility alongside its label.
 pub(super) fn label_spacer<W: Widget>(me: Handle<W>, s: &mut Spawner<'_, W>) -> Handle<Div> {
@@ -66,7 +66,7 @@ pub(super) fn frame<W: Widget>(me: Handle<W>, s: &mut Spawner<'_, W>, borders: B
         .grow(1.0)
         .shrink(0.0)
         .min_width(px(0.0))
-        .max_width(percent(20.0))
+        .max_width(percent(25.0))
         .column()
         .center();
     let border_color = s.color(ColorRole::SecondaryFixedDim);
@@ -96,7 +96,10 @@ pub(super) fn build_tile<W: Widget>(
 mod tests {
     use super::*;
     use mecha_wayland::mechanix_widgets::prelude::FontBook;
-    use services::{APUpdate, BluetoothState, BluetoothStateChanged, StateUpdate, WifiState};
+    use services::{
+        APUpdate, BatteryPercentageChanged, BluetoothState, BluetoothStateChanged, StateUpdate,
+        WifiState,
+    };
 
     #[test]
     fn label_spacers_yield_to_contents_and_disappear_with_hidden_labels() {
@@ -110,7 +113,7 @@ mod tests {
         app.insert_resource(atlas);
         app.insert_resource(FontBook::new(font));
         let size = |height| LayoutStyle::default().row().size(px(308.0), px(height));
-        let window = app.spawn(app.root(), window().layout(size(106.0)));
+        let window = app.spawn(app.root(), window().layout(size(MAX_TILE_HEIGHT)));
         let wifi = app.spawn(
             window,
             WifiBuilder {
@@ -151,6 +154,12 @@ mod tests {
             },
             bluetooth,
         );
+        app.emit(
+            BatteryPercentageChanged {
+                percentage: Some(42),
+            },
+            battery,
+        );
         let settle = |app: &mut App| {
             for _ in 0..3 {
                 app.tick();
@@ -162,16 +171,17 @@ mod tests {
             let children = app.children(tile).unwrap();
             let (icon, spacer, label) = (children[0], children[1], children[2]);
             let label_height = rect(&app, label).height();
-            let minimum = 32.0 + label_height;
-            for height in [106.0, 57.0, minimum, 106.0] {
+            let minimum = 24.0 + label_height;
+            for height in [MAX_TILE_HEIGHT, 57.0, minimum, MAX_TILE_HEIGHT] {
                 *app.component_mut::<LayoutStyle>(window).unwrap() = size(height);
                 settle(&mut app);
                 let tile = rect(&app, tile);
                 let icon = rect(&app, icon);
                 let gap = rect(&app, spacer);
                 let label = rect(&app, label);
-                assert_eq!(icon.height(), 32.0);
-                assert_eq!(label.height(), label_height);
+                assert_eq!(icon.height(), 24.0);
+                // Rounding to whole pixels may move the label's edges by one.
+                assert!((label.height() - label_height).abs() <= 1.0, "{label:?}");
                 let expected_gap = (height - minimum).clamp(0.0, ICON_LABEL_GAP);
                 assert!((gap.height() - expected_gap).abs() <= 1.0, "{gap:?}");
                 assert!(icon.y() >= tile.y(), "{tile:?} {icon:?}");
@@ -206,8 +216,14 @@ mod tests {
                 },
                 bluetooth,
             );
+            app.emit(
+                BatteryPercentageChanged {
+                    percentage: connected.then_some(42),
+                },
+                battery,
+            );
             settle(&mut app);
-            for tile in [wifi.id(), bluetooth.id()] {
+            for tile in [wifi.id(), bluetooth.id(), battery.id()] {
                 let children = app.children(tile).unwrap();
                 for &child in &children[1..=2] {
                     assert_eq!(
