@@ -51,6 +51,12 @@ fn on_restart(app: &mut App, _: &Restart) {
     request(app, "Reboot");
 }
 
+// FIXME: this ends the session at once: apps are killed with no chance to
+// save. Power-off, reboot and the logout still to come should share one
+// session ending flow, offered over D-Bus so a terminal can ask for it too:
+// ask the apps first (the portal's Inhibit monitor; whoever holds a logout
+// inhibitor goes in a prompt to go ahead or cancel), ask each window to
+// close and wait a little, and only then ask logind.
 fn request(app: &mut App, method: &'static str) {
     if app.resource::<PowerStatus>().pending.is_some() {
         return;
