@@ -715,6 +715,7 @@ mod tests {
             icon: None,
             startup_wm_class: None,
             path: PathBuf::from("/usr/share/applications/chromium.desktop"),
+            dbus_activatable: false,
         }];
         let apps = running
             .iter()

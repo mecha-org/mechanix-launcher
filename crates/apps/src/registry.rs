@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use mecha_wayland::prelude::*;
 use screen::Shown;
 
+use crate::units::scope_app_id;
 use crate::{DesktopApp, scan};
 
 /// What identifies a running app.
@@ -49,7 +50,7 @@ pub struct RunningApp {
 /// 1. its parent's app, if it has a parent: it is one of its dialogs;
 /// 2. the entry its app id matches ([`match_entry`]);
 /// 3. the entry the app id of the systemd unit it runs in matches
-///    (`scope_app`, from its pid; see [`unit_app_id`]);
+///    (`scope_app`, from its pid; see [`unit_app_id`](crate::unit_app_id));
 /// 4. the app of another window of its process;
 /// 5. its process, or itself when its pid is unknown.
 ///
@@ -138,69 +139,6 @@ pub fn group(
     // Stable, so equally recent apps keep the order they were first seen in.
     apps.sort_by_key(|a| Reverse(a.last_used));
     apps
-}
-
-/// The app id in the name of the systemd unit `pid` runs in, when that is
-/// an app's unit; see [`unit_app_id`].
-pub fn scope_app_id(pid: u32) -> Option<String> {
-    unit_app_id(&unit_of(pid)?)
-}
-
-/// The systemd unit `pid` runs in, when that is an app's own unit (see
-/// [`unit_app_id`]): ending that unit ends the app, and nothing else.
-pub fn app_unit(pid: u32) -> Option<String> {
-    unit_of(pid).filter(|unit| unit_app_id(unit).is_some())
-}
-
-/// The last part of `pid`'s cgroup path: its unit, if systemd made it.
-fn unit_of(pid: u32) -> Option<String> {
-    let cgroup = std::fs::read_to_string(format!("/proc/{pid}/cgroup")).ok()?;
-    let path = cgroup.lines().find_map(|l| l.strip_prefix("0::"))?;
-    Some(path.rsplit('/').next()?.to_owned())
-}
-
-/// The app id in an app's unit name, as freedesktop names them and the
-/// portals read them: `app[-<launcher>]-<id>-<random>.scope`, or
-/// `app[-<launcher>]-<id>[@<random>|-autostart].service`. The id's own
-/// dashes are escaped (`\x2d`), so a dash ends it.
-///
-/// Also the units dbus-broker starts an activated app in,
-/// `dbus-<its own connection>-<bus name>@<n>.service`: an app that takes
-/// D-Bus activation has its desktop id as its bus name.
-pub fn unit_app_id(unit: &str) -> Option<String> {
-    if let Some(rest) = unit.strip_prefix("dbus-:") {
-        let (_connection, named) = rest.strip_suffix(".service")?.split_once('-')?;
-        let (name, _instance) = named.split_once('@')?;
-        return unescape_unit(name).filter(|id| !id.is_empty());
-    }
-    let rest = unit.strip_prefix("app-")?;
-    let named = if let Some(scope) = rest.strip_suffix(".scope") {
-        scope.rsplit_once('-')?.0
-    } else {
-        let service = rest.strip_suffix(".service")?;
-        let service = service.split_once('@').map_or(service, |(id, _)| id);
-        service.strip_suffix("-autostart").unwrap_or(service)
-    };
-    // The launcher, when there is one, is a plain word.
-    let id = match named.split_once('-') {
-        Some((launcher, id)) if launcher.chars().all(|c| c.is_ascii_alphanumeric()) => id,
-        _ => named,
-    };
-    unescape_unit(id).filter(|id| !id.is_empty())
-}
-
-/// Undo systemd's `\xNN` escaping of a unit name.
-fn unescape_unit(s: &str) -> Option<String> {
-    let mut out = Vec::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(at) = rest.find("\\x") {
-        out.extend_from_slice(&rest.as_bytes()[..at]);
-        let hex = rest.get(at + 2..at + 4)?;
-        out.push(u8::from_str_radix(hex, 16).ok()?);
-        rest = &rest[at + 4..];
-    }
-    out.extend_from_slice(rest.as_bytes());
-    String::from_utf8(out).ok()
 }
 
 /// The entry an app id belongs to: by desktop id, then `StartupWMClass`,
@@ -381,6 +319,7 @@ mod tests {
             icon: None,
             startup_wm_class: wm_class.map(String::from),
             path: PathBuf::from(format!("/usr/share/applications/{id}")),
+            dbus_activatable: false,
         }
     }
 
@@ -587,37 +526,6 @@ mod tests {
             group_plain(&[win(1, "foot", 1)], &entries)[0].entry,
             Some(0)
         );
-    }
-
-    #[test]
-    fn unit_names_give_the_app_id() {
-        let cases = [
-            (
-                "app-mechanix-org.gnome.Nautilus-42.scope",
-                Some("org.gnome.Nautilus"),
-            ),
-            (
-                "app-gnome-org.gnome.Evolution\\x2dalarm\\x2dnotify-2437.scope",
-                Some("org.gnome.Evolution-alarm-notify"),
-            ),
-            ("app-firefox-1234.scope", Some("firefox")),
-            ("app-org.kde.dolphin@a1b2.service", Some("org.kde.dolphin")),
-            ("app-gnome-foo-autostart.service", Some("foo")),
-            (
-                "dbus-:1.3-org.gnome.Loupe@0.service",
-                Some("org.gnome.Loupe"),
-            ),
-            (
-                "dbus-:1.3-org.example.foo\\x2dbar@12.service",
-                Some("org.example.foo-bar"),
-            ),
-            ("dbus-broker.service", None),
-            ("mechanix-shell.service", None),
-            ("session-2.scope", None),
-        ];
-        for (unit, want) in cases {
-            assert_eq!(unit_app_id(unit).as_deref(), want, "{unit}");
-        }
     }
 
     #[test]

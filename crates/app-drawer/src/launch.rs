@@ -3,20 +3,26 @@
 //! 1. An activation token is asked of the compositor first, when it offers
 //!    them, so the app's window may take focus. The app starts without one
 //!    if it doesn't come within [`TOKEN_WAIT`].
-//! 2. The app runs as a systemd user service of its own,
-//!    `app-mechanix-<desktop id>@<random>.service`, the freedesktop naming
-//!    for apps, with the token in its environment. It is part of the
-//!    graphical session, so it stops with it; it is in its own cgroup from
-//!    its first instruction; its output goes to the journal; and other
-//!    tools (the portals, resource managers, the running apps) can tell
-//!    which app a process belongs to.
-//! 3. Without a session bus, or when systemd won't create the unit, the app
+//! 2. An app that is `DBusActivatable` is started through D-Bus
+//!    (`org.freedesktop.Application.Activate`), with the token in the
+//!    platform data. The bus starts it, or reaches the one already running.
+//!    A bus that starts apps in units of their own leaves it there; one
+//!    that runs it in its own unit, among the bus's other services, has it
+//!    moved into a scope of its own, `app-mechanix-<desktop id>-<random>.scope`,
+//!    so it can be told apart and handled alone.
+//! 3. Any other app, or one whose activation fails, runs as a systemd user
+//!    service of its own, `app-mechanix-<desktop id>@<random>.service`, the
+//!    freedesktop naming for apps, with the token in its environment. It is
+//!    part of the graphical session, so it stops with it; it is in its own
+//!    cgroup from its first instruction; its output goes to the journal;
+//!    and other tools (the portals, resource managers, the running apps)
+//!    can tell which app a process belongs to.
+//! 4. Without a session bus, or when systemd won't create the unit, the app
 //!    is spawned from the launcher.
 //!
 //! systemd answers a start once its job is queued; whether the program ran
 //! comes later, as the job's `JobRemoved`, and a failure is logged.
 
-use std::fmt::Write;
 use std::hash::{BuildHasher, RandomState};
 use std::io;
 use std::os::unix::fs::PermissionsExt;
@@ -31,6 +37,9 @@ use mecha_wayland::prelude::*;
 const SYSTEMD: &str = "org.freedesktop.systemd1";
 const SYSTEMD_PATH: &str = "/org/freedesktop/systemd1";
 const SYSTEMD_MANAGER: &str = "org.freedesktop.systemd1.Manager";
+const APPLICATION: &str = "org.freedesktop.Application";
+const BUS: &str = "org.freedesktop.DBus";
+const BUS_PATH: &str = "/org/freedesktop/DBus";
 
 /// How long an app waits for its activation token before starting without.
 const TOKEN_WAIT: Duration = Duration::from_millis(500);
@@ -65,18 +74,34 @@ struct Waiting {
     entry: DesktopApp,
 }
 
-/// Starts in flight: apps waiting for their token, services asked of
-/// systemd and not yet answered, and queued jobs not yet done.
+/// What a call in flight asked for.
+enum Asked {
+    /// The app's D-Bus activation.
+    Activate(AppStart),
+    /// The app's own service.
+    Service(AppStart),
+    /// The process of an app D-Bus activation reached.
+    AppProcess(DesktopApp),
+    /// The bus's own process.
+    BusProcess,
+    /// A scope for an app the bus runs among its own services.
+    Scope(String),
+}
+
+/// Starts in flight: apps waiting for their token, calls not yet answered,
+/// and queued systemd jobs not yet done.
 #[derive(Default)]
 struct Starting {
     waiting: Vec<Waiting>,
     /// Every ring timeout not finished yet, including those whose app got
     /// its token first.
     timeouts: Vec<Token>,
-    calls: Vec<(CallId, AppStart)>,
+    calls: Vec<(CallId, Asked)>,
     jobs: Vec<(ObjectPath, String)>,
     /// The match for systemd's `JobRemoved`, once subscribed.
     jobs_removed: Option<MatchId>,
+    /// The unit the bus itself runs in, once known.
+    bus_unit: Option<String>,
 }
 impl Resource for Starting {}
 
@@ -105,7 +130,7 @@ pub(crate) fn start(app: &mut App, entry: &DesktopApp) {
         })
         .flatten();
     let Some(request) = request else {
-        return start_service(
+        return launch(
             app,
             AppStart {
                 entry: entry.clone(),
@@ -133,7 +158,7 @@ fn on_token(app: &mut App, e: &ActivationToken) {
         starting.waiting.swap_remove(at).entry
     };
     let token = Some(e.token.clone()).filter(|t| !t.is_empty());
-    start_service(app, AppStart { entry, token });
+    launch(app, AppStart { entry, token });
 }
 
 /// The token is late: start the app without it.
@@ -151,7 +176,26 @@ fn on_timeout(app: &mut App, e: &IoEvent) {
         starting.waiting.swap_remove(at).entry
     };
     tracing::warn!(id = %entry.id, "no activation token came, starting it without one");
-    start_service(app, AppStart { entry, token: None });
+    launch(app, AppStart { entry, token: None });
+}
+
+/// Start through D-Bus activation when the app takes it, else as a service.
+fn launch(app: &mut App, start: AppStart) {
+    let Some(call) = start
+        .entry
+        .dbus_activatable
+        .then(|| activate_call(&start))
+        .flatten()
+    else {
+        return start_service(app, start);
+    };
+    if app.resource::<Starting>().bus_unit.is_none() {
+        ask_process(app, BUS, Asked::BusProcess);
+    }
+    match send(app, call) {
+        Some(id) => awaiting(app, id, Asked::Activate(start)),
+        None => start_service(app, start),
+    }
 }
 
 /// Start `start` as a service, or spawn it when that can't be asked.
@@ -161,7 +205,7 @@ fn start_service(app: &mut App, start: AppStart) {
     };
     subscribe_to_jobs(app);
     match send(app, call) {
-        Some(id) => app.resource_mut::<Starting>().calls.push((id, start)),
+        Some(id) => awaiting(app, id, Asked::Service(start)),
         None => spawn_logged(&start),
     }
 }
@@ -173,6 +217,19 @@ fn send(app: &mut App, call: MethodCall) -> Option<CallId> {
     }
     let mut dbus = app.resource_mut::<DBus>();
     dbus.bus(BusId::Session).map(|mut bus| bus.send(call))
+}
+
+/// The answer to call `id` goes to [`on_reply`] with `asked`.
+fn awaiting(app: &mut App, id: CallId, asked: Asked) {
+    app.resource_mut::<Starting>().calls.push((id, asked));
+}
+
+/// Ask the bus for the process that owns `name`.
+fn ask_process(app: &mut App, name: &str, asked: Asked) {
+    let call = MethodCall::new(BUS, BUS_PATH, BUS, "GetConnectionUnixProcessID").body(&(name,));
+    if let Some(id) = send(app, call) {
+        awaiting(app, id, asked);
+    }
 }
 
 /// Ask systemd for its `JobRemoved`, which it sends only to subscribers.
@@ -200,22 +257,55 @@ fn subscribe_to_jobs(app: &mut App) {
     app.resource_mut::<Starting>().jobs_removed = matched;
 }
 
-/// systemd's answer to a service start: queued, it is a job to watch;
-/// refused, the app is spawned instead.
+/// An answer. An activation refused falls back to a service; one done asks
+/// which process the app is. A service or scope queued is a job to watch; a
+/// service refused falls back to spawning.
 fn on_reply(app: &mut App, e: &MethodReply) {
-    let start = {
+    let asked = {
         let mut starting = app.resource_mut::<Starting>();
         let Some(at) = starting.calls.iter().position(|(id, _)| *id == e.call) else {
             return;
         };
         starting.calls.swap_remove(at).1
     };
-    match &e.result {
-        Ok(reply) => watch_job(app, reply, start.entry.id),
-        Err(error) => {
+    match (asked, &e.result) {
+        (Asked::Activate(start), Ok(_)) => {
+            let name = app_id(&start.entry.id).to_owned();
+            ask_process(app, &name, Asked::AppProcess(start.entry));
+        }
+        (Asked::Activate(start), Err(error)) => {
+            let id = &start.entry.id;
+            tracing::warn!(%id, "D-Bus activation failed, starting it as a service: {error:?}");
+            start_service(app, start);
+        }
+        (Asked::Service(start), Err(error)) => {
             let id = &start.entry.id;
             tracing::warn!(%id, "systemd did not start it, spawning it instead: {error:?}");
             spawn_logged(&start);
+        }
+        (Asked::Service(AppStart { entry, .. }), Ok(reply)) => watch_job(app, reply, entry.id),
+        (Asked::Scope(id), Ok(reply)) => watch_job(app, reply, id),
+        (Asked::Scope(id), Err(error)) => {
+            tracing::warn!(%id, "systemd made no scope for it: {error:?}");
+        }
+        (Asked::AppProcess(entry), Ok(reply)) => {
+            if let Ok((pid,)) = reply.body::<(u32,)>() {
+                adopt(app, pid, &entry);
+            }
+        }
+        (Asked::BusProcess, Ok(reply)) => {
+            let unit = reply
+                .body::<(u32,)>()
+                .ok()
+                .and_then(|(pid,)| apps::unit_of(pid));
+            app.resource_mut::<Starting>().bus_unit = unit;
+        }
+        (Asked::AppProcess(entry), Err(error)) => {
+            let id = &entry.id;
+            tracing::warn!(%id, "the bus did not say which process it is: {error:?}");
+        }
+        (Asked::BusProcess, Err(error)) => {
+            tracing::warn!("the bus did not say which process it is: {error:?}");
         }
     }
 }
@@ -225,6 +315,25 @@ fn watch_job(app: &mut App, reply: &Message, id: String) {
     match reply.body::<(ObjectPath,)>() {
         Ok((job,)) => app.resource_mut::<Starting>().jobs.push((job, id)),
         Err(error) => tracing::warn!(%id, "systemd's answer is unreadable: {error:?}"),
+    }
+}
+
+/// The app D-Bus activation reached is process `pid`. When the bus runs it
+/// in the bus's own unit, it is moved into a scope of its own: there it
+/// can be told apart, frozen or ended without the bus. In any other unit,
+/// the bus's own for it or one it was already in, it stays.
+fn adopt(app: &mut App, pid: u32, entry: &DesktopApp) {
+    let shared = {
+        let starting = app.resource::<Starting>();
+        let bus_unit = starting.bus_unit.as_deref();
+        bus_unit.is_some() && apps::unit_of(pid).as_deref() == bus_unit
+    };
+    if !shared {
+        return;
+    }
+    subscribe_to_jobs(app);
+    if let Some(id) = send(app, scope_call(entry, pid)) {
+        awaiting(app, id, Asked::Scope(entry.id.clone()));
     }
 }
 
@@ -257,13 +366,91 @@ fn app_id(desktop_id: &str) -> &str {
     desktop_id.strip_suffix(".desktop").unwrap_or(desktop_id)
 }
 
+/// The bus name and object path D-Bus activation reaches the app at: its id,
+/// and the id with `.` as `/` and `-` as `_`.
+fn application(desktop_id: &str) -> (String, String) {
+    let name = app_id(desktop_id);
+    let path = format!("/{}", name.replace('.', "/").replace('-', "_"));
+    (name.to_owned(), path)
+}
+
+/// `org.freedesktop.Application.Activate` for the app. `None` when its id
+/// isn't a valid bus name.
+fn activate_call(start: &AppStart) -> Option<MethodCall> {
+    let (name, path) = application(&start.entry.id);
+    let name = BusName::new(&name).ok()?;
+    let path = ObjectPath::new(&path).ok()?;
+    let entries = start
+        .token
+        .iter()
+        .flat_map(|token| {
+            ["activation-token", "desktop-startup-id"].map(|key| {
+                (
+                    Value::Str(key.to_owned()),
+                    Value::Variant(Box::new(Value::Str(token.clone()))),
+                )
+            })
+        })
+        .collect();
+    let platform_data = Value::Dict {
+        key: signature("s"),
+        val: signature("v"),
+        entries,
+    };
+    Some(MethodCall::new(name, path, APPLICATION, "Activate").values(&[platform_data]))
+}
+
+fn signature(s: &str) -> Signature {
+    Signature::new(s).expect("a valid signature")
+}
+
+fn text(s: &str) -> Value {
+    Value::Str(s.to_owned())
+}
+
+fn strings(items: Vec<String>) -> Value {
+    Value::Array {
+        elem: signature("s"),
+        items: items.into_iter().map(Value::Str).collect(),
+    }
+}
+
 /// The session's target, which an app's unit is part of, so it stops with
 /// the session.
 fn session_target() -> Value {
-    Value::Array {
-        elem: Signature::new("s").expect("a valid signature"),
-        items: vec![Value::Str("graphical-session.target".to_owned())],
+    strings(vec!["graphical-session.target".to_owned()])
+}
+
+/// `StartTransientUnit` for `entry`'s unit `name`: `properties`, and those
+/// every app's unit has.
+fn transient_unit(
+    name: &str,
+    entry: &DesktopApp,
+    mut properties: Vec<(&str, Value)>,
+) -> MethodCall {
+    properties.extend([
+        ("Description", text(&entry.name)),
+        ("CollectMode", text("inactive-or-failed")),
+        ("Slice", text("app.slice")),
+        // Stopped with the session.
+        ("PartOf", session_target()),
+    ]);
+    if let Some(path) = entry.path.to_str() {
+        properties.push(("SourcePath", text(path)));
     }
+    let aux: Vec<(&str, Vec<(&str, Value)>)> = Vec::new();
+    MethodCall::new(SYSTEMD, SYSTEMD_PATH, SYSTEMD_MANAGER, "StartTransientUnit")
+        .body(&(name, "fail", properties, aux))
+}
+
+/// `StartTransientUnit` for a scope holding `pid`, the app `entry` that the
+/// bus runs among its own services.
+fn scope_call(entry: &DesktopApp, pid: u32) -> MethodCall {
+    let pids = Value::Array {
+        elem: signature("u"),
+        items: vec![Value::U32(pid)],
+    };
+    transient_unit(&scope_name(&entry.id), entry, vec![("PIDs", pids)])
 }
 
 /// `StartTransientUnit` for the app's service. `None` when its program is
@@ -271,11 +458,6 @@ fn session_target() -> Value {
 fn service_call(start: &AppStart) -> Option<MethodCall> {
     let entry = &start.entry;
     let program = executable(entry.exec.first()?)?;
-    let signature = |s| Signature::new(s).expect("a valid signature");
-    let strings = |items: Vec<String>| Value::Array {
-        elem: signature("s"),
-        items: items.into_iter().map(Value::Str).collect(),
-    };
     let exec = Value::Array {
         elem: signature("(sasb)"),
         items: vec![Value::Struct(vec![
@@ -284,9 +466,7 @@ fn service_call(start: &AppStart) -> Option<MethodCall> {
             Value::Bool(false),
         ])],
     };
-    let text = |s: &str| Value::Str(s.to_owned());
-    let mut properties: Vec<(&str, Value)> = vec![
-        ("Description", text(&entry.name)),
+    let properties = vec![
         ("ExecStart", exec),
         // A program that can't be run fails the start job, rather than the
         // service after it.
@@ -294,22 +474,12 @@ fn service_call(start: &AppStart) -> Option<MethodCall> {
         // Running while any of its processes is: an app whose first process
         // hands over to another and exits isn't killed with it.
         ("ExitType", text("cgroup")),
-        ("CollectMode", text("inactive-or-failed")),
-        ("Slice", text("app.slice")),
-        // Stopped with the session, and before it.
-        ("PartOf", session_target()),
+        // Stopped before the rest of the session.
         ("After", session_target()),
         ("WorkingDirectory", text("~")),
         ("Environment", strings(environment(start.token.as_deref()))),
     ];
-    if let Some(path) = entry.path.to_str() {
-        properties.push(("SourcePath", text(path)));
-    }
-    let aux: Vec<(&str, Vec<(&str, Value)>)> = Vec::new();
-    let name = service_name(&entry.id);
-    let call = MethodCall::new(SYSTEMD, SYSTEMD_PATH, SYSTEMD_MANAGER, "StartTransientUnit")
-        .body(&(name.as_str(), "fail", properties, aux));
-    Some(call)
+    Some(transient_unit(&service_name(&entry.id), entry, properties))
 }
 
 /// `argv` for `ExecStart`: systemd expands `$` in arguments, and `$$` keeps
@@ -375,17 +545,19 @@ fn is_executable(path: &Path) -> bool {
 /// escapes unit names (`-` is `\x2d`), then a random instance so the app
 /// can run more than once.
 fn service_name(desktop_id: &str) -> String {
-    let mut name = String::from("app-mechanix-");
-    for b in app_id(desktop_id).bytes() {
-        if b.is_ascii_alphanumeric() || b"_.:".contains(&b) {
-            name.push(char::from(b));
-        } else {
-            let _ = write!(name, "\\x{b:02x}");
-        }
-    }
+    unit_name(desktop_id, '@', "service")
+}
+
+/// The scope's name, as the service's but with a dash before the random
+/// part, as scopes are named.
+fn scope_name(desktop_id: &str) -> String {
+    unit_name(desktop_id, '-', "scope")
+}
+
+fn unit_name(desktop_id: &str, before_random: char, kind: &str) -> String {
+    let id = apps::escape_unit(app_id(desktop_id));
     let random = RandomState::new().hash_one(desktop_id);
-    let _ = write!(name, "@{random:016x}.service");
-    name
+    format!("app-mechanix-{id}{before_random}{random:016x}.{kind}")
 }
 
 /// Spawn the app from the launcher, logging a failure.
@@ -440,22 +612,57 @@ mod tests {
     }
 
     #[test]
-    fn service_calls_build_with_and_without_a_token() {
+    fn unit_names_give_back_the_app_id() {
+        for name in [
+            service_name("org.example.foo-bar.desktop"),
+            scope_name("org.example.foo-bar.desktop"),
+        ] {
+            assert_eq!(
+                apps::unit_app_id(&name).as_deref(),
+                Some("org.example.foo-bar"),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn activation_reaches_the_app_at_its_id() {
+        assert_eq!(
+            application("org.gnome.Nautilus.desktop"),
+            ("org.gnome.Nautilus".into(), "/org/gnome/Nautilus".into())
+        );
+        assert_eq!(
+            application("org.example.foo-bar.desktop"),
+            ("org.example.foo-bar".into(), "/org/example/foo_bar".into())
+        );
+    }
+
+    fn start(id: &str, token: Option<&str>) -> AppStart {
+        AppStart {
+            entry: DesktopApp {
+                id: id.into(),
+                name: "Notes".into(),
+                exec: vec!["sh".into()],
+                icon: None,
+                startup_wm_class: None,
+                path: "/usr/share/applications/notes.desktop".into(),
+                dbus_activatable: true,
+            },
+            token: token.map(String::from),
+        }
+    }
+
+    #[test]
+    fn calls_build_with_and_without_a_token() {
         // Building a call encodes its body, which checks every value's type.
         for token in [None, Some("tok")] {
-            let start = AppStart {
-                entry: DesktopApp {
-                    id: "org.example.Notes.desktop".into(),
-                    name: "Notes".into(),
-                    exec: vec!["sh".into()],
-                    icon: None,
-                    startup_wm_class: None,
-                    path: "/usr/share/applications/notes.desktop".into(),
-                },
-                token: token.map(String::from),
-            };
+            let start = start("org.example.Notes.desktop", token);
+            assert!(activate_call(&start).is_some());
             assert!(service_call(&start).is_some());
+            let _ = scope_call(&start.entry, 42);
         }
+        // Not a bus name: no activation, the service instead.
+        assert!(activate_call(&start("kde-notes.desktop", None)).is_none());
     }
 
     #[test]

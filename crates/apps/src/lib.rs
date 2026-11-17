@@ -4,14 +4,16 @@
 mod entries;
 mod icons;
 mod registry;
+mod units;
 
 use std::path::{Path, PathBuf};
 
 pub use entries::{DesktopApp, data_dirs, exec_argv, scan};
 pub use icons::{IconCache, IconDirs, IconFile, RowIcon, active_theme};
 pub use registry::{
-    AppKey, Registry, RegistryChanged, RegistryModule, RunningApp, app_unit, group, match_entry,
+    AppKey, Registry, RegistryChanged, RegistryModule, RunningApp, group, match_entry,
 };
+pub use units::{app_unit, escape_unit, unit_app_id, unit_of};
 
 /// The XDG data dirs from the environment, and the icon dirs for them with
 /// the active GTK icon theme: where the launcher finds apps and icons.
