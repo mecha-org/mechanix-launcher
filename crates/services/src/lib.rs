@@ -21,7 +21,7 @@ pub use display::{
 pub use keep_awake::{AppHold, KeepAwake, KeepAwakeModule, SetKeepAwake};
 pub use keys::{Key, KeyAction, grab_key};
 pub use network_manager::{APUpdate, NetworkManagerModule, SetWifiEnabled, StateUpdate, WifiState};
-pub use power::{PowerModule, PowerOff, Restart, Suspend};
+pub use power::{LogOut, PowerModule, PowerOff, Restart, Suspend};
 pub use session::{
     LockRequested, PrepareForSleep, SessionEnded, SessionLockChanged, SessionModule, SetIdleHint,
     SleepReady, TakePowerKey, UnlockRequested,

@@ -112,12 +112,6 @@ impl Fixture {
     }
 }
 
-/// The tab row's height in a panel `panel_height` tall: the bar's percent
-/// share less the divider, but never less than the label.
-fn row_height(panel_height: f32, label_height: f32) -> f32 {
-    (panel_height * TAB_BAR_HEIGHT_PERCENT / 100.0 - DIVIDER).max(label_height)
-}
-
 // Layout snaps to pixels, so adjacent rounded edges can differ by one unit.
 fn close(actual: f32, expected: f32) {
     assert!(
@@ -131,6 +125,9 @@ fn full_labels_fit_and_spacers_shrink_then_recover_on_resize() {
     let mut f = Fixture::new(AppScreen::NotificationsScreen);
     let natural_widths = f.label_widths();
     assert!(natural_widths[0] > natural_widths[1]);
+    // Leave room for all four spacers, but force them below their maximum.
+    let narrow_width =
+        natural_widths.iter().sum::<f32>() + 4.0 * (MIN_TAB_SPACING_X + MAX_TAB_SPACING_X) / 2.0;
     let native_props = f.cells.map(|cell| {
         let label = f.app.widget::<Text>(f.parts(cell)[1]).unwrap();
         f.app
@@ -141,7 +138,7 @@ fn full_labels_fit_and_spacers_shrink_then_recover_on_resize() {
     });
 
     // Logical widths spanning scales 0.77, 1.0, 2.61 and 3.1, then grow again.
-    for width in [1247.0, 960.0, 368.0, 308.0, 960.0] {
+    for width in [1247.0, 960.0, 368.0, 308.0, narrow_width, 960.0] {
         f.resize(width);
         let row = f.rect(f.row);
         close(row.width(), width);
@@ -153,10 +150,10 @@ fn full_labels_fit_and_spacers_shrink_then_recover_on_resize() {
             close(cell.x(), previous_right);
             assert!(cell.right() <= row.right());
             previous_right = cell.right();
-            close(cell.height(), row_height(347.0, label_rect.height()));
+            close(cell.height(), TAB_HEIGHT);
             close(label_rect.width(), natural_widths[index]);
             let themed = f.app.widget::<Text>(label).unwrap();
-            assert_eq!(themed.variant, TextVariant::HeadlineSmall);
+            assert_eq!(themed.variant, TextVariant::LabelLarge);
             assert!(themed.emphasised);
             let native = f.app.widget::<NativeText>(themed.native()).unwrap();
             assert_eq!(native.string, ["NOTIFICATIONS", "SETTINGS"][index]);
@@ -174,7 +171,7 @@ fn full_labels_fit_and_spacers_shrink_then_recover_on_resize() {
                 );
                 if width >= 960.0 {
                     close(spacer.width(), 16.0);
-                } else if width == 308.0 {
+                } else if width == narrow_width {
                     assert!(spacer.width() < 16.0);
                 }
             }
@@ -209,7 +206,7 @@ fn tabs_stay_flush_with_the_top_without_squeezing_content_on_resize() {
         .min_height = px(230.0);
     let label_heights = f.cells.map(|cell| f.rect(f.parts(cell)[1]).height());
 
-    // Percent tabs + 1-unit divider + at least 230-unit content + 4.47% handle strip.
+    // Fixed-height tabs + divider + at least 230-unit content + 4.47% handle strip.
     for height in [400.0, 336.0, 326.0, 620.0, 400.0] {
         *f.app.component_mut::<LayoutStyle>(f.window).unwrap() =
             LayoutStyle::default().size(px(308.0), px(height));
@@ -219,9 +216,8 @@ fn tabs_stay_flush_with_the_top_without_squeezing_content_on_resize() {
         let divider_rect = f.rect(divider);
         close(row.y(), selector_rect.y());
         close(selector_rect.y(), f.rect(f.center.id()).y());
-        let expected = row_height(height, label_heights[0]);
-        close(row.height(), expected);
-        close(selector_rect.height(), expected + DIVIDER);
+        close(row.height(), TAB_HEIGHT);
+        close(selector_rect.height(), TAB_HEIGHT + DIVIDER);
         close(divider_rect.y(), row.bottom());
         close(divider_rect.height(), 1.0);
         close(divider_rect.bottom(), selector_rect.bottom());

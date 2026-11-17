@@ -9,7 +9,7 @@ use mecha_wayland::prelude::*;
 use services::{APUpdate, SetWifiEnabled, StateUpdate, WifiState};
 
 use super::{Borders, DOT_RADIUS, build_tile, label_spacer, tile_quad};
-use crate::util::{load_icon, short_name};
+use crate::util::load_icon;
 
 /// Latest Wi-Fi details used to render the tile.
 pub struct Wifi {
@@ -36,7 +36,6 @@ struct WifiSprites {
 
 /// Builds the Wi-Fi tile and subscribes it to updates.
 pub struct WifiBuilder {
-    /// Which sides get a border, e.g. [`borders::ALL`](super::borders::ALL).
     pub borders: Borders,
 }
 
@@ -61,7 +60,7 @@ impl Widget for Wifi {
             high: load_icon(atlas, icons::HIGH),
         };
         // Hidden until connected so the icon sits centred; showing it pushes the icon up.
-        // Same text styling as the Bluetooth tile; ellipsis overflow is a fallback for narrow tiles.
+        // Same text styling as the Bluetooth tile; SSIDs too wide for the tile end in an ellipsis.
         let ssid_handle = s.spawn(
             me,
             text("")
@@ -158,7 +157,7 @@ fn render(
         WifiState::Connecting | WifiState::Disconnecting => (sprites.connecting, true, true, false),
         WifiState::Connected => {
             // Only a connected AP supplies the visible SSID and signal icon.
-            ssid = short_name(&wifi.ssid);
+            ssid = wifi.ssid.clone();
             let sprite = match wifi.strength {
                 0..25 => sprites.none,
                 25..50 => sprites.low,
