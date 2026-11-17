@@ -30,7 +30,7 @@ impl Widget for CardIcon {
     type Builder = CardIconBuilder;
 
     fn build(b: CardIconBuilder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
-        *s.component_mut::<LayoutStyle>(me).unwrap() = square().relative();
+        *s.component_mut::<LayoutStyle>(me).unwrap() = square().relative().align_self(Align::Start);
 
         let holder = s.spawn(me, div().style(square()));
 

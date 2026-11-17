@@ -185,4 +185,7 @@ pub mod swipe {
     pub const REVEAL_MAX: f32 = 0.60;
     /// Past this the card is dismissed. Figma 65 %.
     pub const DISMISS: f32 = 0.65;
+    /// A vertical swipe past this many pixels expands (down) or collapses
+    /// (up) the card. Figma gives no number.
+    pub const EXPAND: f32 = 40.0;
 }

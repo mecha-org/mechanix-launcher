@@ -37,6 +37,9 @@ impl Event for SnoozeCard {}
 pub struct ToggleCard;
 impl Event for ToggleCard {}
 
+pub struct ExpandCard(pub bool);
+impl Event for ExpandCard {}
+
 impl Build for CardBuilder {
     type Widget = Card;
 }
@@ -104,7 +107,8 @@ impl Widget for Card {
             content,
             mw::text(ago(b.entry.received_time))
                 .variant(text::CARD_TIME.variant)
-                .color(text::CARD_TIME.color),
+                .color(text::CARD_TIME.color)
+                .style(LayoutStyle::default().align_self(Align::Start)),
         );
 
         let options = s.spawn(me, CardOptionsBuilder { card: me.id() });
@@ -127,9 +131,9 @@ impl Widget for Card {
             .on::<PressMoved>(me, |ctx, e| {
                 let w = width(ctx);
                 match ctx.me().drag.update(e.contact, e.position, w) {
-                    Moved::Claim => {
+                    Moved::Claim(swiping) => {
                         if ctx.claim_contact(e.contact) {
-                            ctx.me().drag.start_swipe();
+                            ctx.me().drag.start_swipe(swiping);
                         }
                     }
                     Moved::Slide(offset) => set_offset(ctx, offset),
@@ -138,9 +142,11 @@ impl Widget for Card {
             })
             .on::<Release>(me, move |ctx, e| {
                 let w = width(ctx);
-                match ctx.me().drag.release(e.contact, w) {
+                match ctx.me().drag.release(e.contact, e.position, w) {
                     Settle::Rest(offset) => set_offset(ctx, offset),
                     Settle::Dismiss => dismiss(ctx, id),
+                    Settle::Expand => ctx.emit(ExpandCard(true), me),
+                    Settle::Collapse => ctx.emit(ExpandCard(false), me),
                     Settle::Ignore => {}
                 }
             })
@@ -182,6 +188,16 @@ impl Widget for Card {
                 // the replacement never expires
                 _ => ctx.cancel_timer(expiry),
             };
+        });
+
+        s.on::<ExpandCard>(me, move |ctx, e| {
+            let wrap = if e.0 {
+                TextWrap::Word
+            } else {
+                TextWrap::NoWrap
+            };
+            TextContextExt::set_wrap(&mut ctx.at(summary).unwrap(), wrap);
+            ctx.at(rich_text).unwrap().set_text_wrap(wrap);
         });
 
         s.on::<ToggleCard>(me, |ctx, _| {
