@@ -97,7 +97,9 @@ mod tests {
         app.add_module(LayoutModule)
             .add_module(PaintModule)
             .add_module(WindowModule)
-            .add_module(MechanixTheme::dark());
+            .add_module(MechanixTheme::dark())
+            .add_module(RingModule::default())
+            .add_module(TimerModule);
         app.insert_resource(Atlas::new());
 
         let window = app.spawn(
@@ -126,10 +128,18 @@ mod tests {
         let track = app.children(row).unwrap()[1];
         let ticks = app.children(track).unwrap();
         assert!(!ticks.is_empty());
+        let center = control_rect.origin.y + control_rect.height() / 2.0;
         for &tick in ticks {
             let tick = rect(tick);
-            assert_eq!(tick.origin.y, control_rect.origin.y);
-            assert_eq!(tick.height(), control_rect.height());
+            // Centred on the control, 80% of the (thumb-tall) track.
+            assert!(
+                (tick.origin.y + tick.height() / 2.0 - center).abs() <= 1.0,
+                "{tick:?} not centred on {control_rect:?}"
+            );
+            assert!(
+                (tick.height() - rect(track).height() * 0.8).abs() <= 1.0,
+                "{tick:?}"
+            );
         }
     }
 
@@ -152,7 +162,9 @@ mod tests {
         app.add_module(LayoutModule)
             .add_module(PaintModule)
             .add_module(WindowModule)
-            .add_module(MechanixTheme::dark());
+            .add_module(MechanixTheme::dark())
+            .add_module(RingModule::default())
+            .add_module(TimerModule);
         app.insert_resource(Atlas::new());
         let size = |h| LayoutStyle::default().column().size(px(308.0), px(h));
         let window = app.spawn(app.root(), window().layout(size(635.0)));
