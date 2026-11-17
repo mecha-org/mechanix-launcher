@@ -2,9 +2,7 @@
 //! system bus.
 use mecha_wayland::prelude::*;
 
-pub(crate) const LOGIND: &str = "org.freedesktop.login1";
-pub(crate) const MANAGER_PATH: &str = "/org/freedesktop/login1";
-pub(crate) const MANAGER: &str = "org.freedesktop.login1.Manager";
+use crate::logind::{LOGIND, MANAGER, MANAGER_PATH};
 
 /// Request an interactive power-off (logind may prompt for authorization).
 pub struct PowerOff;
@@ -89,29 +87,10 @@ fn on_disconnect(app: &mut App, event: &BusDisconnected) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Read, Write};
-    use std::os::unix::net::UnixStream;
 
     #[test]
     fn power_off_is_sent_once_until_reply_or_disconnect() {
-        let (client, mut peer) = UnixStream::pair().unwrap();
-        peer.write_all(b"OK 0123456789abcdef0123456789abcdef\r\nERROR no fd passing\r\n")
-            .unwrap();
-        let hello = Message::method_return(1)
-            .with_sender("org.freedesktop.DBus")
-            .with_destination(":1.1")
-            .with_body(&(":1.1",));
-        peer.write_all(&hello.encode(1).0).unwrap();
-
-        let mut app = App::new();
-        app.add_module(RingModule::default())
-            .add_module(DBusModule::new().over(BusId::System, client));
-        let mut auth = Vec::new();
-        while !auth.ends_with(b"BEGIN\r\n") {
-            let mut byte = [0];
-            peer.read_exact(&mut byte).unwrap();
-            auth.push(byte[0]);
-        }
+        let (mut app, _peer) = crate::test_bus::system_bus();
         app.add_module(PowerModule);
 
         app.signal(PowerOff);
