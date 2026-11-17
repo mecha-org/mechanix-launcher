@@ -241,6 +241,10 @@ mod tests {
 
     #[test]
     fn portrait_sections_fit_in_a_compact_panel() {
+        // Leave room for two 24-unit controls, their 15-unit gap, and
+        // both section gaps after the header and tile bar take their share.
+        const PANEL_HEIGHT: f32 = 250.0;
+
         let mut app = App::new();
         app.add_module(LayoutModule)
             .add_module(PaintModule)
@@ -265,7 +269,7 @@ mod tests {
             div().style(
                 LayoutStyle::default()
                     .width(percent(100.0))
-                    .height(px(230.0))
+                    .height(px(PANEL_HEIGHT))
                     .shrink(0.0),
             ),
         );
@@ -297,7 +301,7 @@ mod tests {
         let bottom_row = rect(&app, tile_rows[1]);
         let bottom = |r: Rect| r.origin.y + r.height();
 
-        assert_eq!(panel_rect.height(), 230.0);
+        assert_eq!(panel_rect.height(), PANEL_HEIGHT);
         for control in [controls[0], controls[2]] {
             let control_rect = rect(&app, control);
             let row = app.children(control).unwrap()[0];

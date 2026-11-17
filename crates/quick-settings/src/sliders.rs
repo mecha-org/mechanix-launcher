@@ -89,6 +89,9 @@ impl Widget for Sliders {
 mod tests {
     use super::*;
 
+    const SHORT_SLIDER_HEIGHT: f32 = 28.0;
+    const SHORT_SECTION_HEIGHT: f32 = 2.0 * SHORT_SLIDER_HEIGHT + MIN_SLIDER_GAP;
+
     fn slider_layout(height: f32) -> (Rect, Rect, Rect) {
         let mut app = App::new();
         app.add_module(LayoutModule)
@@ -132,12 +135,12 @@ mod tests {
 
     #[test]
     fn short_portrait_section_fits_rows_and_ticks_with_minimum_gap() {
-        let (section, volume, brightness) = slider_layout(79.0);
-        assert!((volume.height() - 34.5).abs() <= 1.0);
-        assert!((brightness.height() - 34.5).abs() <= 1.0);
+        let (section, volume, brightness) = slider_layout(SHORT_SECTION_HEIGHT);
+        assert!((volume.height() - SHORT_SLIDER_HEIGHT).abs() <= 1.0);
+        assert!((brightness.height() - SHORT_SLIDER_HEIGHT).abs() <= 1.0);
         assert_eq!(
             brightness.origin.y - volume.origin.y - volume.height(),
-            10.0
+            MIN_SLIDER_GAP
         );
         assert!(volume.origin.y >= section.origin.y);
         assert!(brightness.origin.y + brightness.height() <= section.origin.y + section.height());
@@ -158,11 +161,11 @@ mod tests {
         let children = app.children(column).unwrap();
         let controls = [children[0], children[2]];
         for (height, landscape, expected) in [
-            (635.0, false, 40.0),
-            (79.0, false, 34.5),
-            (79.0, true, 34.5),
-            (79.0, false, 34.5),
-            (635.0, false, 40.0),
+            (635.0, false, SLIDER_HEIGHT),
+            (SHORT_SECTION_HEIGHT, false, SHORT_SLIDER_HEIGHT),
+            (SHORT_SECTION_HEIGHT, true, SHORT_SLIDER_HEIGHT),
+            (SHORT_SECTION_HEIGHT, false, SHORT_SLIDER_HEIGHT),
+            (635.0, false, SLIDER_HEIGHT),
         ] {
             *app.component_mut::<LayoutStyle>(window).unwrap() = size(height);
             app.emit(
@@ -185,14 +188,15 @@ mod tests {
     }
 
     #[test]
-    fn compact_sliders_keep_ten_units_between_controls() {
-        let (section, volume, brightness) = slider_layout(90.0);
-        assert_eq!(section.height(), 90.0);
+    fn compact_sliders_keep_the_minimum_gap_between_controls() {
+        let height = 2.0 * SLIDER_HEIGHT + MIN_SLIDER_GAP;
+        let (section, volume, brightness) = slider_layout(height);
+        assert_eq!(section.height(), height);
         assert_eq!(volume.height(), SLIDER_HEIGHT);
         assert_eq!(brightness.height(), SLIDER_HEIGHT);
         assert_eq!(
             brightness.origin.y - (volume.origin.y + volume.height()),
-            10.0
+            MIN_SLIDER_GAP
         );
         assert!(volume.origin.y >= section.origin.y);
         assert!(brightness.origin.y + brightness.height() <= section.origin.y + section.height());
@@ -200,19 +204,20 @@ mod tests {
 
     #[test]
     fn slider_gap_uses_the_height_between_compact_and_spacious() {
-        let (_, volume, brightness) = slider_layout(2.0 * SLIDER_HEIGHT + 30.0);
+        let gap = ((MIN_SLIDER_GAP + MAX_SLIDER_GAP) / 2.0).round();
+        let (_, volume, brightness) = slider_layout(2.0 * SLIDER_HEIGHT + gap);
         assert_eq!(
             brightness.origin.y - (volume.origin.y + volume.height()),
-            30.0
+            gap
         );
     }
 
     #[test]
-    fn spacious_sliders_keep_forty_units_between_controls_and_center_them() {
+    fn spacious_sliders_keep_the_maximum_gap_between_controls_and_center_them() {
         let (section, volume, brightness) = slider_layout(635.0);
         assert_eq!(
             brightness.origin.y - (volume.origin.y + volume.height()),
-            40.0
+            MAX_SLIDER_GAP
         );
         let above = volume.origin.y - section.origin.y;
         let below = section.origin.y + section.height() - brightness.origin.y - brightness.height();
