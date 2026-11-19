@@ -8,7 +8,7 @@ use mecha_wayland::prelude::*;
 use screen::AppLaunched;
 
 use super::apply::{Action, ContainerNodes, Nav, NavWindow, apply, on_resized};
-use super::input::on_contact;
+use super::input::{on_claimed, on_contact};
 use super::tick::on_frame;
 use crate::core::{AreaId, ContainerSpec, ExternalEvent, Input, NavConfig, Stack, Trigger};
 
@@ -183,6 +183,7 @@ impl Module for NavModule {
         });
         app.system(on_resized);
         app.system(on_contact);
+        app.system(on_claimed);
         app.system(on_frame);
         app.insert_resource(SeenToplevels::default());
         app.system(on_app_launched);

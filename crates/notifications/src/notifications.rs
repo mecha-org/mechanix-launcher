@@ -74,7 +74,17 @@ impl Widget for NotificationsCenter {
         s.on::<Clicked>(close_all_notifications, move |ctx, _| {
             ctx.signal(NotificationSignal::CloseAllNotifications)
         });
-        s.spawn(me, CardListBuilder);
+        let scroll = s.spawn(
+            me,
+            scrollable().style(
+                LayoutStyle::default()
+                    .block()
+                    .width(percent(100.0))
+                    .grow(1.0)
+                    .min_height(px(0.0)),
+            ),
+        );
+        s.spawn(scroll, CardListBuilder);
         let menu = s.spawn(me, OptionsMenuBuilder);
 
         NotificationsCenter { menu }

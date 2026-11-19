@@ -1,6 +1,5 @@
 //! The drawer: a search bar over a scrolling list of every installed app.
 
-use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -39,7 +38,7 @@ impl Signal for SetKeyboard {}
 pub(crate) struct DrawerBuilder {
     pub data_dirs: Vec<PathBuf>,
     pub icon_dirs: Rc<IconDirs>,
-    pub at_top: Rc<Cell<bool>>,
+    pub launcher: Launcher,
 }
 
 impl Build for DrawerBuilder {
@@ -49,7 +48,7 @@ impl Build for DrawerBuilder {
 pub(crate) struct Drawer {
     data_dirs: Vec<PathBuf>,
     icon_dirs: Rc<IconDirs>,
-    at_top: Rc<Cell<bool>>,
+    launcher: Launcher,
     apps: Vec<DesktopApp>,
     icons: Vec<RowIcon>,
     ranker: Ranker,
@@ -81,7 +80,7 @@ impl Widget for Drawer {
         let bar = SearchBar::spawn(s, me);
         let list = s.spawn(
             me,
-            scrollable().style(
+            scrollable().overscroll(Overscroll::YieldStart).style(
                 LayoutStyle::default()
                     .block()
                     .fill()
@@ -119,7 +118,7 @@ impl Widget for Drawer {
         let mut drawer = Drawer {
             data_dirs: b.data_dirs,
             icon_dirs: b.icon_dirs,
-            at_top: b.at_top,
+            launcher: b.launcher,
             apps,
             icons,
             ranker,
@@ -213,9 +212,7 @@ pub(crate) fn install(app: &mut App, activator: Activator, launcher: Launcher) {
         let cache = IconCache::new(&mut app.resource_mut::<Atlas>());
         app.insert_resource(cache);
     }
-    app.system(track_top)
-        .system(refit_on_layout)
-        .system(apply_keyboard);
+    app.system(refit_on_layout).system(apply_keyboard);
 }
 
 fn names(apps: &[DesktopApp]) -> Vec<&str> {
@@ -376,20 +373,6 @@ fn rescan(ctx: &mut Context<'_, Drawer>) {
     d.apps = apps;
     d.icons = icons;
     rerank(ctx);
-}
-
-/// Each frame: the nav may close the drawer by swipe only while its list
-/// is at the top (a rubber-band pull past it still counts).
-fn track_top(app: &mut App, _: &Frame) {
-    let lists: Vec<(NodeId, Rc<Cell<bool>>)> = app
-        .widgets::<Drawer>()
-        .map(|(_, d)| (d.list.id(), d.at_top.clone()))
-        .collect();
-    for (list, gate) in lists {
-        if let Some(v) = app.component::<Viewport>(list) {
-            gate.set(v.scroll.y <= 0.5);
-        }
-    }
 }
 
 fn refit_on_layout(app: &mut App, _: &LayoutDone) {
@@ -825,11 +808,8 @@ mod tests {
         }
         install(&data, "zebra1", "Zebra One", "z");
         install(&data, "zebra2", "Zebra Two", "z");
-        let screen = drawer(&data);
-        let at_top = screen.at_top();
-        let mut ui = ui(screen);
+        let mut ui = ui(drawer(&data));
         assert_eq!(ui.rows().len(), 60);
-        assert!(at_top.get());
 
         let list = ui.list();
         let l = *ui.app.component::<ComputedLayout>(list).unwrap();
@@ -843,16 +823,10 @@ mod tests {
         let max = bottom + l.padding.bottom - l.rect.y() - l.rect.height();
         assert!(max > 0.0, "60 rows overflow the list");
         ui.app.component_mut::<Viewport>(list).unwrap().scroll.y = max;
-        ui.app.signal(Frame(ui.win));
-        ui.app.flush();
-        assert!(!at_top.get());
 
         ui.type_in("zebra");
         assert_eq!(ui.rows().len(), 2);
         assert_eq!(ui.app.component::<Viewport>(list).unwrap().scroll.y, 0.0);
-        ui.app.signal(Frame(ui.win));
-        ui.app.flush();
-        assert!(at_top.get());
     }
 
     #[test]

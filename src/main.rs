@@ -10,7 +10,7 @@ use mecha_wayland::mechanix_widgets::prelude::{Clock, ClockTick, FontBook};
 use mecha_wayland::prelude::*;
 use nav::core::{
     AreaId, BOTTOM_EDGE, ContainerId, Direction, ExternalEvent, FADE, INSTANT, NavConfig,
-    OnExternal, Span, TOP_EDGE, Timing, container, gated, swipe,
+    OnExternal, Span, TOP_EDGE, Timing, container, swipe,
 };
 use nav::shell::{ContainerShown, NavModule, nav_window};
 use notifications::NotificationsModule;
@@ -136,9 +136,6 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
     let bar = LayoutStyle::default().height(px(DEFAULT_BAR_HEIGHT));
     let sides = Anchor::LEFT | Anchor::RIGHT;
 
-    // The drawer closes on a down drag only while its list rests at the top;
-    // further down, the drag scrolls.
-    let at_top = drawer.at_top();
     let home = container(HOME_ID, Home)
         .open(bottom_quick(), FADE)
         .close(OnExternal(ExternalEvent::AppLaunched), INSTANT)
@@ -147,10 +144,7 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
         .child(
             container(DRAWER, drawer)
                 .open(swipe(HOME, Direction::Up, Timing::Any), INSTANT)
-                .close(
-                    gated(swipe(HOME, Direction::Down, Timing::Any), at_top),
-                    INSTANT,
-                )
+                .close(swipe(HOME, Direction::Down, Timing::Any), INSTANT)
                 .close(bottom_quick(), INSTANT),
         )
         .initially_open();
