@@ -1,4 +1,8 @@
-# config for the entire keyboard layout
+# config for the entire keyboard layout. The keyboard always spans the output;
+# `width` is the design width the geometry (height, padding, gap, row-gap,
+# radius) is written for, in logical px. On an output w logical px wide the
+# geometry is multiplied by w / width, keeping every proportion; font sizes
+# stay logical.
 keyboard:
   mode: dark
   background: surface-container-low
@@ -8,7 +12,7 @@ keyboard:
   padding: 8
   width: 540
   height: 252
-  font: geist
+  font: geist-mono
   font-size: 20
 
 # Predictive touch: letter keys' touch areas lean toward likely next letters.
@@ -16,265 +20,252 @@ prediction:
   enabled: true      # false = plain geometry for every key
   strength: 0.25     # 0 = no bias; higher = stronger lean
   dictionary: en     # bundled list name, or a path to a word<TAB>count file
+  terminal-dictionary: terminal  # used on terminal fields
   popup: true        # pop-up of the pressed character key
 
 key_styles:
     normal:   { background: surface-container-high,    foreground: on-surface }
     number:   { background: surface-container-high,    foreground: on-surface,           font: geist-mono }
     function: { background: surface-container-highest, foreground: on-surface,           font: geist-mono, font-size: 18 }
+    strip:    { background: surface-container-highest, foreground: on-surface,           font: geist-mono, font-size: 13 }
     bottom:   { background: surface-container-high,    foreground: on-surface,           font-size: 16 }
     done:     { background: on-secondary-container,    foreground: on-primary-container, font-size: 18 }
     latched:  { background: primary,                   foreground: on-primary }
     emoji:    { background: surface-container-highest, foreground: primary }
-    return:	  { background: primary,                   foreground: on-primary }
 
+# Widths are flex weights within a row. AOSP's: a letter key is 10 % of the row;
+# shift, backspace, ?123/ABC and enter are 15 %; space fills the rest.
 outlines:
-    default:   { width: 44,     height: 44 }
-    narrow:    { width: 40,     height: 44 }
-    altline:   { width: 60,     height: 44 }
-    switch:    { width: 64,     height: 44 }
-    done:      { width: 60,     height: 44 }
-    spaceline: { width: 178,    height: 44 }
-    menu:      { width: 100,    height: 50 }
-    special:   { width: 35.33,  height: 50 }
-    action:    { width: 85,     height: 50 }
-    fkey:      { width: 42,     height: 50 }
+    default:     { width: 10 }
+    wide:        { width: 15 }
+    space:       { width: 40 }
+    space_short: { width: 30 }
+    strip:       { width: 12.5 }
 
-# The Figma "Default, abc", "Caps Lock, ABC", "123" and "#+=" screens.
+# AOSP LatinIME English pages in the Mecha theme (see NOTICE-aosp.txt).
+# Shift is state, not a page: uppercase is derived from the letter keys.
 views:
     base:
-        - "q w e r t y u i o p"
-        - "a s d f g h j k l"
-        - "Shift_L  z x c v b n m  BackSpace"
-        - "show_numbers show_emoji period  space  exclusive_zone hide_keyboard done"
-    upper:
-        - "Q W E R T Y U I O P"
-        - "A S D F G H J K L"
-        - "Shift_L  Z X C V B N M  BackSpace"
-        - "show_numbers show_emoji period  space  exclusive_zone hide_keyboard done"
-    numbers:
-        - "1 2 3 4 5 6 7 8 9 0"
-        - "- / : ; ( ) $ & @ ”"
-        - "show_symbols  . , ? ! ’  BackSpace"
-        - "show_letters show_emoji period  space  exclusive_zone hide_keyboard done"
+        family: text
+        page: letters
+        more_keys: letters
+        rows:
+            - "q w e r t y u i o p"
+            - "[5] a s d f g h j k l [5]"
+            - "shift z x c v b n m BackSpace"
+            - "to_symbols comma emoji space period Return"
     symbols:
-        - "[ ] { } # % ^ * + ="
-        - "_ \\ | ~ ( ) $ & @ ”"
-        - "show_numbers < . , ? ! ’ > BackSpace"
-        - "show_letters show_emoji period  space  exclusive_zone hide_keyboard done"
-    terminal_symbols:
-        - "[ ] { } # % ^ * + ="
-        - "_ \\ | ~ ( ) $ & @ ”"
-        - "< . , ? ! ’ > BackSpace"
-        - "Terminal_show_letters show_emoji comma  space  period Return"
-    eschars:
-        - "F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12"
-        - "ä è é ö ü Ä È É Ö Ü"
-        - "à â ê î ô À Â Ê Î Ô"
-        - "Del  « » ç Ç æ œ ß  BackSpace"
-        - "show_symbols show_eschars preferences         space        „ “ Return"
-        - "Alt Esc PgUp PgDn Home End"
+        family: text
+        page: symbols
+        more_keys: symbols
+        rows:
+            - "1 2 3 4 5 6 7 8 9 0"
+            - "[5] @ # $ % & - + ( ) [5]"
+            - "to_more_symbols * \" ' : ; ! ? BackSpace"
+            - "to_letters comma _ space_short / . Return"
+    more_symbols:
+        family: text
+        page: more_symbols
+        more_keys: symbols
+        rows:
+            - "~ ` | • √ π ÷ × ¶ ∆"
+            - "[5] £ ¢ € ¥ ^ ° = { } [5]"
+            - "to_symbols \\ © ® ™ § [ ] BackSpace"
+            - "to_letters comma < space_short > . Return"
+    email:
+        family: email
+        more_keys: letters
+        extends: base
+        replace: { comma: at, emoji: dot_com }
+    url:
+        family: url
+        more_keys: letters
+        extends: base
+        replace: { comma: slash, emoji: dot_com }
+    password:
+        family: password
+        more_keys: password
+        extends: base
+        replace: { emoji: at }
+    number:
+        family: number
+        more_keys: number
+        rows:
+            - "1 2 3 minus"
+            - "4 5 6 comma"
+            - "7 8 9 BackSpace_pad"
+            - "period 0 space_pad Return_pad"
+    phone:
+        family: phone
+        more_keys: phone
+        rows:
+            - "1 2 3 minus"
+            - "4 5 6 period"
+            - "7 8 9 BackSpace_pad"
+            - "to_phone_symbols 0 space_pad Return_pad"
+    phone_symbols:
+        family: phone
+        page: phone_symbols
+        more_keys: phone
+        rows:
+            - "( / ) minus"
+            - "N pause comma period"
+            - "star wait # BackSpace_pad"
+            - "to_phone plus space_pad Return_pad"
     terminal:
-        - "Esc Ctrl Alt Tab | ~ ` / \\ BackSpace"
-        - "1 2 3 4 5 6 7 9 0"
-        - "q w e r t y u i o p"
-        - "a s d f g h j k l Return"
-        - "Terminal_Shift_L  z x c v b n m , ."
-        - "Terminal_show_symbols : - _ space ← ↑ ↓ →"
-    terminal_upper:
-        - "Esc Ctrl Alt Tab | ~ ` / \\ BackSpace"
-        - "1 2 3 4 5 6 7 9 0"
-        - "Q W E R T Y U I O P"
-        - "A S D F G H J K L Return"
-        - "Terminal_Shift_L  Z X C V B N M , ."
-        - "Terminal_show_symbols : - _ space ← ↑ ↓ →"
+        family: terminal
+        page: letters
+        more_keys: terminal
+        extends: base
+        replace: { comma: slash, emoji: dot, period: minus }
+        rows:
+            - { height: 0.75, keys: "Esc Tab Ctrl Alt ← ↓ ↑ →" }
+    terminal_symbols:
+        family: terminal
+        page: symbols
+        more_keys: symbols
+        extends: symbols
+        replace: { comma: "/", "/": "|", ".": minus }
+        rows:
+            - { height: 0.75, keys: "Esc Tab Ctrl Alt ← ↓ ↑ →" }
+    terminal_more_symbols:
+        family: terminal
+        page: more_symbols
+        more_keys: symbols
+        extends: more_symbols
+        replace: { comma: "/", ".": minus }
+        rows:
+            - { height: 0.75, keys: "Esc Tab Ctrl Alt ← ↓ ↑ →" }
 
 buttons:
-    Shift_L:
-        key_style: "function"
-        action:
-            locking:
-                lock_view: "upper"
-                unlock_view: "base"
-        outline: "altline"
-        icon: "key-shift-symbolic"
-    Terminal_Shift_L:
-        key_style: "function"
-        action:
-            locking:
-                lock_view: "terminal_upper"
-                unlock_view: "terminal"
-        outline: "altline"
-        icon: "key-shift-symbolic"
-    Ctrl:
-        key_style: "function"
-        modifier: "Control"
-        outline: "action"
-        label: "Ctrl"
-    Alt:
-        key_style: "function"
-        modifier: "Alt"
-        outline: "action"
-        label: "Alt"
+    shift:
+        key_style: function
+        action: shift
+        outline: wide
+        icon: key-shift-symbolic
     BackSpace:
-        key_style: "function"
-        outline: "altline"
-        icon: "edit-clear-symbolic"
-        action: "erase"
-    Menu:
-        outline: "menu"
-        keysym: "Menu"
-    preferences:
-        action: "show_prefs"
-        outline: "special"
-        icon: "preferences-system-symbolic"
-    show_letters:
-        key_style: "function"
-        action:
-            set_view: "base"
-        outline: "switch"
-        label: "abc"
-    Terminal_show_letters:
-        key_style: "function"
-        action:
-            set_view: "terminal"
-        outline: "switch"
-        label: "abc"
-    show_numbers:
-        key_style: "function"
-        action:
-            set_view: "numbers"
-        outline: "switch"
+        key_style: function
+        outline: wide
+        icon: edit-clear-symbolic
+        action: erase
+    BackSpace_pad:
+        key_style: function
+        icon: edit-clear-symbolic
+        action: erase
+    # Enter keeps the `done` look on every page and sends Return.
+    Return:
+        key_style: done
+        outline: wide
+        icon: key-enter-symbolic
+        keysym: Return
+    Return_pad:
+        key_style: done
+        icon: key-enter-symbolic
+        keysym: Return
+    to_symbols:
+        key_style: function
+        action: { page: symbols }
+        outline: wide
+        label: "?123"
+    to_more_symbols:
+        key_style: function
+        action: { page: more_symbols }
+        outline: wide
+        label: "=\\<"
+    to_letters:
+        key_style: function
+        action: { page: letters }
+        outline: wide
+        label: "ABC"
+    to_phone_symbols:
+        key_style: function
+        action: { page: phone_symbols }
+        label: "*#"
+    to_phone:
+        key_style: function
+        action: { page: letters }
         label: "123"
-    show_symbols:
-        key_style: "function"
-        action:
-            set_view: "symbols"
-        outline: "switch"
-        label: "#+="
-    Terminal_show_symbols:
-        key_style: "function"
-        action:
-            set_view: "terminal_symbols"
-        outline: "switch"
-        label: "#+="
-    # Placeholder: there's no emoji view yet, so this logs and types nothing.
-    show_emoji:
-        key_style: "emoji"
-        action: "show_emoji"
-        outline: "narrow"
-        icon: "face-smile-symbolic"
-    comma:
-        outline: "narrow"
-        label: ","
-    period:
-        outline: "narrow"
-        label: "."
-    # Figma's DONE key, drawn as the enter icon; sends Return.
-    done:
-        key_style: "done"
-        outline: "done"
-        icon: "key-enter-symbolic"
-        keysym: "Return"
-    # Reserve the keyboard's height so apps shrink above it; lit while on.
-    exclusive_zone:
-        key_style: "function"
-        action: "toggle_exclusive_zone"
-        outline: "narrow"
-        icon: "view-reserve-bottom-symbolic"
-    hide_keyboard:
-        key_style: "function"
-        action: "hide_keyboard"
-        outline: "narrow"
-        icon: "go-down-symbolic"
-    show_eschars:
-        action:
-            locking:
-                lock_view: "eschars"
-                unlock_view: "base"
-        outline: "altline"
-        label: "func"
+    # No emoji page until Part 2: tapping logs "no view for page".
+    emoji:
+        key_style: emoji
+        action: { page: emoji }
+        icon: face-smile-symbolic
     space:
-        outline: "spaceline"
+        outline: space
         label: " "
         text: " "
-    Return:
-        outline: "altline"
-        icon: "key-enter-symbolic"
-        keysym: "Return"
-        key_style: "return"
-    F1:
-        outline: "fkey"
-        keysym: "F1"
-    F2:
-        outline: "fkey"
-        keysym: "F2"
-    F3:
-        outline: "fkey"
-        keysym: "F3"
-    F4:
-        outline: "fkey"
-        keysym: "F4"
-    F5:
-        outline: "fkey"
-        keysym: "F5"
-    F6:
-        outline: "fkey"
-        keysym: "F6"
-    F7:
-        outline: "fkey"
-        keysym: "F7"
-    F8:
-        outline: "fkey"
-        keysym: "F8"
-    F9:
-        outline: "fkey"
-        keysym: "F9"
-    F10:
-        outline: "fkey"
-        keysym: "F10"
-    F11:
-        outline: "fkey"
-        keysym: "F11"
-    F12:
-        outline: "fkey"
-        keysym: "F12"
+    space_short:
+        outline: space_short
+        label: " "
+        text: " "
+    space_pad:
+        label: " "
+        text: " "
+    comma:
+        label: ","
+    period:
+        label: "."
+    at:
+        label: "@"
+    slash:
+        label: "/"
+    dot:
+        label: "."
+    minus:
+        key_style: function
+        label: "-"
+    plus:
+        label: "+"
+    dot_com:
+        key_style: bottom
+        label: ".com"
+        text: ".com"
+    pause:
+        key_style: bottom
+        label: "Pause"
+        text: ","
+    wait:
+        key_style: bottom
+        label: "Wait"
+        text: ";"
+    star:
+        label: "*"
+        text: "*"
     Esc:
-        key_style: "function"
-        outline: "action"
-        keysym: "Escape"
-    Home:
-        outline: "action"
-        keysym: "Home"
-    End:
-        outline: "action"
-        keysym: "End"
-    Del:
-        outline: "altline"
-        keysym: "Delete"
-    PgUp:
-        outline: "action"
-        keysym: "Page_Up"
-    PgDn:
-        outline: "action"
-        keysym: "Page_Down"
+        key_style: strip
+        outline: strip
+        keysym: Escape
     Tab:
-        key_style: "function"
-        outline: "action"
-        keysym: "Tab"
-    "↑":
-        outline: "default"
-        keysym: "Up"
-        icon: "go-up-symbolic"
-    "↓":
-        outline: "default"
-        keysym: "Down"
-        icon: "go-down-symbolic"
+        key_style: strip
+        outline: strip
+        keysym: Tab
+    Ctrl:
+        key_style: strip
+        outline: strip
+        modifier: Control
+        label: Ctrl
+    Alt:
+        key_style: strip
+        outline: strip
+        modifier: Alt
+        label: Alt
     "←":
-        outline: "default"
-        keysym: "Left"
-        icon: "go-previous-symbolic"
+        key_style: strip
+        outline: strip
+        keysym: Left
+        icon: go-previous-symbolic
+    "↓":
+        key_style: strip
+        outline: strip
+        keysym: Down
+        icon: go-down-symbolic
+    "↑":
+        key_style: strip
+        outline: strip
+        keysym: Up
+        icon: go-up-symbolic
     "→":
-        outline: "default"
-        keysym: "Right"
-        icon: "go-next-symbolic"
+        key_style: strip
+        outline: strip
+        keysym: Right
+        icon: go-next-symbolic

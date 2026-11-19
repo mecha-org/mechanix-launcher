@@ -1,11 +1,12 @@
 //! The keyboard surface's shown/hidden state.
 //!
 //! Driven by input-method `activate`/`deactivate` (applied at `done`), shown
-//! by the host with [`show_keyboard`] and hidden by the hide key; all write
-//! through
-//! [`KeyboardVisibilityExt`]. A [`KeyboardVisibilityChanged`] signal is fanned
-//! out as an [`ApplyKeyboardVisibility`] event by a system, which the keyboard
-//! surface widget subscribes to.
+//! by the host with [`show_keyboard`] and hidden by a downward flick on the
+//! keys; all write through [`KeyboardVisibilityExt`]. A
+//! [`KeyboardVisibilityChanged`] signal is fanned out as an
+//! [`ApplyKeyboardVisibility`] event by a system, which the keyboard surface
+//! widget (map/unmap) and the keyboard widget (cancel touch, drop Shift on
+//! hide) subscribe to.
 
 use mecha_wayland::prelude::*;
 
@@ -28,7 +29,7 @@ pub struct ApplyKeyboardVisibility;
 impl Event for ApplyKeyboardVisibility {}
 
 /// The single visibility setter: the input-method `done` handler,
-/// [`show_keyboard`] and the hide key all go through here. Implemented for `App` (systems) and `Context`
+/// [`show_keyboard`] and the closing flick all go through here. Implemented for `App` (systems) and `Context`
 /// (widget handlers) so the same call works at every site.
 pub trait KeyboardVisibilityExt {
     /// The current visibility flag.

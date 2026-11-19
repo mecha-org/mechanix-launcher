@@ -142,6 +142,8 @@ pub mod size {
     pub const CARD_MIN_HEIGHT: f32 = 48.0;
     /// App icon square. Figma 60.
     pub const ICON: f32 = 60.0;
+    /// Group header chevron. Figma 20.
+    pub const CHEVRON: f32 = 20.0;
     /// Options menu width. Figma 208; height comes from its rows.
     pub const MENU_WIDTH: f32 = 208.0;
     /// One menu row. Figma 44, inside a 2px top/bottom inset (48 per item).
