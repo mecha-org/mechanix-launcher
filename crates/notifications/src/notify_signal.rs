@@ -97,10 +97,18 @@ pub fn notify_signal(app: &mut App, notify_signal: &NotificationSignal) {
             else {
                 return;
             };
+            let card = app
+                .widgets::<Card>()
+                .find(|(_, c)| c.notification_id == *id)
+                .map(|(card, _)| NodeId::from(card));
+            let mut anchor = *anchor;
+            if let Some(card) = card {
+                anchor.origin = anchor.origin - scrolled(app, card);
+            }
             app.emit(
                 ShowOptionsMenu {
                     notification_id: *id,
-                    anchor: *anchor,
+                    anchor,
                 },
                 menu,
             );
@@ -124,3 +132,28 @@ pub fn notify_signal(app: &mut App, notify_signal: &NotificationSignal) {
 }
 
 impl Signal for NotificationSignal {}
+
+fn scrolled(app: &App, node: NodeId) -> Point {
+    std::iter::once(node)
+        .chain(app.ancestors(node))
+        .filter_map(|n| app.component::<Viewport>(n))
+        .fold(Point::new(0.0, 0.0), |sum, v| sum + v.scroll)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scrolled_adds_up_every_scrolling_ancestor() {
+        let mut app = App::new();
+        app.add_module(LayoutModule).add_module(PaintModule);
+        let outer = app.spawn(app.root(), div()).id();
+        let list = app.spawn(outer, div()).id();
+        let card = app.spawn(list, div()).id();
+        app.component_mut::<Viewport>(outer).unwrap().scroll = Point::new(0.0, 10.0);
+        app.component_mut::<Viewport>(list).unwrap().scroll = Point::new(0.0, 70.0);
+
+        assert_eq!(scrolled(&app, card), Point::new(0.0, 80.0));
+    }
+}
