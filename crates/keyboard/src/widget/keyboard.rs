@@ -8,6 +8,7 @@ use mecha_wayland::prelude::*;
 use crate::layout::style::KeyState;
 use crate::layout::tokens::{Font, Fonts};
 use crate::layout::{Cell, Family, KeyAction, Keymap, Modifier, Page};
+use crate::modifiers::pointing_stick;
 use crate::modifiers::shift::{self, HOLD_LOCK, Shift};
 use crate::predict::TypingContext;
 use crate::scale::KeyboardGeometry;
@@ -17,6 +18,7 @@ use crate::view::{BASE_VIEW, SwitchView, switch_view, view_for};
 use crate::visibility::{ApplyKeyboardVisibility, KeyboardVisibilityExt};
 use crate::widget::key::{Key, KeyBuilder};
 use crate::widget::more_keys::{MoreKeys, MoreKeysBuilder};
+use crate::widget::pointing_stick::{PointingStickOverlay, PointingStickOverlayBuilder};
 use crate::widget::popup::{KeyPopup, KeyPopupBuilder};
 use crate::widget::surface::{popup_headroom, row_weights, view_height_of};
 
@@ -49,6 +51,8 @@ pub(crate) struct Keyboard {
     pub(crate) latch_keys: Vec<(Modifier, Handle<Key>)>,
     /// Every Shift key across all views, for repaint on shift state change.
     pub(crate) shift_keys: Vec<Handle<Key>>,
+    /// Every pointing stick key across all views, for repaint on mode change.
+    pub(crate) pointing_stick_keys: Vec<Handle<Key>>,
     /// The hold-to-lock timer on ⇧, started while a Shift key is pressed.
     pub(crate) shift_timer: TimerId,
     /// Key corner radius, for repainting latch keys.
@@ -66,7 +70,10 @@ pub(crate) struct Keyboard {
     pub(crate) popup: Handle<KeyPopup>,
     /// The long-press choices row, painted above everything.
     pub(crate) choices_row: Handle<MoreKeys>,
-    /// The long-press timer, started while a key with choices is pressed.
+    /// The pointing stick's direction pad, painted above everything.
+    pub(crate) pointing_stick: Handle<PointingStickOverlay>,
+    /// The long-press timer, started while a key with choices or the
+    /// pointing stick is pressed.
     pub(crate) long_press_timer: TimerId,
     /// Height of the strip above the keys the pop-up and choices row may
     /// rise into.
@@ -127,6 +134,7 @@ impl Widget for Keyboard {
         let mut views = Vec::with_capacity(b.keymap.views.len());
         let mut latch_keys = Vec::new();
         let mut shift_keys = Vec::new();
+        let mut pointing_stick_keys = Vec::new();
         let mut keys = Vec::with_capacity(b.keymap.views.len());
 
         for (vi, view) in b.keymap.views.iter().enumerate() {
@@ -197,6 +205,7 @@ impl Widget for Keyboard {
                     match key.action {
                         KeyAction::LatchModifier(m) => latch_keys.push((m, key_handle)),
                         KeyAction::Shift => shift_keys.push(key_handle),
+                        KeyAction::PointingStick => pointing_stick_keys.push(key_handle),
                         _ => {}
                     }
 
@@ -234,6 +243,15 @@ impl Widget for Keyboard {
             },
         );
 
+        // After the choices row; only one of them is ever open.
+        let pointing_stick = s.spawn(
+            me,
+            PointingStickOverlayBuilder {
+                radius: style.radius,
+                look: b.keymap.choices_look,
+            },
+        );
+
         let shift_timer = s.add_timeout(HOLD_LOCK, |ctx, _| shift::held(ctx));
         let long_press_timer = s.add_timeout(LONG_PRESS, |ctx, _| touch::long_pressed(ctx));
 
@@ -241,12 +259,14 @@ impl Widget for Keyboard {
         // A field was focused: cancel any touch first (even on the same
         // view, nothing it holds belongs in the new field), then drop the
         // word typed for the previous field rather than finish (and record)
-        // it, and show the field's view.
+        // it, drop Shift and the pointing stick's select mode, and show the
+        // field's view.
         s.on::<SwitchView>(me, |ctx, event| {
             touch::abort(ctx);
             ctx.resource_mut::<TypingContext>().clear();
             ctx.resource_mut::<Shift>().reset();
             shift::refresh(ctx);
+            pointing_stick::reset(ctx);
             ctx.me().family = event.field.family;
             let me = ctx.me();
             if let Some(idx) = view_for(&me.views, event.field.family, Page::Letters) {
@@ -257,7 +277,8 @@ impl Widget for Keyboard {
 
         // Every hide (flick, input-method deactivate, `hide_keyboard`) ends
         // here: cancel any touch so nothing is typed into a hidden keyboard
-        // and no long-press opens a row on it, and drop Shift.
+        // and no long-press opens a row on it, and drop Shift and the
+        // pointing stick's select mode.
         s.on::<ApplyKeyboardVisibility>(me, |ctx, _| {
             if ctx.keyboard_visible() {
                 return;
@@ -265,6 +286,7 @@ impl Widget for Keyboard {
             touch::abort(ctx);
             ctx.resource_mut::<Shift>().reset();
             shift::refresh(ctx);
+            pointing_stick::reset(ctx);
         });
 
         Keyboard {
@@ -273,6 +295,7 @@ impl Widget for Keyboard {
             family: Family::Text,
             latch_keys,
             shift_keys,
+            pointing_stick_keys,
             shift_timer,
             radius: style.radius,
             letter_views: letter_views(&b.keymap),
@@ -281,6 +304,7 @@ impl Widget for Keyboard {
             touch: TouchState::default(),
             popup,
             choices_row,
+            pointing_stick,
             long_press_timer,
             headroom: popup_headroom(&style, popup_gap),
             popup_gap,

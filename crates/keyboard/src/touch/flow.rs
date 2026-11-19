@@ -10,6 +10,7 @@ use mecha_wayland::prelude::*;
 use super::defer::{Contact, Deferral, PendingPress, laid_out};
 use super::flick::Flick;
 use super::long_press::ChoicesRow;
+use super::pointing_stick::PointingStickPad;
 use super::resolve::{KeyGeom, ResolveParams, resolve};
 use super::tracker::{KeyRef, TouchOut, TouchTracker};
 use crate::predict::{FLAT, LetterPrior};
@@ -25,6 +26,9 @@ pub(crate) struct Flow {
     strength: f32,
     /// The tracked contact's motion, watched for a closing flick.
     flick: Option<(ContactId, Flick)>,
+    /// The tracked contact's latest position: where a direction pad opening
+    /// now measures directions from.
+    position: Point,
 }
 
 impl Default for Flow {
@@ -34,6 +38,7 @@ impl Default for Flow {
             prior: FLAT,
             strength: 0.0,
             flick: None,
+            position: Point::default(),
         }
     }
 }
@@ -51,6 +56,11 @@ pub(crate) trait Board {
     fn has_choices(&mut self, index: usize) -> bool;
     /// The choices row key `index` of the current view opens, if it has one.
     fn choices_row(&mut self, index: usize) -> Option<ChoicesRow>;
+    /// Whether key `index` of the current view is the pointing stick.
+    fn is_pointing_stick(&mut self, index: usize) -> bool;
+    /// The direction pad the pointing stick at key `index` of the current
+    /// view opens, measuring directions from `origin`.
+    fn pointing_stick_pad(&mut self, index: usize, origin: Point) -> Option<PointingStickPad>;
     fn tracker(&mut self) -> &mut TouchTracker;
     fn flow(&mut self) -> &mut Flow;
     /// Act on tracker outputs (indices into the current view), then cancel
@@ -75,15 +85,18 @@ pub(crate) fn press(b: &mut impl Board, p: PendingPress) {
     }
 }
 
-/// A contact moved to `position`. While its choices row is open the row
-/// tracks it instead of the keys.
+/// A contact moved to `position`. While its choices row or direction pad is
+/// open, that tracks it instead of the keys.
 pub(crate) fn moved(b: &mut impl Board, c: ContactId, position: Point, time: u32) {
     if gate(b, Contact::Moved(c)) {
         if let Some((_, f)) = b.flow().flick.as_mut().filter(|(fc, _)| *fc == c) {
             f.sample(position, time);
         }
-        if b.tracker().choices_open() {
-            let out = b.tracker().track(c, position);
+        if b.tracker().contact() == Some(c) {
+            b.flow().position = position;
+        }
+        if b.tracker().overlay_open() {
+            let out = b.tracker().track(c, position, time);
             b.act(out, time);
             return;
         }
@@ -96,7 +109,7 @@ pub(crate) fn moved(b: &mut impl Board, c: ContactId, position: Point, time: u32
 
 /// A contact lifted. The commit uses the last resolved key (the highlighted
 /// one), not a fresh resolve at the release position, by design. A closing
-/// flick (never while a choices row is open) types nothing: the contact is
+/// flick (never while a choices row or direction pad is open) types nothing: the contact is
 /// cancelled, which also closes its row, ends its hold and its long-press
 /// wait, and the keyboard hides.
 pub(crate) fn release(b: &mut impl Board, c: ContactId, time: u32) {
@@ -107,7 +120,7 @@ pub(crate) fn release(b: &mut impl Board, c: ContactId, time: u32) {
             f.end(time);
             f.is_close()
         }) && b.tracker().contact() == Some(c)
-            && !b.tracker().choices_open();
+            && !b.tracker().overlay_open();
         if closing {
             let out = b.tracker().cancel(c, time);
             b.act(out, time);
@@ -139,15 +152,23 @@ pub(crate) fn abort(b: &mut impl Board, time: u32) {
 }
 
 /// The long-press timer fired at `time` for the key under the active
-/// contact: open its choices row.
+/// contact: open its choices row, or the pointing stick's direction pad.
 pub(crate) fn long_pressed(b: &mut impl Board, time: u32) {
     let Some((c, key)) = b.tracker().pressed() else {
         return;
     };
-    let Some(row) = b.choices_row(key) else {
-        return;
+    let out = if b.is_pointing_stick(key) {
+        let origin = b.flow().position;
+        let Some(pad) = b.pointing_stick_pad(key, origin) else {
+            return;
+        };
+        b.tracker().pointing_stick_held(c, pad)
+    } else {
+        let Some(row) = b.choices_row(key) else {
+            return;
+        };
+        b.tracker().long_pressed(c, row)
     };
-    let out = b.tracker().long_pressed(c, row);
     b.act(out, time);
 }
 
@@ -189,6 +210,7 @@ fn start(b: &mut impl Board, p: PendingPress) -> bool {
     flow.prior = prior;
     flow.strength = strength;
     flow.flick = Some((p.contact, Flick::start(p.position, p.time)));
+    flow.position = p.position;
     let key = key_at(b, &geoms, p.position);
     let out = b.tracker().press(p.contact, key, p.time);
     b.act(out, p.time);
@@ -213,6 +235,7 @@ fn key_at(b: &mut impl Board, geoms: &[KeyGeom], p: Point) -> Option<KeyRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::touch::pointing_stick::Direction;
 
     const A: ContactId = ContactId::Touch(1);
     const B: ContactId = ContactId::Touch(2);
@@ -222,6 +245,8 @@ mod tests {
     enum Act {
         Letter(char),
         View(usize),
+        /// The pointing stick: a tap toggles select mode.
+        Stick,
     }
 
     /// Two views of two 40x40 keys at x 0 and 40: a view switch and a letter.
@@ -249,6 +274,12 @@ mod tests {
         holding: bool,
         /// Whether the keyboard was closed.
         closed: bool,
+        /// Whether the pointing stick is in select mode.
+        select: bool,
+        /// Whether the direction pad is shown.
+        pad_shown: bool,
+        /// Every direction the pointing stick lit, in order.
+        directions: Vec<Option<Direction>>,
     }
 
     impl Fake {
@@ -269,13 +300,19 @@ mod tests {
                 repeat: None,
                 holding: false,
                 closed: false,
+                select: false,
+                pad_shown: false,
+                directions: Vec::new(),
             }
         }
 
         fn apply(&mut self, out: Vec<TouchOut>, time: u32) {
             for o in out {
                 match o {
-                    TouchOut::Pressed(i) if !self.choices[i].is_empty() => {
+                    TouchOut::Pressed(i)
+                        if !self.choices[i].is_empty()
+                            || matches!(self.views[self.current][i], Act::Stick) =>
+                    {
                         self.timer = Some(i);
                         self.timer_starts.push((i, time));
                     }
@@ -283,6 +320,7 @@ mod tests {
                     TouchOut::Commit(i) => match self.views[self.current][i] {
                         Act::Letter(c) => self.typed.push(c),
                         Act::View(v) => self.current = v,
+                        Act::Stick => self.select = !self.select,
                     },
                     TouchOut::OpenChoices(_) => self.row_shown = true,
                     TouchOut::CommitChoice { key, choice } => {
@@ -292,6 +330,12 @@ mod tests {
                     TouchOut::CloseChoices => self.row_shown = false,
                     TouchOut::Hold(_) => self.holding = true,
                     TouchOut::StopHold { .. } => self.holding = false,
+                    TouchOut::OpenPointingStick(_) => self.pad_shown = true,
+                    TouchOut::PointingStick(d) => {
+                        self.holding = d.is_some();
+                        self.directions.push(d);
+                    }
+                    TouchOut::ClosePointingStick => self.pad_shown = false,
                     _ => {}
                 }
             }
@@ -319,7 +363,7 @@ mod tests {
                     },
                     letter: match a {
                         Act::Letter(c) => Some(c.to_ascii_lowercase()),
-                        Act::View(_) => None,
+                        Act::View(_) | Act::Stick => None,
                     },
                 })
                 .collect()
@@ -339,6 +383,18 @@ mod tests {
             let key = self.geoms()[index].rect;
             (!list.is_empty())
                 .then(|| ChoicesRow::open(key, Rect::new(0.0, -60.0, 400.0, 100.0), 4.0, list))
+        }
+        fn is_pointing_stick(&mut self, index: usize) -> bool {
+            matches!(self.views[self.current][index], Act::Stick)
+        }
+        fn pointing_stick_pad(&mut self, index: usize, origin: Point) -> Option<PointingStickPad> {
+            let key = self.geoms()[index].rect;
+            Some(PointingStickPad::open(
+                key,
+                Rect::new(0.0, -60.0, 400.0, 200.0),
+                4.0,
+                origin,
+            ))
         }
         fn tracker(&mut self) -> &mut TouchTracker {
             &mut self.tracker
@@ -444,6 +500,75 @@ mod tests {
         assert_eq!(b.typed, "q");
     }
 
+    /// `q` and the pointing stick.
+    fn stick_board() -> Fake {
+        Fake::new(vec![[Act::Letter('q'), Act::Stick]])
+    }
+
+    #[test]
+    fn pointing_stick_tap_toggles_mode_and_starts_its_timer() {
+        let mut b = stick_board();
+        press(&mut b, at(A, 60.0, 0));
+        assert_eq!(b.timer, Some(1));
+        release(&mut b, A, 100);
+        assert_eq!(b.timer, None);
+        assert!(b.select);
+        assert!(!b.pad_shown);
+        press(&mut b, at(A, 60.0, 200));
+        release(&mut b, A, 250);
+        assert!(!b.select);
+        assert_eq!(b.typed, "");
+    }
+
+    #[test]
+    fn pointing_stick_hold_measures_from_where_the_finger_rests() {
+        let mut b = stick_board();
+        // Pressed left of the key's centre, drifting a little before the
+        // timer fires: the pad measures from the drifted point.
+        press(&mut b, at(A, 50.0, 0));
+        moved(&mut b, A, Point::new(52.0, 22.0), 50);
+        b.fire(150);
+        assert!(b.pad_shown);
+        assert_eq!(
+            b.tracker.pointing_stick().unwrap().origin,
+            Point::new(52.0, 22.0)
+        );
+        // Moving back to the press point is inside the dead zone.
+        moved(&mut b, A, Point::new(50.0, 20.0), 160);
+        assert_eq!(b.directions, vec![]);
+        moved(&mut b, A, Point::new(52.0, 60.0), 200);
+        assert!(b.holding);
+        moved(&mut b, A, Point::new(10.0, 22.0), 300);
+        assert_eq!(
+            b.directions,
+            vec![Some(Direction::Down), Some(Direction::Left)]
+        );
+        release(&mut b, A, 400);
+        assert!(!b.holding);
+        assert!(!b.pad_shown);
+        assert!(!b.select, "a hold doesn't toggle the mode");
+        assert_eq!(b.typed, "");
+    }
+
+    #[test]
+    fn flick_ignored_while_pointing_stick_pad_open() {
+        let mut b = stick_board();
+        press(&mut b, at(A, 60.0, 0));
+        b.fire(150);
+        for i in 1..=10u32 {
+            moved(
+                &mut b,
+                A,
+                Point::new(60.0, 20.0 + 15.0 * i as f32),
+                150 + i * 8,
+            );
+        }
+        release(&mut b, A, 230);
+        assert!(!b.closed);
+        assert!(!b.pad_shown);
+        assert!(!b.holding);
+    }
+
     #[test]
     fn flick_ignored_while_choices_open() {
         let mut b = choices_board();
@@ -480,7 +605,7 @@ mod tests {
         press(&mut b, at(A, 60.0, 0));
         b.fire(300);
         assert!(b.row_shown);
-        assert!(b.tracker.choices_open());
+        assert!(b.tracker.overlay_open());
         release(&mut b, A, 400);
         assert_eq!(b.typed, "4");
         assert!(!b.row_shown);

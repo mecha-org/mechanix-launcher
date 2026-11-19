@@ -47,6 +47,9 @@ pub struct VirtualKeyboardState {
     /// Latchable modifier → its serialized mask, derived from the keymap
     /// (e.g. `Control` → the Control mask, `Alt` → Mod1).
     pub mod_masks: HashMap<Modifier, u32>,
+    /// The Shift modifier's serialized mask, which the pointing stick holds
+    /// in select mode.
+    pub shift_mask: u32,
     /// The key currently held down by [`press_keysym`], with the modifier
     /// mask sent alongside it; cleared by [`release_held`].
     pub held: Option<Keystroke>,
@@ -59,6 +62,7 @@ impl Default for VirtualKeyboardState {
             start_time: Instant::now(),
             keycodes: HashMap::new(),
             mod_masks: HashMap::new(),
+            shift_mask: 0,
             held: None,
         }
     }
@@ -233,11 +237,14 @@ fn init(app: &mut App) {
         })
         .collect();
 
+    let shift_mask = 1u32 << keymap.mod_get_index(MOD_NAME_SHIFT);
+
     tracing::info!(mapped = keycodes.len(), "virtual keyboard ready");
     let mut vk = app.resource_mut::<VirtualKeyboardState>();
     vk.virtual_keyboard = Some(vkbd);
     vk.keycodes = keycodes;
     vk.mod_masks = mod_masks;
+    vk.shift_mask = shift_mask;
 }
 
 /// Build the `keysym → Keystroke` map from a compiled keymap's base (level 0)

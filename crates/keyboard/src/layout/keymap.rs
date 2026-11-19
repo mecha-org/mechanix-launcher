@@ -148,6 +148,9 @@ pub enum KeyAction {
     Page(Page),
     /// Toggle shift (tap) / caps lock (double tap).
     Shift,
+    /// The pointing stick: a tap toggles caret / select mode; a hold opens a
+    /// direction pad that holds the arrow the finger slides toward.
+    PointingStick,
     /// An action not wired this pass (prefs, modifiers other than Control/Alt).
     /// The key still draws and hit-tests; tapping it logs but types nothing.
     Unhandled(String),

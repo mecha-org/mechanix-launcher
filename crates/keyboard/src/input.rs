@@ -2,7 +2,9 @@
 //! to the view/latch controllers; every other action is a keystroke emitted
 //! through the input method (preferred) or the virtual keyboard (fallback),
 //! consuming any latched modifier. Control keys ([`repeats`]) are held down
-//! for as long as the finger is, so the client's key repeat runs. Each
+//! for as long as the finger is, so the client's key repeat runs, as are the
+//! pointing stick's arrows ([`hold_direction`], Shift+arrow in select mode).
+//! Using any key but the pointing stick ends its select mode. Each
 //! keystroke also updates the [`TypingContext`], handing finished words to the
 //! active profile's recorder.
 
@@ -12,6 +14,7 @@ use xkbcommon::xkb::Keysym;
 use crate::field::Field;
 use crate::layout::{KeyAction, Modifier};
 use crate::modifiers::latch::{LatchedState, consume_latch, toggle_latch};
+use crate::modifiers::pointing_stick::{self, PointingStickMode};
 use crate::modifiers::shift::{self, Shift, ShiftState};
 use crate::predict::{Prediction, TypingContext};
 use crate::protocol::input_method::{self, InputMethodState};
@@ -23,6 +26,10 @@ use crate::widget::keyboard::Keyboard;
 /// Keyboard widget state; every other action is a keystroke the virtual
 /// keyboard emits (consuming any latched modifier).
 pub(crate) fn dispatch(ctx: &mut Context<'_, Keyboard>, action: &KeyAction, time: u32) {
+    // Using any other key ends the pointing stick's select mode.
+    if !matches!(action, KeyAction::PointingStick) {
+        pointing_stick::reset(ctx);
+    }
     match action {
         KeyAction::SetView(name) => {
             switch_view(ctx, name);
@@ -89,6 +96,7 @@ pub(crate) fn dispatch(ctx: &mut Context<'_, Keyboard>, action: &KeyAction, time
             }
         }
         KeyAction::Shift => shift::released(ctx, time),
+        KeyAction::PointingStick => pointing_stick::toggle(ctx),
         KeyAction::Unhandled(name) => {
             tracing::info!(action = %name, "tapped key with no wired action");
         }
@@ -182,9 +190,29 @@ pub(crate) fn repeats(action: &KeyAction) -> bool {
 
 /// Press a [`repeats`] key's keysym through the virtual keyboard and leave it
 /// down until [`release`], consuming any latched modifier. The latch is
-/// cleared now but its mask stays applied until the key is released.
+/// cleared now but its mask stays applied until the key is released. Like
+/// any other key used, it ends the pointing stick's select mode.
 pub(crate) fn hold(ctx: &mut Context<'_, Keyboard>, ks: Keysym) {
-    let latched_mask = latched_mask(ctx);
+    pointing_stick::reset(ctx);
+    press_and_hold(ctx, ks, 0);
+}
+
+/// Press the arrow `ks` for the pointing stick's held direction and leave it
+/// down until [`release`], as [`hold`] does, with Shift held too in select
+/// mode. The mode is kept.
+pub(crate) fn hold_direction(ctx: &mut Context<'_, Keyboard>, ks: Keysym) {
+    let shift = if ctx.resource::<PointingStickMode>().select() {
+        ctx.resource::<VirtualKeyboardState>().shift_mask
+    } else {
+        0
+    };
+    press_and_hold(ctx, ks, shift);
+}
+
+/// Press `ks` with `extra_mask` and any latched modifiers, leaving it down,
+/// then spend the latch and note the keystroke.
+fn press_and_hold(ctx: &mut Context<'_, Keyboard>, ks: Keysym, extra_mask: u32) {
+    let latched_mask = latched_mask(ctx) | extra_mask;
     {
         let (mut vk, mut wl) = ctx.fetch::<(ResMut<VirtualKeyboardState>, ResMut<Wayland>)>();
         virtual_keyboard::press_keysym(&mut vk, &mut wl, ks, latched_mask);

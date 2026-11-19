@@ -6,6 +6,7 @@
 use mecha_wayland::prelude::*;
 
 use super::long_press::ChoicesRow;
+use super::pointing_stick::{Direction, PointingStickPad};
 
 /// A key under a contact: its index, whether holding it auto-repeats and
 /// whether it has long-press choices (which rule out repeating).
@@ -37,6 +38,22 @@ pub(crate) enum TouchOut {
     CommitChoice { key: usize, choice: usize },
     /// Close the choices row; nothing is typed.
     CloseChoices,
+    /// The pointing stick was held: show its direction pad.
+    OpenPointingStick(usize),
+    /// The pointing stick's direction changed: light it and hold its arrow,
+    /// or (`None`) light nothing. A running hold is stopped first.
+    PointingStick(Option<Direction>),
+    /// Close the direction pad.
+    ClosePointingStick,
+}
+
+/// What a long-pressed key opened over the keys; the finger drives it until
+/// it lifts.
+enum Overlay {
+    /// A key's choices row.
+    Choices(ChoicesRow),
+    /// The pointing stick's direction pad.
+    PointingStick(PointingStickPad),
 }
 
 /// The contact currently being tracked.
@@ -44,12 +61,14 @@ struct Active {
     contact: ContactId,
     /// Key under the contact, if any.
     key: Option<usize>,
-    /// Whether a hold is running on `key`.
+    /// Whether a hold is running: on `key`, or on the pointing stick's
+    /// direction.
     held: bool,
-    /// Time of the press, for hold durations.
+    /// Time of the press, or of the pointing stick's latest direction, for
+    /// hold durations.
     press_time: u32,
-    /// The choices row, once the key was long-pressed.
-    choices: Option<ChoicesRow>,
+    /// The choices row or direction pad, once the key was long-pressed.
+    overlay: Option<Overlay>,
 }
 
 /// Tracks one active contact; events from other contacts are ignored.
@@ -79,7 +98,7 @@ impl TouchTracker {
             key: key.map(|k| k.index),
             held,
             press_time: time,
-            choices: None,
+            overlay: None,
         });
         out
     }
@@ -90,7 +109,7 @@ impl TouchTracker {
         let Some(active) = self
             .active
             .as_mut()
-            .filter(|a| a.contact == c && a.choices.is_none())
+            .filter(|a| a.contact == c && a.overlay.is_none())
         else {
             return out;
         };
@@ -118,11 +137,32 @@ impl TouchTracker {
     /// choices. Ignored unless `c` is on a key that isn't holding and the row
     /// isn't open yet.
     pub(crate) fn long_pressed(&mut self, c: ContactId, row: ChoicesRow) -> Vec<TouchOut> {
+        self.open(c, Overlay::Choices(row), TouchOut::OpenChoices)
+    }
+
+    /// Contact `c` was held on the pointing stick long enough: open `pad`,
+    /// its direction pad. Ignored as [`long_pressed`](Self::long_pressed) is.
+    pub(crate) fn pointing_stick_held(
+        &mut self,
+        c: ContactId,
+        pad: PointingStickPad,
+    ) -> Vec<TouchOut> {
+        self.open(c, Overlay::PointingStick(pad), TouchOut::OpenPointingStick)
+    }
+
+    /// Open `overlay` over contact `c`'s key, unless `c` isn't on a key, is
+    /// holding it, or already has one open.
+    fn open(
+        &mut self,
+        c: ContactId,
+        overlay: Overlay,
+        out: impl FnOnce(usize) -> TouchOut,
+    ) -> Vec<TouchOut> {
         match self.active.as_mut() {
-            Some(a) if a.contact == c && !a.held && a.choices.is_none() => match a.key {
+            Some(a) if a.contact == c && !a.held && a.overlay.is_none() => match a.key {
                 Some(i) => {
-                    a.choices = Some(row);
-                    vec![TouchOut::OpenChoices(i)]
+                    a.overlay = Some(overlay);
+                    vec![out(i)]
                 }
                 None => Vec::new(),
             },
@@ -130,33 +170,63 @@ impl TouchTracker {
         }
     }
 
-    /// Contact `c` moved to `p` while its choices row is open.
-    pub(crate) fn track(&mut self, c: ContactId, p: Point) -> Vec<TouchOut> {
-        let Some(row) = self
-            .active
-            .as_mut()
-            .filter(|a| a.contact == c)
-            .and_then(|a| a.choices.as_mut())
-        else {
+    /// Contact `c` moved to `p` at `time` while its choices row or direction
+    /// pad is open.
+    pub(crate) fn track(&mut self, c: ContactId, p: Point, time: u32) -> Vec<TouchOut> {
+        let Some(a) = self.active.as_mut().filter(|a| a.contact == c) else {
             return Vec::new();
         };
-        let before = row.highlighted;
-        row.track(p);
-        if row.highlighted == before {
-            Vec::new()
-        } else {
-            vec![TouchOut::HighlightChoice(row.highlighted)]
+        match a.overlay.as_mut() {
+            Some(Overlay::Choices(row)) => {
+                let before = row.highlighted;
+                row.track(p);
+                if row.highlighted == before {
+                    Vec::new()
+                } else {
+                    vec![TouchOut::HighlightChoice(row.highlighted)]
+                }
+            }
+            Some(Overlay::PointingStick(pad)) => {
+                let before = pad.direction;
+                pad.track(p);
+                if pad.direction == before {
+                    return Vec::new();
+                }
+                let mut out = Vec::new();
+                if a.held {
+                    out.push(TouchOut::StopHold {
+                        held_ms: time.wrapping_sub(a.press_time),
+                    });
+                }
+                a.held = pad.direction.is_some();
+                a.press_time = time;
+                out.push(TouchOut::PointingStick(pad.direction));
+                out
+            }
+            None => Vec::new(),
         }
     }
 
-    /// Whether a choices row is open (gestures stand down while it is).
-    pub(crate) fn choices_open(&self) -> bool {
-        self.active.as_ref().is_some_and(|a| a.choices.is_some())
+    /// Whether a choices row or direction pad is open (gestures stand down
+    /// while one is).
+    pub(crate) fn overlay_open(&self) -> bool {
+        self.active.as_ref().is_some_and(|a| a.overlay.is_some())
     }
 
     /// The open choices row, if any.
     pub(crate) fn choices(&self) -> Option<&ChoicesRow> {
-        self.active.as_ref().and_then(|a| a.choices.as_ref())
+        match self.active.as_ref()?.overlay.as_ref()? {
+            Overlay::Choices(row) => Some(row),
+            Overlay::PointingStick(_) => None,
+        }
+    }
+
+    /// The open direction pad, if any.
+    pub(crate) fn pointing_stick(&self) -> Option<&PointingStickPad> {
+        match self.active.as_ref()?.overlay.as_ref()? {
+            Overlay::PointingStick(pad) => Some(pad),
+            Overlay::Choices(_) => None,
+        }
     }
 
     /// The active contact and the key under it, if it is on one.
@@ -209,14 +279,22 @@ impl TouchTracker {
         out
     }
 
-    /// Emit the closing actions for `active`.
+    /// Emit the closing actions for `active`. The pointing stick's pad
+    /// never commits: lifting stops its arrow and closes it.
     fn finish(active: Active, commit: bool, time: u32, out: &mut Vec<TouchOut>) {
         let Some(i) = active.key else { return };
-        if let Some(row) = active.choices {
+        if let Some(Overlay::Choices(row)) = active.overlay {
             match row.highlighted.filter(|_| commit) {
                 Some(choice) => out.push(TouchOut::CommitChoice { key: i, choice }),
                 None => out.push(TouchOut::CloseChoices),
             }
+        } else if let Some(Overlay::PointingStick(_)) = active.overlay {
+            if active.held {
+                out.push(TouchOut::StopHold {
+                    held_ms: time.wrapping_sub(active.press_time),
+                });
+            }
+            out.push(TouchOut::ClosePointingStick);
         } else if active.held {
             out.push(TouchOut::StopHold {
                 held_ms: time.wrapping_sub(active.press_time),
@@ -286,16 +364,16 @@ mod tests {
     fn long_press_opens_row_and_slide_moves_highlight() {
         let mut t = TouchTracker::default();
         t.press(A, long(2), 0);
-        assert!(!t.choices_open());
+        assert!(!t.overlay_open());
         assert_eq!(t.pressed(), Some((A, 2)));
         assert_eq!(t.long_pressed(A, row()), vec![TouchOut::OpenChoices(2)]);
-        assert!(t.choices_open());
+        assert!(t.overlay_open());
         assert_eq!(t.long_pressed(A, row()), vec![], "opens once");
         // Key changes no longer apply; the row tracks the finger.
         assert_eq!(t.moved(A, long(3), 10), vec![]);
-        assert_eq!(t.track(A, Point::new(10.0, 70.0)), vec![]);
+        assert_eq!(t.track(A, Point::new(10.0, 70.0), 0), vec![]);
         assert_eq!(
-            t.track(A, Point::new(50.0, 70.0)),
+            t.track(A, Point::new(50.0, 70.0), 0),
             vec![TouchOut::HighlightChoice(Some(1))]
         );
         assert_eq!(
@@ -305,7 +383,7 @@ mod tests {
                 TouchOut::Unpressed(2)
             ]
         );
-        assert!(!t.choices_open());
+        assert!(!t.overlay_open());
     }
 
     #[test]
@@ -314,7 +392,7 @@ mod tests {
         t.press(A, long(2), 0);
         t.long_pressed(A, row());
         assert_eq!(
-            t.track(A, Point::new(10.0, 200.0)),
+            t.track(A, Point::new(10.0, 200.0), 0),
             vec![TouchOut::HighlightChoice(None)]
         );
         assert_eq!(
@@ -513,5 +591,107 @@ mod tests {
         );
         t.press(A, None, 30);
         assert_eq!(t.release(A, 40), vec![]);
+    }
+
+    /// A direction pad opened with the finger at the centre of a 30x50 key.
+    fn pad() -> PointingStickPad {
+        PointingStickPad::open(
+            Rect::new(100.0, 100.0, 30.0, 50.0),
+            Rect::new(0.0, 0.0, 400.0, 300.0),
+            4.0,
+            Point::new(115.0, 125.0),
+        )
+    }
+
+    #[test]
+    fn pointing_stick_tap_commits() {
+        let mut t = TouchTracker::default();
+        assert_eq!(t.press(A, key(5), 0), vec![TouchOut::Pressed(5)]);
+        assert_eq!(
+            t.release(A, 100),
+            vec![TouchOut::Commit(5), TouchOut::Unpressed(5)]
+        );
+    }
+
+    #[test]
+    fn pointing_stick_hold_opens_pad_and_directions_hold_arrows() {
+        let mut t = TouchTracker::default();
+        t.press(A, key(5), 0);
+        assert_eq!(
+            t.pointing_stick_held(A, pad()),
+            vec![TouchOut::OpenPointingStick(5)]
+        );
+        assert!(t.overlay_open());
+        assert!(t.pointing_stick().is_some() && t.choices().is_none());
+        assert_eq!(t.pointing_stick_held(A, pad()), vec![], "opens once");
+        assert_eq!(t.long_pressed(A, row()), vec![], "one overlay at a time");
+        // Key changes no longer apply; the pad tracks the finger.
+        assert_eq!(t.moved(A, key(6), 160), vec![]);
+        // Inside the dead zone: nothing.
+        assert_eq!(t.track(A, Point::new(120.0, 125.0), 170), vec![]);
+        assert_eq!(
+            t.track(A, Point::new(150.0, 125.0), 200),
+            vec![TouchOut::PointingStick(Some(Direction::Right))]
+        );
+        assert_eq!(t.track(A, Point::new(170.0, 130.0), 220), vec![]);
+        // Turning stops the running arrow before holding the next.
+        assert_eq!(
+            t.track(A, Point::new(115.0, 60.0), 500),
+            vec![
+                TouchOut::StopHold { held_ms: 300 },
+                TouchOut::PointingStick(Some(Direction::Up))
+            ]
+        );
+        // Back to the centre: the arrow stops, nothing is lit.
+        assert_eq!(
+            t.track(A, Point::new(115.0, 125.0), 600),
+            vec![
+                TouchOut::StopHold { held_ms: 100 },
+                TouchOut::PointingStick(None)
+            ]
+        );
+        // Lifting there commits nothing.
+        assert_eq!(
+            t.release(A, 700),
+            vec![TouchOut::ClosePointingStick, TouchOut::Unpressed(5)]
+        );
+        assert!(!t.overlay_open());
+    }
+
+    #[test]
+    fn lifting_mid_direction_stops_the_arrow_and_closes() {
+        let mut t = TouchTracker::default();
+        t.press(A, key(5), 0);
+        t.pointing_stick_held(A, pad());
+        t.track(A, Point::new(115.0, 200.0), 200);
+        assert_eq!(
+            t.release(A, 900),
+            vec![
+                TouchOut::StopHold { held_ms: 700 },
+                TouchOut::ClosePointingStick,
+                TouchOut::Unpressed(5)
+            ]
+        );
+    }
+
+    #[test]
+    fn pad_ends_without_commit_on_cancel_or_another_finger() {
+        for end in [
+            TouchTracker::cancel_active as fn(&mut TouchTracker, u32) -> Vec<TouchOut>,
+            TouchTracker::finish_active,
+        ] {
+            let mut t = TouchTracker::default();
+            t.press(A, key(5), 0);
+            t.pointing_stick_held(A, pad());
+            t.track(A, Point::new(40.0, 125.0), 200);
+            assert_eq!(
+                end(&mut t, 300),
+                vec![
+                    TouchOut::StopHold { held_ms: 100 },
+                    TouchOut::ClosePointingStick,
+                    TouchOut::Unpressed(5)
+                ]
+            );
+        }
     }
 }
