@@ -26,9 +26,9 @@ pub(crate) struct Flow {
     strength: f32,
     /// The tracked contact's motion, watched for a closing flick.
     flick: Option<(ContactId, Flick)>,
-    /// The tracked contact's latest position: where a direction pad opening
-    /// now measures directions from.
-    position: Point,
+    /// Where the tracked contact pressed, or slid onto the key it is on:
+    /// the pointing stick measures its dead zone and directions from here.
+    origin: Point,
 }
 
 impl Default for Flow {
@@ -38,7 +38,7 @@ impl Default for Flow {
             prior: FLAT,
             strength: 0.0,
             flick: None,
-            position: Point::default(),
+            origin: Point::default(),
         }
     }
 }
@@ -86,25 +86,54 @@ pub(crate) fn press(b: &mut impl Board, p: PendingPress) {
 }
 
 /// A contact moved to `position`. While its choices row or direction pad is
-/// open, that tracks it instead of the keys.
+/// open, that tracks it instead of the keys. On the pointing stick the
+/// finger stays put inside the dead zone, and pushing past it opens the
+/// direction pad at once, without waiting for the hold: a quick push is
+/// arrow input, never a slide onto the keys around or a closing flick.
 pub(crate) fn moved(b: &mut impl Board, c: ContactId, position: Point, time: u32) {
     if gate(b, Contact::Moved(c)) {
         if let Some((_, f)) = b.flow().flick.as_mut().filter(|(fc, _)| *fc == c) {
             f.sample(position, time);
-        }
-        if b.tracker().contact() == Some(c) {
-            b.flow().position = position;
         }
         if b.tracker().overlay_open() {
             let out = b.tracker().track(c, position, time);
             b.act(out, time);
             return;
         }
+        let pressed = b.tracker().pressed().filter(|(pc, _)| *pc == c);
+        if let Some((_, key)) = pressed
+            && b.is_pointing_stick(key)
+        {
+            push_pointing_stick(b, c, key, position, time);
+            return;
+        }
         let geoms = b.geoms();
         let key = key_at(b, &geoms, position);
         let out = b.tracker().moved(c, key, time);
         b.act(out, time);
+        let now = b.tracker().pressed().filter(|(pc, _)| *pc == c);
+        if now.map(|(_, k)| k) != pressed.map(|(_, k)| k) {
+            b.flow().origin = position;
+        }
     }
+}
+
+/// Contact `c`, on the pointing stick at key `key` with no pad open yet,
+/// moved to `position`: past the dead zone around its origin, open the pad
+/// and hold the direction it points in; inside it, stay on the stick.
+fn push_pointing_stick(b: &mut impl Board, c: ContactId, key: usize, position: Point, time: u32) {
+    let origin = b.flow().origin;
+    let Some(pad) = b.pointing_stick_pad(key, origin) else {
+        return;
+    };
+    let (dx, dy) = (position.x - origin.x, position.y - origin.y);
+    if (dx * dx + dy * dy).sqrt() < pad.dead_zone {
+        return;
+    }
+    let out = b.tracker().pointing_stick_held(c, pad);
+    b.act(out, time);
+    let out = b.tracker().track(c, position, time);
+    b.act(out, time);
 }
 
 /// A contact lifted. The commit uses the last resolved key (the highlighted
@@ -158,7 +187,7 @@ pub(crate) fn long_pressed(b: &mut impl Board, time: u32) {
         return;
     };
     let out = if b.is_pointing_stick(key) {
-        let origin = b.flow().position;
+        let origin = b.flow().origin;
         let Some(pad) = b.pointing_stick_pad(key, origin) else {
             return;
         };
@@ -210,7 +239,7 @@ fn start(b: &mut impl Board, p: PendingPress) -> bool {
     flow.prior = prior;
     flow.strength = strength;
     flow.flick = Some((p.contact, Flick::start(p.position, p.time)));
-    flow.position = p.position;
+    flow.origin = p.position;
     let key = key_at(b, &geoms, p.position);
     let out = b.tracker().press(p.contact, key, p.time);
     b.act(out, p.time);
@@ -521,17 +550,18 @@ mod tests {
     }
 
     #[test]
-    fn pointing_stick_hold_measures_from_where_the_finger_rests() {
+    fn pointing_stick_hold_measures_from_the_press() {
         let mut b = stick_board();
-        // Pressed left of the key's centre, drifting a little before the
-        // timer fires: the pad measures from the drifted point.
+        // Pressed left of the key's centre, drifting a little (inside the
+        // dead zone) before the timer fires: the pad measures from the press.
         press(&mut b, at(A, 50.0, 0));
         moved(&mut b, A, Point::new(52.0, 22.0), 50);
+        assert!(!b.pad_shown);
         b.fire(150);
         assert!(b.pad_shown);
         assert_eq!(
             b.tracker.pointing_stick().unwrap().origin,
-            Point::new(52.0, 22.0)
+            Point::new(50.0, 20.0)
         );
         // Moving back to the press point is inside the dead zone.
         moved(&mut b, A, Point::new(50.0, 20.0), 160);
@@ -548,6 +578,47 @@ mod tests {
         assert!(!b.pad_shown);
         assert!(!b.select, "a hold doesn't toggle the mode");
         assert_eq!(b.typed, "");
+    }
+
+    #[test]
+    fn quick_push_down_from_the_stick_holds_down_and_never_closes() {
+        let mut b = stick_board();
+        // Straight down off the stick, fast, lifted before the hold time:
+        // a closing flick anywhere else.
+        swipe_down(&mut b, A, 60.0, 0, 150.0, 80);
+        assert_eq!(b.directions, vec![Some(Direction::Down)]);
+        assert!(!b.closed);
+        assert!(!b.pad_shown);
+        assert!(!b.holding);
+        assert!(!b.select, "a push doesn't toggle the mode");
+        assert_eq!(b.typed, "");
+    }
+
+    #[test]
+    fn stick_holds_the_finger_inside_the_dead_zone() {
+        let mut b = stick_board();
+        press(&mut b, at(A, 75.0, 0));
+        // 10 px right: past the key's edge (80), inside the 14 px dead zone.
+        moved(&mut b, A, Point::new(85.0, 20.0), 50);
+        assert_eq!(b.tracker.pressed(), Some((A, 1)));
+        assert!(!b.pad_shown);
+        assert_eq!(b.timer, Some(1), "the hold wait keeps running");
+        release(&mut b, A, 100);
+        assert!(b.select, "still a tap");
+    }
+
+    #[test]
+    fn sliding_onto_the_stick_measures_from_where_it_arrived() {
+        let mut b = stick_board();
+        press(&mut b, at(A, 20.0, 0));
+        moved(&mut b, A, Point::new(45.0, 20.0), 50);
+        assert_eq!(b.tracker.pressed(), Some((A, 1)));
+        assert!(!b.pad_shown, "arriving far from the press opens nothing");
+        moved(&mut b, A, Point::new(50.0, 20.0), 60);
+        assert!(!b.pad_shown);
+        moved(&mut b, A, Point::new(45.0, 60.0), 70);
+        assert!(b.pad_shown);
+        assert_eq!(b.directions, vec![Some(Direction::Down)]);
     }
 
     #[test]
