@@ -831,6 +831,7 @@ dependencies = [
 name = "notifications"
 version = "0.1.0"
 dependencies = [
+ "assets",
  "mecha-wayland",
  "screen",
  "services",

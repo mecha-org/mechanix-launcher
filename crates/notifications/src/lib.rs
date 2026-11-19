@@ -26,6 +26,9 @@ pub mod rich_text;
 pub mod snooze_controls;
 pub mod style;
 
+#[cfg(test)]
+mod tests;
+
 use crate::notifications::NotificationsCenterBuilder;
 pub use module::NotificationsModule;
 
