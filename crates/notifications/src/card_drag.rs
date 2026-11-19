@@ -1,5 +1,5 @@
 use crate::style::size::OPEN_OFFSET;
-use crate::style::swipe::{DISMISS, EXPAND, REVEAL_MAX, REVEAL_MIN, SLOP};
+use crate::style::swipe::{DISMISS, EXPAND, OPEN, REVEAL_MIN, SLOP};
 use mecha_wayland::prelude::{ContactId, Point};
 
 #[derive(Default)]
@@ -140,7 +140,7 @@ impl CardDrag {
             return Settle::Dismiss;
         }
         self.offset = if -pulled >= REVEAL_MIN {
-            -OPEN_OFFSET.min(width * REVEAL_MAX)
+            -open_offset(width)
         } else {
             0.0
         };
@@ -160,9 +160,14 @@ impl CardDrag {
     }
 }
 
+pub fn open_offset(width: f32) -> f32 {
+    (width * OPEN).min(OPEN_OFFSET)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::swipe::REVEAL_MAX;
 
     const FINGER: ContactId = ContactId::Touch(0);
     const WIDTH: f32 = 500.0;
@@ -257,9 +262,20 @@ mod tests {
         moved(&mut drag, -WIDTH * REVEAL_MIN - 1.0, 0.0);
         assert_eq!(
             drag.release(FINGER, Point::new(100.0, 100.0), WIDTH),
-            Settle::Rest(-OPEN_OFFSET.min(WIDTH * REVEAL_MAX))
+            Settle::Rest(-open_offset(WIDTH))
         );
         assert!(drag.ended_in_swipe());
+    }
+
+    #[test]
+    fn the_open_offset_scales_with_the_card_and_caps_at_figma() {
+        assert_eq!(open_offset(524.0), OPEN_OFFSET, "Figma card");
+        assert_eq!(open_offset(1200.0), OPEN_OFFSET);
+        assert_eq!(open_offset(300.0), 300.0 * OPEN);
+        for width in [240.0, 300.0, 524.0, 1200.0] {
+            let pulled = open_offset(width) / width;
+            assert!((REVEAL_MIN..=REVEAL_MAX).contains(&pulled), "{width}");
+        }
     }
 
     #[test]

@@ -2,9 +2,6 @@ use crate::image::{Image, ImageData};
 use crate::style::{color, size};
 use mecha_wayland::prelude::*;
 
-const MAX_IMAGE_WIDTH: u32 = 200;
-const MAX_IMAGE_HEIGHT: u32 = 100;
-
 pub struct CardIconBuilder {
     pub image: Option<Image>,
 }
@@ -32,14 +29,17 @@ impl Widget for CardIcon {
     fn build(b: CardIconBuilder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
         *s.component_mut::<LayoutStyle>(me).unwrap() = square().relative().align_self(Align::Start);
 
-        let holder = s.spawn(me, div().style(square()));
+        let holder = s.spawn(me, div().style(square().center()));
 
         let sprite = b
             .image
             .and_then(|img| load(&mut s.resource_mut::<Atlas>(), &img));
         // TODO: app glyph from `desktop-entry`, centred in the tile.
         let slot = match sprite {
-            Some(sprite) => s.spawn(holder, image(sprite).style(square())).id(),
+            Some(sprite) => {
+                let style = contained(&s.resource::<Atlas>(), sprite);
+                s.spawn(holder, image(sprite).style(style)).id()
+            }
             None => {
                 let tile = s.color(color::ICON_TILE);
                 s.spawn(holder, div().background(tile).style(square())).id()
@@ -53,7 +53,10 @@ impl Widget for CardIcon {
             let old = ctx.me().slot;
             ctx.remove(old);
             let slot = match sprite {
-                Some(sprite) => ctx.spawn(holder, image(sprite).style(square())).id(),
+                Some(sprite) => {
+                    let style = contained(&ctx.resource::<Atlas>(), sprite);
+                    ctx.spawn(holder, image(sprite).style(style)).id()
+                }
                 None => {
                     let tile = ctx.color(color::ICON_TILE);
                     ctx.spawn(holder, div().background(tile).style(square()))
@@ -63,6 +66,22 @@ impl Widget for CardIcon {
             ctx.me().slot = slot;
         });
         CardIcon { slot }
+    }
+}
+
+fn contained(atlas: &Atlas, sprite: SpriteId) -> LayoutStyle {
+    let (w, h) = fit(atlas.sprite(sprite).size, size::ICON);
+    LayoutStyle::default().size(px(w), px(h)).shrink(0.0)
+}
+
+fn fit(natural: Size, side: f32) -> (f32, f32) {
+    let (w, h) = (natural.width, natural.height);
+    if w.max(h) <= side {
+        (w, h)
+    } else if w >= h {
+        (side, h * side / w)
+    } else {
+        (w * side / h, side)
     }
 }
 
@@ -93,17 +112,16 @@ fn load_path(atlas: &mut Atlas, path: &str) -> Result<SpriteId, String> {
 fn insert_fitted(atlas: &mut Atlas, bitmap: Bitmap) -> Result<SpriteId, String> {
     let slot = (size::ICON * atlas.scale()).ceil() as u32;
     atlas
-        .insert(Class::Image, &cap(bitmap).fit(slot))
+        .insert(Class::Image, &shrink(bitmap, slot))
         .map_err(|e| e.to_string())
 }
 
-fn cap(bitmap: Bitmap) -> Bitmap {
-    let (mut w, mut h) = (bitmap.width, bitmap.height);
-    while w > MAX_IMAGE_WIDTH || h > MAX_IMAGE_HEIGHT {
-        w = (w / 2).max(1);
-        h = (h / 2).max(1);
+fn shrink(bitmap: Bitmap, slot: u32) -> Bitmap {
+    let mut longest = bitmap.width.max(bitmap.height);
+    while longest / 2 >= slot.max(1) {
+        longest /= 2;
     }
-    bitmap.fit(w.max(h))
+    bitmap.fit(longest)
 }
 
 fn to_bitmap(d: &ImageData) -> Option<Bitmap> {
@@ -135,4 +153,52 @@ fn to_bitmap(d: &ImageData) -> Option<Bitmap> {
         format: Format::Rgba8,
         pixels,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bitmap(width: u32, height: u32) -> Bitmap {
+        Bitmap {
+            width,
+            height,
+            format: Format::Rgba8,
+            pixels: vec![0; (width * height * 4) as usize],
+        }
+    }
+
+    #[test]
+    fn shrinking_never_drops_below_the_slot() {
+        for (w, h, slot) in [
+            (100, 100, 60),
+            (256, 256, 60),
+            (200, 100, 60),
+            (512, 512, 120),
+        ] {
+            let b = shrink(bitmap(w, h), slot);
+            let longest = b.width.max(b.height);
+            assert!(
+                longest >= slot && longest < 2 * slot,
+                "{w}x{h} -> {longest} for {slot}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_wide_image_keeps_its_shape_inside_the_square() {
+        assert_eq!(fit(Size::new(200.0, 100.0), 60.0), (60.0, 30.0));
+        assert_eq!(fit(Size::new(50.0, 100.0), 60.0), (30.0, 60.0));
+        assert_eq!(
+            fit(Size::new(20.0, 10.0), 60.0),
+            (20.0, 10.0),
+            "never upscaled"
+        );
+    }
+
+    #[test]
+    fn small_images_are_kept_as_they_are() {
+        let b = shrink(bitmap(32, 16), 60);
+        assert_eq!((b.width, b.height), (32, 16));
+    }
 }

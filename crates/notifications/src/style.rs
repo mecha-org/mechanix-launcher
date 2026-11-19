@@ -158,15 +158,11 @@ pub mod size {
     pub const APP_BADGE: f32 = 22.0;
     /// "Clear all" chip. Figma 96 × 28.
     pub const CHIP_HEIGHT: f32 = 28.0;
-    /// "Options" swipe button. Figma 113 × 96.
+    /// "Options" swipe button's widest. Figma 113 × 96; narrower cards shrink it.
     pub const OPTIONS_WIDTH: f32 = 113.0;
-    /// "Clear" swipe button at full reveal. Figma 226 × 96. It fills
-    /// whatever the swipe uncovers past Options, so this is its upper end.
-    pub const CLEAR_WIDTH: f32 = 226.0;
-    /// How far an opened card rests to the left: Options and a
-    /// same-width Clear, each after a `SWIPE_GAP` (14). Lands inside
-    /// `swipe::REVEAL_MIN..REVEAL_MAX` for the 524 card.
-    pub const OPEN_OFFSET: f32 = 2.0 * (OPTIONS_WIDTH + 14.0);
+    /// Furthest an opened card rests to the left: Options and a same-width
+    /// Clear, each after a `SWIPE_GAP`. Narrower cards use `swipe::OPEN`.
+    pub const OPEN_OFFSET: f32 = 2.0 * (OPTIONS_WIDTH + super::space::SWIPE_GAP.dp());
     /// Icon action token. Figma 48.
     pub const ACTION_ICON: f32 = 48.0;
     /// Text action token height. Figma 36.
@@ -181,6 +177,8 @@ pub mod swipe {
     pub const SLOP: f32 = 12.0;
     /// Options + Clear start to show and stick. Figma 20 %.
     pub const REVEAL_MIN: f32 = 0.20;
+    /// Where an opened card rests, capped at `size::OPEN_OFFSET`. Figma 254 of 524.
+    pub const OPEN: f32 = 0.485;
     /// Upper end of the sticky reveal. Figma 60 %.
     pub const REVEAL_MAX: f32 = 0.60;
     /// Past this the card is dismissed. Figma 65 %.

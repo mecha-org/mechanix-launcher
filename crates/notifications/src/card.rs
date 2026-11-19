@@ -270,12 +270,13 @@ fn set_offset(ctx: &mut Context<'_, Card>, offset: f32) {
     if let Some(mut n) = ctx.at(content) {
         restyle(&mut n, content_style(offset));
     }
+    let w = width(ctx);
     if let Some(mut n) = ctx.at(options) {
-        restyle(&mut n, card_options::style(offset));
+        card_options::reveal(&mut n, offset, w);
     }
 }
 
-fn restyle<W: Widget>(n: &mut Context<'_, W>, style: LayoutStyle) {
+pub(crate) fn restyle<W: Widget>(n: &mut Context<'_, W>, style: LayoutStyle) {
     if *n.component::<LayoutStyle>().unwrap() != style {
         *n.component_mut::<LayoutStyle>().unwrap() = style;
     }
