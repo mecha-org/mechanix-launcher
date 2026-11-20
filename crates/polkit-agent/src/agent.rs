@@ -9,6 +9,11 @@
 //! - [`AuthFinished`] answers the active request: success, or `Failed`.
 //! - `CancelAuthentication` answers a request, active or queued, with
 //!   `Cancelled`. For the active one, [`AuthCancelled`] says so.
+//! - Only polkitd may call: the unique name the agent registered with (see
+//!   [`crate::register`]). Others are refused with `AccessDenied`, so no
+//!   other program can make the agent ask for a password. When polkitd
+//!   goes away, its requests are dropped, the active one with
+//!   [`AuthCancelled`].
 //!
 //! The cookie is the request's secret for the helper, so it is never
 //! logged.
@@ -23,6 +28,7 @@ const AGENT_IFACE: &str = "org.freedesktop.PolicyKit1.AuthenticationAgent";
 
 const FAILED: &str = "org.freedesktop.PolicyKit1.Error.Failed";
 const CANCELLED: &str = "org.freedesktop.PolicyKit1.Error.Cancelled";
+const ACCESS_DENIED: &str = "org.freedesktop.DBus.Error.AccessDenied";
 
 /// Who may authenticate a request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,6 +138,8 @@ struct Kept {
 pub(crate) struct Agent {
     bus: BusId,
     export: Option<ExportId>,
+    /// polkitd's unique name, while registered: the only caller taken.
+    polkitd: Option<BusName>,
     /// The request being authenticated.
     active: Option<Kept>,
     /// Requests waiting their turn, oldest first.
@@ -158,6 +166,7 @@ pub(crate) fn install(app: &mut App, bus: BusId) -> bool {
     app.insert_resource(Agent {
         bus,
         export,
+        polkitd: None,
         active: None,
         queued: VecDeque::new(),
     });
@@ -168,7 +177,24 @@ pub(crate) fn install(app: &mut App, bus: BusId) -> bool {
 }
 
 fn on_call(app: &mut App, e: &MethodCallReceived) {
-    if app.resource::<Agent>().export != Some(e.export) {
+    let polkitd = {
+        let agent = app.resource::<Agent>();
+        if agent.export != Some(e.export) {
+            return;
+        }
+        agent.polkitd.clone()
+    };
+    if polkitd.is_none() || e.call.sender() != polkitd.as_ref() {
+        tracing::warn!(
+            "polkit: refused {} from {:?}: not polkitd",
+            e.call.member(),
+            e.call.sender()
+        );
+        app.resource_mut::<DBus>().reply_error(
+            &e.call,
+            ACCESS_DENIED,
+            "Only polkitd may call the agent",
+        );
         return;
     }
     match e.call.member().as_str() {
@@ -285,9 +311,34 @@ fn take_queued(app: &mut App, cookie: &str) -> Option<Kept> {
     agent.queued.remove(i)
 }
 
+/// Take calls only from `polkitd`, or from no one. A different polkitd
+/// than before drops every request: the one that sent them can't take
+/// their answers.
+pub(crate) fn set_polkitd(app: &mut App, polkitd: Option<BusName>) {
+    let cancelled = {
+        let mut agent = app.resource_mut::<Agent>();
+        if agent.polkitd == polkitd {
+            return;
+        }
+        agent.polkitd = polkitd;
+        agent.queued.clear();
+        agent.active.take().map(|kept| kept.request.cookie)
+    };
+    if let Some(cookie) = cancelled {
+        app.signal(AuthCancelled { cookie });
+    }
+}
+
+/// The polkitd calls are taken from.
+#[cfg(test)]
+pub(crate) fn polkitd(app: &App) -> Option<BusName> {
+    app.resource::<Agent>().polkitd.clone()
+}
+
 fn on_disconnect(app: &mut App, e: &BusDisconnected) {
     let mut agent = app.resource_mut::<Agent>();
     if e.bus == agent.bus {
+        agent.polkitd = None;
         agent.active = None;
         agent.queued.clear();
     }
@@ -301,19 +352,32 @@ mod tests {
 
     const POLKITD: &str = ":1.5";
 
+    /// The cookies [`AuthCancelled`] named.
+    struct Cancelled(Vec<String>);
+    impl Resource for Cancelled {}
+
+    fn record_cancelled(app: &mut App, e: &AuthCancelled) {
+        app.resource_mut::<Cancelled>().0.push(e.cookie.clone());
+    }
+
     fn agent() -> FakeBus {
         let mut bus = FakeBus::new();
         assert!(install(&mut bus.app, BusId::Session));
+        set_polkitd(&mut bus.app, Some(BusName::new(POLKITD).unwrap()));
         bus.turn();
         bus.received();
         bus
     }
 
     fn call(member: &'static str) -> Message {
+        call_from(POLKITD, member)
+    }
+
+    fn call_from(sender: &'static str, member: &'static str) -> Message {
         Message::method_call(AGENT_PATH, member)
             .with_interface(AGENT_IFACE)
             .with_destination(UNIQUE)
-            .with_sender(POLKITD)
+            .with_sender(sender)
     }
 
     fn begin(bus: &mut FakeBus, cookie: &str) -> u32 {
@@ -503,5 +567,67 @@ mod tests {
         cancel(&mut bus, "c1");
         assert_eq!(active_cookie(&bus).as_deref(), Some("c3"));
         assert!(queued_cookies(&bus).is_empty());
+    }
+
+    #[test]
+    fn only_polkitd_may_call() {
+        let mut bus = agent();
+        let begun = begin(&mut bus, "c1");
+
+        let stranger = bus.send(call_from(":1.66", "CancelAuthentication").with_body(&("c1",)));
+        bus.turn();
+        let received = bus.received();
+        assert_eq!(
+            error_name(answer(&received, stranger).unwrap()),
+            ACCESS_DENIED
+        );
+        // The request is untouched.
+        assert!(answer(&received, begun).is_none());
+        assert_eq!(active_cookie(&bus).as_deref(), Some("c1"));
+
+        let details: HashMap<String, String> = HashMap::new();
+        let identities: Vec<(String, HashMap<String, Value>)> = Vec::new();
+        let fake = bus.send(call_from(":1.66", "BeginAuthentication").with_body(&(
+            "org.freedesktop.policykit.exec",
+            "Give me your password",
+            "",
+            details,
+            "c2",
+            identities,
+        )));
+        bus.turn();
+        let received = bus.received();
+        assert_eq!(error_name(answer(&received, fake).unwrap()), ACCESS_DENIED);
+        assert!(queued_cookies(&bus).is_empty());
+    }
+
+    #[test]
+    fn unregistered_takes_no_calls() {
+        let mut bus = agent();
+        set_polkitd(&mut bus.app, None);
+        let serial = begin(&mut bus, "c1");
+        let received = bus.received();
+        assert_eq!(
+            error_name(answer(&received, serial).unwrap()),
+            ACCESS_DENIED
+        );
+        assert_eq!(active_cookie(&bus), None);
+    }
+
+    #[test]
+    fn polkitd_going_away_drops_its_requests() {
+        let mut bus = agent();
+        begin(&mut bus, "c1");
+        begin(&mut bus, "c2");
+        bus.received();
+
+        bus.app.insert_resource(Cancelled(Vec::new()));
+        bus.app.system(record_cancelled);
+
+        set_polkitd(&mut bus.app, None);
+        bus.turn();
+        assert_eq!(active_cookie(&bus), None);
+        assert!(queued_cookies(&bus).is_empty());
+        assert_eq!(bus.app.resource::<Cancelled>().0, ["c1"]);
     }
 }
