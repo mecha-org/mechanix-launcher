@@ -14,6 +14,7 @@ use nav::core::{
 };
 use nav::shell::{ContainerShown, NavModule, nav_window};
 use notifications::NotificationsModule;
+use polkit_agent::PolkitAgentModule;
 use power_menu::PowerMenuModule;
 use quick_settings::QuickSettingsModule;
 use running_apps::{RunningApps, RunningAppsModule};
@@ -295,6 +296,7 @@ fn main() {
     app.add_module(RingModule::default())
         .add_module(TimerModule)
         .add_module(DBusModule::new().system().session())
+        .add_module(PolkitAgentModule)
         .add_module(PulseAudioModule)
         .add_module(VolumeControlModule)
         .add_module(

@@ -5,7 +5,9 @@ edition = "2024"
 
 [dependencies]
 mecha-wayland.workspace = true
+libc = "0.2"
 tracing = "0.1"
+zeroize = "1.8"
 
 [dev-dependencies]
 dbus = { git = "https://github.com/mecha-org/mecha-wayland", branch = "dev", features = ["fake"] }
