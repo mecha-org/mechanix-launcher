@@ -3,12 +3,15 @@
 //! view is laid out ([`Deferral`]), finish an earlier finger before a new one
 //! is resolved, resolve against the current view with the prior taken at the
 //! press, and hand the tracker's outputs to the board. A fast downward
-//! [`Flick`] closes the keyboard instead of typing.
+//! [`Flick`] closes the keyboard instead of typing, and a sideways swipe from
+//! a gliding key (the space bar) starts a [`Glide`](super::glide::Glide) that
+//! moves the caret instead.
 
 use mecha_wayland::prelude::*;
 
 use super::defer::{Contact, Deferral, PendingPress, laid_out};
 use super::flick::Flick;
+use super::glide::GlideSpec;
 use super::long_press::ChoicesRow;
 use super::pointing_stick::PointingStickPad;
 use super::resolve::{KeyGeom, ResolveParams, resolve};
@@ -27,8 +30,11 @@ pub(crate) struct Flow {
     /// The tracked contact's motion, watched for a closing flick.
     flick: Option<(ContactId, Flick)>,
     /// Where the tracked contact pressed, or slid onto the key it is on:
-    /// the pointing stick measures its dead zone and directions from here.
+    /// the pointing stick measures its dead zone and directions from here,
+    /// and a glide its threshold and first arrow.
     origin: Point,
+    /// The event time at `origin`.
+    origin_time: u32,
 }
 
 impl Default for Flow {
@@ -39,6 +45,7 @@ impl Default for Flow {
             strength: 0.0,
             flick: None,
             origin: Point::default(),
+            origin_time: 0,
         }
     }
 }
@@ -61,6 +68,9 @@ pub(crate) trait Board {
     /// The direction pad the pointing stick at key `index` of the current
     /// view opens, measuring directions from `origin`.
     fn pointing_stick_pad(&mut self, index: usize, origin: Point) -> Option<PointingStickPad>;
+    /// How key `index` of the current view glides the caret when swiped
+    /// from, if it does.
+    fn glide(&mut self, index: usize) -> Option<GlideSpec>;
     fn tracker(&mut self) -> &mut TouchTracker;
     fn flow(&mut self) -> &mut Flow;
     /// Act on tracker outputs (indices into the current view), then cancel
@@ -85,27 +95,32 @@ pub(crate) fn press(b: &mut impl Board, p: PendingPress) {
     }
 }
 
-/// A contact moved to `position`. While its choices row or direction pad is
-/// open, that tracks it instead of the keys. On the pointing stick the
-/// finger stays put inside the dead zone, and pushing past it opens the
-/// direction pad at once, without waiting for the hold: a quick push is
-/// arrow input, never a slide onto the keys around or a closing flick.
+/// A contact moved to `position`. While its choices row, direction pad or
+/// glide is open, that tracks it instead of the keys (and no flick is
+/// watched: none closes over an overlay). On the pointing stick the finger
+/// stays put inside the dead zone, and pushing past it opens the direction
+/// pad at once, without waiting for the hold: a quick push is arrow input,
+/// never a slide onto the keys around or a closing flick. On a gliding key,
+/// a swipe past its threshold starts the glide.
 pub(crate) fn moved(b: &mut impl Board, c: ContactId, position: Point, time: u32) {
     if gate(b, Contact::Moved(c)) {
-        if let Some((_, f)) = b.flow().flick.as_mut().filter(|(fc, _)| *fc == c) {
-            f.sample(position, time);
-        }
         if b.tracker().overlay_open() {
             let out = b.tracker().track(c, position, time);
             b.act(out, time);
             return;
         }
+        if let Some((_, f)) = b.flow().flick.as_mut().filter(|(fc, _)| *fc == c) {
+            f.sample(position, time);
+        }
         let pressed = b.tracker().pressed().filter(|(pc, _)| *pc == c);
-        if let Some((_, key)) = pressed
-            && b.is_pointing_stick(key)
-        {
-            push_pointing_stick(b, c, key, position, time);
-            return;
+        if let Some((_, key)) = pressed {
+            if b.is_pointing_stick(key) {
+                push_pointing_stick(b, c, key, position, time);
+                return;
+            }
+            if start_glide(b, c, key, position, time) {
+                return;
+            }
         }
         let geoms = b.geoms();
         let key = key_at(b, &geoms, position);
@@ -113,7 +128,9 @@ pub(crate) fn moved(b: &mut impl Board, c: ContactId, position: Point, time: u32
         b.act(out, time);
         let now = b.tracker().pressed().filter(|(pc, _)| *pc == c);
         if now.map(|(_, k)| k) != pressed.map(|(_, k)| k) {
-            b.flow().origin = position;
+            let flow = b.flow();
+            flow.origin = position;
+            flow.origin_time = time;
         }
     }
 }
@@ -134,6 +151,26 @@ fn push_pointing_stick(b: &mut impl Board, c: ContactId, key: usize, position: P
     b.act(out, time);
     let out = b.tracker().track(c, position, time);
     b.act(out, time);
+}
+
+/// Contact `c`, on key `key` with nothing open, moved to `position`: if the
+/// key glides and the swipe from its origin passed the threshold, open the
+/// glide (travel so far counts toward the first arrow) and whether it did.
+fn start_glide(b: &mut impl Board, c: ContactId, key: usize, position: Point, time: u32) -> bool {
+    let Some(spec) = b.glide(key) else {
+        return false;
+    };
+    let flow = b.flow();
+    let (origin, since) = (flow.origin, flow.origin_time);
+    if !spec.starts(position.x - origin.x, position.y - origin.y) {
+        return false;
+    }
+    flow.flick = None;
+    let out = b.tracker().glide(c, spec.open(origin, since));
+    b.act(out, time);
+    let out = b.tracker().track(c, position, time);
+    b.act(out, time);
+    true
 }
 
 /// A contact lifted. The commit uses the last resolved key (the highlighted
@@ -204,7 +241,8 @@ pub(crate) fn long_pressed(b: &mut impl Board, time: u32) {
 /// Pass a non-press `event` through the deferral, starting a held-back press
 /// it releases; whether to act on the event itself.
 fn gate(b: &mut impl Board, event: Contact) -> bool {
-    let ready = laid_out(&b.geoms());
+    // Measuring the layout walks every key: only a held-back press needs it.
+    let ready = !b.flow().deferral.waiting() || laid_out(&b.geoms());
     let gate = b.flow().deferral.gate(event, ready);
     if let Some(p) = gate.replay
         && !start(b, p)
@@ -240,6 +278,7 @@ fn start(b: &mut impl Board, p: PendingPress) -> bool {
     flow.strength = strength;
     flow.flick = Some((p.contact, Flick::start(p.position, p.time)));
     flow.origin = p.position;
+    flow.origin_time = p.time;
     let key = key_at(b, &geoms, p.position);
     let out = b.tracker().press(p.contact, key, p.time);
     b.act(out, p.time);
@@ -276,6 +315,8 @@ mod tests {
         View(usize),
         /// The pointing stick: a tap toggles select mode.
         Stick,
+        /// The space bar: types a space, glides when swiped.
+        Space,
     }
 
     /// Two views of two 40x40 keys at x 0 and 40: a view switch and a letter.
@@ -309,6 +350,10 @@ mod tests {
         pad_shown: bool,
         /// Every direction the pointing stick lit, in order.
         directions: Vec<Option<Direction>>,
+        /// Whether a glide opened.
+        gliding: bool,
+        /// The caret's position, moved by glide arrows (right positive).
+        caret: i32,
     }
 
     impl Fake {
@@ -332,6 +377,8 @@ mod tests {
                 select: false,
                 pad_shown: false,
                 directions: Vec::new(),
+                gliding: false,
+                caret: 0,
             }
         }
 
@@ -350,6 +397,7 @@ mod tests {
                         Act::Letter(c) => self.typed.push(c),
                         Act::View(v) => self.current = v,
                         Act::Stick => self.select = !self.select,
+                        Act::Space => self.typed.push(' '),
                     },
                     TouchOut::OpenChoices(_) => self.row_shown = true,
                     TouchOut::CommitChoice { key, choice } => {
@@ -365,6 +413,8 @@ mod tests {
                         self.directions.push(d);
                     }
                     TouchOut::ClosePointingStick => self.pad_shown = false,
+                    TouchOut::OpenGlide(_) => self.gliding = true,
+                    TouchOut::Glide(s) => self.caret += s.x,
                     _ => {}
                 }
             }
@@ -392,7 +442,7 @@ mod tests {
                     },
                     letter: match a {
                         Act::Letter(c) => Some(c.to_ascii_lowercase()),
-                        Act::View(_) | Act::Stick => None,
+                        Act::View(_) | Act::Stick | Act::Space => None,
                     },
                 })
                 .collect()
@@ -424,6 +474,10 @@ mod tests {
                 4.0,
                 origin,
             ))
+        }
+        fn glide(&mut self, index: usize) -> Option<GlideSpec> {
+            matches!(self.views[self.current][index], Act::Space)
+                .then(|| GlideSpec::horizontal(40.0))
         }
         fn tracker(&mut self) -> &mut TouchTracker {
             &mut self.tracker
@@ -638,6 +692,85 @@ mod tests {
         assert!(!b.closed);
         assert!(!b.pad_shown);
         assert!(!b.holding);
+    }
+
+    /// `q` and the space bar (x 40 to 80).
+    fn space_board() -> Fake {
+        Fake::new(vec![[Act::Letter('q'), Act::Space]])
+    }
+
+    /// Contact `c`, pressed at `x`, moves straight sideways by `dx` over `ms`
+    /// (a move every 8 ms from time `t`) and lifts.
+    fn swipe_x(b: &mut Fake, c: ContactId, x: f32, t: u32, dx: f32, ms: u32) {
+        press(b, at(c, x, t));
+        let steps = ms / 8;
+        for i in 1..=steps {
+            let px = x + dx * i as f32 / steps as f32;
+            moved(b, c, Point::new(px, 20.0), t + i * 8);
+        }
+        release(b, c, t + steps * 8);
+    }
+
+    #[test]
+    fn space_tap_and_jitter_type_a_space() {
+        let mut b = space_board();
+        press(&mut b, at(A, 60.0, 0));
+        moved(&mut b, A, Point::new(66.0, 23.0), 30);
+        release(&mut b, A, 60);
+        assert_eq!(b.typed, " ");
+        assert!(!b.gliding);
+        assert_eq!(b.caret, 0);
+    }
+
+    #[test]
+    fn space_swipe_glides_across_the_whole_keyboard_and_types_nothing() {
+        let mut b = space_board();
+        // Slowly left, over `q` and past the keyboard's left edge.
+        swipe_x(&mut b, A, 60.0, 0, -240.0, 1600);
+        assert!(b.gliding);
+        assert_eq!(b.typed, "", "no space, no `q`");
+        // 240 px at 24 px an arrow.
+        assert!((-10..=-9).contains(&b.caret), "{}", b.caret);
+        assert_eq!(b.tracker.contact(), None);
+        assert!(!b.closed);
+    }
+
+    #[test]
+    fn faster_space_swipe_moves_further() {
+        let mut slow = space_board();
+        swipe_x(&mut slow, A, 60.0, 0, -50.0, 400);
+        let mut fast = space_board();
+        swipe_x(&mut fast, A, 60.0, 0, -50.0, 40);
+        assert!((-2..=-1).contains(&slow.caret), "{}", slow.caret);
+        assert!(fast.caret <= -3, "{}", fast.caret);
+    }
+
+    #[test]
+    fn glide_then_downward_flick_does_not_close() {
+        let mut b = space_board();
+        press(&mut b, at(A, 60.0, 0));
+        moved(&mut b, A, Point::new(90.0, 20.0), 50);
+        assert!(b.gliding);
+        for i in 1..=10u32 {
+            moved(
+                &mut b,
+                A,
+                Point::new(90.0, 20.0 + 15.0 * i as f32),
+                50 + i * 8,
+            );
+        }
+        release(&mut b, A, 130);
+        assert!(!b.closed);
+        assert_eq!(b.typed, "");
+    }
+
+    #[test]
+    fn downward_flick_from_space_still_closes() {
+        let mut b = space_board();
+        swipe_down(&mut b, A, 60.0, 0, 150.0, 80);
+        assert!(b.closed);
+        assert!(!b.gliding);
+        assert_eq!(b.typed, "");
     }
 
     #[test]

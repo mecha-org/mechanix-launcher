@@ -5,6 +5,7 @@
 
 use mecha_wayland::prelude::*;
 
+use super::glide::{Glide, Steps};
 use super::long_press::ChoicesRow;
 use super::pointing_stick::{Direction, PointingStickPad};
 
@@ -45,6 +46,10 @@ pub(crate) enum TouchOut {
     PointingStick(Option<Direction>),
     /// Close the direction pad.
     ClosePointingStick,
+    /// A swipe from the key started a glide: the finger now moves the caret.
+    OpenGlide(usize),
+    /// The glide's finger moved far enough: tap these arrows.
+    Glide(Steps),
 }
 
 /// What a long-pressed key opened over the keys; the finger drives it until
@@ -54,6 +59,8 @@ enum Overlay {
     Choices(ChoicesRow),
     /// The pointing stick's direction pad.
     PointingStick(PointingStickPad),
+    /// A glide moving the caret with the finger.
+    Glide(Glide),
 }
 
 /// The contact currently being tracked.
@@ -150,6 +157,12 @@ impl TouchTracker {
         self.open(c, Overlay::PointingStick(pad), TouchOut::OpenPointingStick)
     }
 
+    /// Contact `c` swiped from its key far enough to glide: the finger now
+    /// drives `glide`. Ignored as [`long_pressed`](Self::long_pressed) is.
+    pub(crate) fn glide(&mut self, c: ContactId, glide: Glide) -> Vec<TouchOut> {
+        self.open(c, Overlay::Glide(glide), TouchOut::OpenGlide)
+    }
+
     /// Open `overlay` over contact `c`'s key, unless `c` isn't on a key, is
     /// holding it, or already has one open.
     fn open(
@@ -203,6 +216,14 @@ impl TouchTracker {
                 out.push(TouchOut::PointingStick(pad.direction));
                 out
             }
+            Some(Overlay::Glide(glide)) => {
+                let steps = glide.track(p, time);
+                if steps.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![TouchOut::Glide(steps)]
+                }
+            }
             None => Vec::new(),
         }
     }
@@ -217,7 +238,7 @@ impl TouchTracker {
     pub(crate) fn choices(&self) -> Option<&ChoicesRow> {
         match self.active.as_ref()?.overlay.as_ref()? {
             Overlay::Choices(row) => Some(row),
-            Overlay::PointingStick(_) => None,
+            Overlay::PointingStick(_) | Overlay::Glide(_) => None,
         }
     }
 
@@ -225,7 +246,7 @@ impl TouchTracker {
     pub(crate) fn pointing_stick(&self) -> Option<&PointingStickPad> {
         match self.active.as_ref()?.overlay.as_ref()? {
             Overlay::PointingStick(pad) => Some(pad),
-            Overlay::Choices(_) => None,
+            Overlay::Choices(_) | Overlay::Glide(_) => None,
         }
     }
 
@@ -279,8 +300,9 @@ impl TouchTracker {
         out
     }
 
-    /// Emit the closing actions for `active`. The pointing stick's pad
-    /// never commits: lifting stops its arrow and closes it.
+    /// Emit the closing actions for `active`. The pointing stick's pad and a
+    /// glide never commit: lifting stops the pad's arrow and closes it, and
+    /// ends the glide where the caret is.
     fn finish(active: Active, commit: bool, time: u32, out: &mut Vec<TouchOut>) {
         let Some(i) = active.key else { return };
         if let Some(Overlay::Choices(row)) = active.overlay {
@@ -295,6 +317,8 @@ impl TouchTracker {
                 });
             }
             out.push(TouchOut::ClosePointingStick);
+        } else if let Some(Overlay::Glide(_)) = active.overlay {
+            // Nothing to close: the caret stays where the glide left it.
         } else if active.held {
             out.push(TouchOut::StopHold {
                 held_ms: time.wrapping_sub(active.press_time),
@@ -591,6 +615,26 @@ mod tests {
         );
         t.press(A, None, 30);
         assert_eq!(t.release(A, 40), vec![]);
+    }
+
+    #[test]
+    fn glide_moves_the_caret_and_never_commits() {
+        use super::super::glide::GlideSpec;
+        let mut t = TouchTracker::default();
+        t.press(A, key(3), 0);
+        let g = GlideSpec::horizontal(50.0).open(Point::new(100.0, 20.0), 0);
+        assert_eq!(t.glide(A, g.clone()), vec![TouchOut::OpenGlide(3)]);
+        assert!(t.overlay_open());
+        assert_eq!(t.glide(A, g), vec![], "opens once");
+        // Key changes no longer apply; anywhere on the keyboard glides.
+        assert_eq!(t.moved(A, key(6), 10), vec![]);
+        assert_eq!(t.track(A, Point::new(110.0, 20.0), 200), vec![]);
+        assert_eq!(
+            t.track(A, Point::new(140.0, 90.0), 400),
+            vec![TouchOut::Glide(Steps { x: 1, y: 0 })]
+        );
+        assert_eq!(t.release(A, 500), vec![TouchOut::Unpressed(3)]);
+        assert!(!t.overlay_open());
     }
 
     /// A direction pad opened with the finger at the centre of a 30x50 key.

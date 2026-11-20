@@ -3,7 +3,8 @@
 //! through the input method (preferred) or the virtual keyboard (fallback),
 //! consuming any latched modifier. Control keys ([`repeats`]) are held down
 //! for as long as the finger is, so the client's key repeat runs, as are the
-//! pointing stick's arrows ([`hold_direction`], Shift+arrow in select mode).
+//! pointing stick's arrows ([`hold_direction`], Shift+arrow in select mode);
+//! a glide taps arrows instead ([`tap_direction`]).
 //! Using any key but the pointing stick ends its select mode. Each
 //! keystroke also updates the [`TypingContext`], handing finished words to the
 //! active profile's recorder.
@@ -19,6 +20,7 @@ use crate::modifiers::shift::{self, Shift, ShiftState};
 use crate::predict::{Prediction, TypingContext};
 use crate::protocol::input_method::{self, InputMethodState};
 use crate::protocol::virtual_keyboard::{self, VirtualKeyboardState};
+use crate::touch::pointing_stick::Direction;
 use crate::view::{switch_view, view_for};
 use crate::widget::keyboard::Keyboard;
 
@@ -207,6 +209,25 @@ pub(crate) fn hold_direction(ctx: &mut Context<'_, Keyboard>, ks: Keysym) {
         0
     };
     press_and_hold(ctx, ks, shift);
+}
+
+/// Tap the arrow for `d` `count` times, as a glide's caret steps: with
+/// Shift in the pointing stick's select mode, which is kept, and without
+/// latched modifiers (left for the next key). The caret moved somewhere
+/// unknown, so the word being typed is dropped.
+pub(crate) fn tap_direction(ctx: &mut Context<'_, Keyboard>, d: Direction, count: u32) {
+    let shift = if ctx.resource::<PointingStickMode>().select() {
+        ctx.resource::<VirtualKeyboardState>().shift_mask
+    } else {
+        0
+    };
+    {
+        let (mut vk, mut wl) = ctx.fetch::<(ResMut<VirtualKeyboardState>, ResMut<Wayland>)>();
+        for _ in 0..count {
+            virtual_keyboard::emit_keysym(&mut vk, &mut wl, d.keysym(), shift);
+        }
+    }
+    note_control(ctx, d.keysym());
 }
 
 /// Press `ks` with `extra_mask` and any latched modifiers, leaving it down,

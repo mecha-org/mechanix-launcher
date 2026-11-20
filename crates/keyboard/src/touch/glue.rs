@@ -18,13 +18,16 @@ use xkbcommon::xkb::Keysym;
 use super::KeyFeedback;
 use super::defer::PendingPress;
 use super::flow::{self, Board, Flow};
+use super::glide::GlideSpec;
 use super::long_press::{ChoicesRow, LONG_PRESS};
 use super::pointing_stick::{POINTING_STICK_HOLD, PointingStickPad};
 use super::resolve::KeyGeom;
 use super::tracker::{TouchOut, TouchTracker};
 use crate::feedbackd;
 use crate::field::Field;
-use crate::input::{dispatch, dispatch_choice, hold, hold_direction, release, repeats};
+use crate::input::{
+    dispatch, dispatch_choice, hold, hold_direction, release, repeats, tap_direction,
+};
 use crate::layout::KeyAction;
 use crate::modifiers::shift::{self, Shift};
 use crate::predict::{LetterPrior, Prediction, TypingContext};
@@ -89,6 +92,16 @@ impl Board for Kb<'_, '_> {
         let key = *key_geoms(self.0).get(index)?;
         let bounds = overlay_bounds(self.0)?;
         Some(PointingStickPad::open(key.rect, bounds, gap, origin))
+    }
+    fn glide(&mut self, index: usize) -> Option<GlideSpec> {
+        // The space bar glides sideways. (A gliding pointing stick would
+        // return `GlideSpec::both` here and skip its direction pad.)
+        let me = self.0.me();
+        let node = me.keys[me.current_view].get(index).and_then(|k| {
+            matches!(&k.action, KeyAction::EmitText(t) if t == " ").then_some(k.node)
+        })?;
+        let rect = self.0.at(node)?.component::<ComputedLayout>()?.rect;
+        (rect.height() > 0.0).then(|| GlideSpec::horizontal(rect.height()))
     }
     fn tracker(&mut self) -> &mut TouchTracker {
         &mut self.0.me().tracker
@@ -306,6 +319,22 @@ fn apply(ctx: &mut Context<'_, Keyboard>, view: usize, out: Vec<TouchOut>, time:
             }
             TouchOut::ClosePointingStick => {
                 show_pointing_stick(ctx, PointingStickFeedback::Close);
+            }
+            TouchOut::OpenGlide(i) => {
+                // No hold wait or pop-up while gliding; the key stays lit.
+                let id = ctx.me().long_press_timer;
+                ctx.cancel_timer(id);
+                if let Some(node) = ctx.me().keys[view].get(i).map(|k| k.node.id()) {
+                    let popup = ctx.me().popup.id();
+                    ctx.emit(KeyFeedback::Released { key: node }, [popup]);
+                }
+            }
+            TouchOut::Glide(steps) => {
+                // One haptic tick per move that steps, however many arrows.
+                feedbackd::key_pressed(ctx);
+                for (d, n) in steps.runs() {
+                    tap_direction(ctx, d, n);
+                }
             }
         }
     }

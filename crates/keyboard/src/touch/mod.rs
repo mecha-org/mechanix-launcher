@@ -6,6 +6,7 @@
 mod defer;
 mod flick;
 mod flow;
+mod glide;
 mod glue;
 pub(crate) mod long_press;
 pub(crate) mod pointing_stick;
