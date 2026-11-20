@@ -321,6 +321,13 @@ fn apply(ctx: &mut Context<'_, Keyboard>, view: usize, out: Vec<TouchOut>, time:
                 show_pointing_stick(ctx, PointingStickFeedback::Close);
             }
             TouchOut::OpenGlide(i) => {
+                // Take the contact over: its moves then come straight here,
+                // skipping the toolkit's hit test of the whole keyboard tree
+                // (every view, the emoji page included) and its enter/exit
+                // events on every move of the glide.
+                if let Some(c) = ctx.me().tracker.contact() {
+                    ctx.claim_contact(c);
+                }
                 // No hold wait or pop-up while gliding; the key stays lit.
                 let id = ctx.me().long_press_timer;
                 ctx.cancel_timer(id);

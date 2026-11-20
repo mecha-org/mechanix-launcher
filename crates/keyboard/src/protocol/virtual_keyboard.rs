@@ -96,13 +96,14 @@ pub(crate) fn press_keysym(
     ks: Keysym,
     latched_mask: u32,
 ) -> bool {
-    let name = xkbcommon::xkb::keysym_get_name(ks);
+    // The keysym's name allocates: only looked up when logged.
+    let name = || xkbcommon::xkb::keysym_get_name(ks);
     let Some(vkbd) = state.virtual_keyboard else {
-        tracing::warn!(keysym = %name, "virtual keyboard not ready; key dropped");
+        tracing::warn!(keysym = %name(), "virtual keyboard not ready; key dropped");
         return false;
     };
     let Some(stroke) = state.keycodes.get(&ks).copied() else {
-        tracing::warn!(keysym = %name, "keysym absent from keymap; not typed");
+        tracing::warn!(keysym = %name(), "keysym absent from keymap; not typed");
         return false;
     };
     release_held(state, wl);
@@ -120,7 +121,8 @@ pub(crate) fn press_keysym(
         code: stroke.code,
         mods,
     });
-    tracing::info!(keysym = %name, code = stroke.code, mods, "typed");
+    // Debug, not info: a glide sends dozens of these a second.
+    tracing::debug!(keysym = %name(), code = stroke.code, mods, "typed");
     true
 }
 
