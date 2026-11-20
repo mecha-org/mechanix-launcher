@@ -38,7 +38,6 @@ impl Signal for SetKeyboard {}
 pub(crate) struct DrawerBuilder {
     pub data_dirs: Vec<PathBuf>,
     pub icon_dirs: Rc<IconDirs>,
-    pub launcher: Launcher,
 }
 
 impl Build for DrawerBuilder {
@@ -48,7 +47,6 @@ impl Build for DrawerBuilder {
 pub(crate) struct Drawer {
     data_dirs: Vec<PathBuf>,
     icon_dirs: Rc<IconDirs>,
-    launcher: Launcher,
     apps: Vec<DesktopApp>,
     icons: Vec<RowIcon>,
     ranker: Ranker,
@@ -118,7 +116,6 @@ impl Widget for Drawer {
         let mut drawer = Drawer {
             data_dirs: b.data_dirs,
             icon_dirs: b.icon_dirs,
-            launcher: b.launcher,
             apps,
             icons,
             ranker,

@@ -7,7 +7,6 @@ mod rank;
 mod row;
 mod search_bar;
 
-use std::io;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -88,7 +87,6 @@ impl Screen for AppDrawer {
             DrawerBuilder {
                 data_dirs: self.data_dirs.clone(),
                 icon_dirs: self.icon_dirs.clone(),
-                launcher: self.launcher.clone(),
             },
         )
         .id()
