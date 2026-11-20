@@ -13,6 +13,8 @@ use tracing::warn;
 pub const NORMAL: &str = "normal";
 pub const NUMBER: &str = "number";
 pub const LATCHED: &str = "latched";
+/// A key that switches to the view it's on (the shown tab).
+pub const CURRENT: &str = "current";
 
 /// One named style as it appears in `layout.yaml`.
 #[derive(Debug, Default, Deserialize)]
@@ -67,6 +69,11 @@ impl KeyLook {
             normal: for_button(styles, token, name, types_digit),
             latched: styles.get(LATCHED).copied().unwrap_or_default(),
         }
+    }
+
+    /// This look with `normal` as its normal style.
+    pub fn with_normal(self, normal: KeyStyle) -> Self {
+        Self { normal, ..self }
     }
 
     /// The style for a given state.

@@ -100,13 +100,15 @@ pub enum Cell {
     Spacer(f32),
 }
 
-/// What a key draws in its cell: a text label *or* a symbolic icon, never both.
-/// The icon is its name (an SVG's file stem under `resources/icons`); the `Key`
-/// widget looks up the rasterized sprite in the `Icons` resource.
+/// What a key draws in its cell: a text label, a symbolic icon or a colour
+/// emoji, only one. The icon is its name (an SVG's file stem under
+/// `resources/icons`); the `Key` widget looks up the rasterized sprite in the
+/// `Icons` resource, and an emoji's in the `Emoji` resource.
 #[derive(Debug, Clone)]
 pub enum KeyFace {
     Text(String),
     Icon(String),
+    Emoji(String),
 }
 
 /// A latchable modifier, named as squeekboard's `modifier:` field names it.

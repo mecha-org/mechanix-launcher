@@ -39,6 +39,13 @@ const STATUS: ContainerId = ContainerId("status");
 /// size; opening one hides the keyboard.
 const COVERS: [ContainerId; 3] = [HOME_ID, RUNNING, CONTROL_CENTER];
 
+/// GPU atlas pages: the default, plus a colour page for the keyboard's
+/// emoji, which the app icons leave no room for at 2x.
+const BUDGET: Budget = Budget {
+    mono_pages: 4,
+    color_pages: 3,
+};
+
 /// The [`COVERS`] open now.
 struct OpenCovers(Vec<ContainerId>);
 impl Resource for OpenCovers {}
@@ -284,7 +291,7 @@ fn main() {
         .add_module(RunningAppsModule)
         .add_module(PresentationModule {
             app_id: "mechanix.launcher".into(),
-            budget: Budget::default(),
+            budget: BUDGET,
         });
 
     let cfg = NavConfig::default();
@@ -424,8 +431,8 @@ mod tests {
     }
 
     #[test]
-    fn the_launcher_fits_the_default_budget_at_1x_and_2x() {
-        let budget = Budget::default();
+    fn the_launcher_fits_its_budget_at_1x_and_2x() {
+        let budget = BUDGET;
         let mut app = launcher();
         let at_1x = pages(&app);
         rescale(&mut app, 2.0);
