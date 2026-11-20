@@ -1,6 +1,5 @@
 use super::*;
 use std::collections::HashSet;
-use std::io::Write;
 use std::ops::{Deref, DerefMut};
 use std::os::unix::net::UnixStream;
 
@@ -308,19 +307,8 @@ fn assert_device(app: &App, path: &ObjectPath, ap: Option<(&ObjectPath, &[u8], u
 }
 
 fn setup() -> (TestApp, UnixStream) {
-    // Supply the startup handshake over a private socket, not the system bus.
-    let (client, mut peer) = UnixStream::pair().unwrap();
-    peer.write_all(b"OK 0123456789abcdef0123456789abcdef\r\nERROR no fd passing\r\n")
-        .unwrap();
-    let hello = Message::method_return(1)
-        .with_sender("org.freedesktop.DBus")
-        .with_destination(":1.1")
-        .with_body(&(":1.1",));
-    peer.write_all(&hello.encode(1).0).unwrap();
-    let mut app = App::new();
-    app.add_module(RingModule::default())
-        .add_module(DBusModule::new().over(BusId::System, client))
-        .add_module(NetworkManagerModule);
+    let (mut app, peer) = crate::test_bus::system_bus();
+    app.add_module(NetworkManagerModule);
     (TestApp(app), peer)
 }
 

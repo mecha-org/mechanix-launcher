@@ -1,5 +1,5 @@
-//! Where previews go: the compositor's `phosh_private` thumbnails, or a
-//! test's recorder.
+//! Where previews go: the compositor's `mx_thumbnail_view_v1` thumbnails,
+//! or a test's recorder.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -34,7 +34,7 @@ pub(crate) trait ThumbSink {
     fn commit(&self, app: &mut App, window: NodeId);
 }
 
-/// Previews through `phosh_private`, when the compositor offers it.
+/// Previews through `mx_thumbnail_view_v1`, when the compositor offers it.
 #[derive(Default)]
 pub(crate) struct WaylandThumbs {
     live: RefCell<HashMap<ThumbKey, Thumbnail>>,

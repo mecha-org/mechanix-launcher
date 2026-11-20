@@ -19,6 +19,8 @@ pub mod icons {
     pub const EYE: &[u8] = include_bytes!("../icons/eye.svg");
     pub const EYE_SLASH: &[u8] = include_bytes!("../icons/eye-slash.svg");
     pub const POWER: &[u8] = include_bytes!("../icons/power.svg");
+    /// Force close: end an app's processes.
+    pub const SKULL: &[u8] = include_bytes!("../icons/skull.svg");
     /// Turning arrows: rotation, and restart.
     pub const ROTATE: &[u8] = include_bytes!("../icons/rotate.svg");
     /// A circling arrow: restart.

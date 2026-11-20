@@ -34,7 +34,7 @@ struct Sink {
     next: Cell<ThumbKey>,
     /// Windows whose commit was requested, in order.
     commits: RefCell<Vec<NodeId>>,
-    /// Stands for a compositor without `phosh_private`.
+    /// Stands for a compositor without thumbnail views.
     unavailable: Cell<bool>,
 }
 
@@ -93,6 +93,11 @@ fn id(n: u32) -> ToplevelId {
     ToplevelId::from_raw(n)
 }
 
+/// The process of the app whose first window is `n`, in the fixtures.
+fn pid(n: u32) -> u32 {
+    1000 + n
+}
+
 fn data_dir(name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("running-apps-{}-{name}", std::process::id()));
     let _ = fs::remove_dir_all(&d);
@@ -109,6 +114,8 @@ fn entries() -> Vec<DesktopApp> {
         exec: vec![id.into()],
         icon: Some(id.into()),
         startup_wm_class: None,
+        path: PathBuf::from(format!("/usr/share/applications/{id}.desktop")),
+        dbus_activatable: false,
     };
     vec![
         entry("camera", "Camera"),
@@ -120,16 +127,36 @@ fn entries() -> Vec<DesktopApp> {
 /// `(app id, entry, windows)`, most recently used first; the first window
 /// is the front.
 fn registry(apps: &[(&str, Option<usize>, &[u32])]) -> Registry {
+    let apps: Vec<_> = apps.iter().map(|&(a, e, w)| (a, e, w, &[][..])).collect();
+    registry_with_dialogs(&apps)
+}
+
+/// `(app id, entry, windows, dialogs)`.
+type WithDialogs<'a> = (&'a str, Option<usize>, &'a [u32], &'a [u32]);
+
+/// [`registry`], with each app's dialogs last.
+fn registry_with_dialogs(apps: &[WithDialogs<'_>]) -> Registry {
     let apps = apps
         .iter()
         .enumerate()
-        .map(|(i, &(app_id, entry, windows))| RunningApp {
-            key: AppKey::AppId(app_id.into()),
+        .map(|(i, &(app_id, entry, windows, dialogs))| RunningApp {
+            // Without an entry, a process named by its app id.
+            key: match entry {
+                Some(_) => AppKey::Entry(app_id.into()),
+                None => AppKey::Process(windows[0]),
+            },
             entry,
             windows: windows.iter().map(|&n| id(n)).collect(),
+            dialogs: dialogs.iter().map(|&n| id(n)).collect(),
+            modal: false,
+            pids: vec![pid(windows[0])],
             front: id(windows[0]),
             last_used: 100 - i as u64,
-            title: String::new(),
+            title: if entry.is_some() {
+                String::new()
+            } else {
+                app_id.into()
+            },
         })
         .collect();
     Registry::fixture(entries(), apps)
@@ -158,6 +185,7 @@ struct Ui {
     sink: Rc<Sink>,
     activated: Rc<RefCell<Vec<ToplevelId>>>,
     closed: Rc<RefCell<Vec<ToplevelId>>>,
+    killed: Rc<RefCell<Vec<u32>>>,
 }
 
 fn ui(name: &str, registry: Registry) -> Ui {
@@ -178,6 +206,8 @@ fn ui_with(name: &str, registry: Registry, sink: Rc<Sink>) -> Ui {
         .init_resource::<Launched>()
         .system(count_launch);
     app.insert_resource(Atlas::new());
+    // Timers that never fire on their own: a test fires one with `timeout`.
+    app.init_resource::<Timers>();
     let regular = app
         .resource_mut::<Atlas>()
         .add_font(assets::fonts::GEIST_MONO)
@@ -193,11 +223,13 @@ fn ui_with(name: &str, registry: Registry, sink: Rc<Sink>) -> Ui {
 
     let activated: Rc<RefCell<Vec<ToplevelId>>> = Rc::default();
     let closed: Rc<RefCell<Vec<ToplevelId>>> = Rc::default();
-    let (a, c) = (activated.clone(), closed.clone());
+    let killed: Rc<RefCell<Vec<u32>>> = Rc::default();
+    let (a, c, k) = (activated.clone(), closed.clone(), killed.clone());
     let dirs = vec![data_dir(name)];
     let screen = RunningApps::with_icon_dirs(IconDirs::new(&dirs, None))
         .activator(move |_, t| a.borrow_mut().push(t))
         .closer(move |_, t| c.borrow_mut().push(t))
+        .killer(move |_, pids| k.borrow_mut().extend(pids))
         .thumbs(sink.clone());
     let view = screen.build(&mut app, win);
     app.tick();
@@ -209,6 +241,7 @@ fn ui_with(name: &str, registry: Registry, sink: Rc<Sink>) -> Ui {
         sink,
         activated,
         closed,
+        killed,
     }
 }
 
@@ -258,6 +291,13 @@ impl Ui {
             },
             node,
         );
+        self.app.tick();
+    }
+
+    /// `card`'s close wait runs out.
+    fn timeout(&mut self, card: NodeId) {
+        let id = self.card(card).wait();
+        self.app.emit(Timeout { id }, card);
         self.app.tick();
     }
 
@@ -414,6 +454,173 @@ fn x_closes_every_window_and_dims() {
     // Gone.
     ui.set_registry(registry(&[("clock", Some(1), &[9])]));
     assert_eq!(ui.names(), ["Clock"]);
+}
+
+#[test]
+fn a_dialog_opened_on_close_is_brought_forward() {
+    let mut ui = ui(
+        "asks",
+        registry(&[("files", Some(2), &[7]), ("clock", Some(1), &[9])]),
+    );
+    ui.emit(Shown);
+    let files = ui.cards()[0];
+    let close = ui.card(files).close_button();
+    ui.click(close);
+    assert!(ui.card(files).closing());
+
+    // "Save first?"
+    ui.set_registry(registry_with_dialogs(&[
+        ("files", Some(2), &[7], &[10]),
+        ("clock", Some(1), &[9], &[]),
+    ]));
+    let files = ui.cards()[0];
+    assert!(!ui.card(files).closing());
+    assert_eq!(*ui.activated.borrow(), [id(10)]);
+    assert_eq!(ui.app.resource::<Launched>().0, 1);
+}
+
+#[test]
+fn a_dialog_opened_on_force_close_is_not_brought_forward() {
+    let mut ui = ui("force-asks", registry(&[("files", Some(2), &[7])]));
+    ui.emit(Shown);
+    let files = ui.cards()[0];
+    let kill = ui.card(files).kill_button();
+    ui.click(kill);
+    ui.set_registry(registry_with_dialogs(&[("files", Some(2), &[7], &[10])]));
+    let files = ui.cards()[0];
+    assert!(ui.card(files).closing(), "the kill comes anyway");
+    assert!(ui.activated.borrow().is_empty());
+}
+
+#[test]
+fn a_dialog_open_before_close_is_not_an_answer() {
+    let mut ui = ui(
+        "open-dialog",
+        registry_with_dialogs(&[("files", Some(2), &[7, 8], &[10])]),
+    );
+    ui.emit(Shown);
+    let files = ui.cards()[0];
+    let close = ui.card(files).close_button();
+    ui.click(close);
+    ui.set_registry(registry_with_dialogs(&[("files", Some(2), &[7], &[10])]));
+    let files = ui.cards()[0];
+    assert!(ui.card(files).closing());
+    assert!(ui.activated.borrow().is_empty());
+}
+
+#[test]
+fn the_skull_kills_the_apps_processes_and_dims() {
+    let mut ui = ui(
+        "kill",
+        registry(&[("files", Some(2), &[7]), ("clock", Some(1), &[9])]),
+    );
+    ui.emit(Shown);
+    let files = ui.cards()[0];
+    let kill = ui.card(files).kill_button();
+    ui.click(kill);
+    assert_eq!(*ui.killed.borrow(), [pid(7)]);
+    assert!(ui.closed.borrow().is_empty(), "no close is asked first");
+    assert!(ui.activated.borrow().is_empty());
+    assert!(ui.card(files).closing());
+    ui.click(kill);
+    // A second press kills nothing more.
+    assert_eq!(ui.killed.borrow().len(), 1);
+}
+
+#[test]
+fn without_a_process_there_is_no_skull() {
+    let mut app = RunningApp {
+        key: AppKey::Window(id(5)),
+        entry: None,
+        windows: vec![id(5)],
+        dialogs: Vec::new(),
+        modal: false,
+        pids: Vec::new(),
+        front: id(5),
+        last_used: 1,
+        title: "Scratch".into(),
+    };
+    let mut ui = ui("no-pid", Registry::fixture(entries(), vec![app.clone()]));
+    ui.emit(Shown);
+    let card = ui.cards()[0];
+    let kill = ui.card(card).kill_button();
+    let display = ui.app.component::<LayoutStyle>(kill).unwrap().display;
+    assert_eq!(display, Display::Hidden);
+    ui.click(kill);
+    assert!(ui.killed.borrow().is_empty());
+    assert!(!ui.card(card).closing());
+
+    app.pids = vec![42];
+    ui.set_registry(Registry::fixture(entries(), vec![app]));
+    let card = ui.cards()[0];
+    let kill = ui.card(card).kill_button();
+    let display = ui.app.component::<LayoutStyle>(kill).unwrap().display;
+    assert_ne!(display, Display::Hidden);
+    ui.click(kill);
+    assert_eq!(*ui.killed.borrow(), [42]);
+}
+
+#[test]
+fn a_modal_dialog_already_open_is_brought_forward_not_closed() {
+    let mut app = RunningApp {
+        key: AppKey::Entry("files".into()),
+        entry: Some(2),
+        windows: vec![id(7)],
+        dialogs: vec![id(10)],
+        modal: true,
+        pids: vec![pid(7)],
+        front: id(7),
+        last_used: 1,
+        title: String::new(),
+    };
+    let mut ui = ui("modal", Registry::fixture(entries(), vec![app.clone()]));
+    ui.emit(Shown);
+    let files = ui.cards()[0];
+    let close = ui.card(files).close_button();
+    ui.click(close);
+    assert!(ui.closed.borrow().is_empty(), "nothing is closed");
+    assert!(!ui.card(files).closing());
+    assert_eq!(*ui.activated.borrow(), [id(7)]);
+    assert_eq!(ui.app.resource::<Launched>().0, 1);
+
+    // Answered: the next ✕ closes.
+    app.dialogs.clear();
+    app.modal = false;
+    ui.set_registry(Registry::fixture(entries(), vec![app]));
+    let files = ui.cards()[0];
+    let close = ui.card(files).close_button();
+    ui.click(close);
+    assert_eq!(*ui.closed.borrow(), [id(7)]);
+}
+
+#[test]
+fn an_app_that_stays_open_is_brought_forward() {
+    let mut ui = ui("stays", registry(&[("files", Some(2), &[7])]));
+    ui.emit(Shown);
+    let files = ui.cards()[0];
+    let close = ui.card(files).close_button();
+    ui.click(close);
+    ui.timeout(files);
+    assert!(!ui.card(files).closing());
+    assert_eq!(*ui.activated.borrow(), [id(7)]);
+    assert_eq!(ui.app.resource::<Launched>().0, 1);
+    // It takes taps again.
+    ui.click(files);
+    assert_eq!(*ui.activated.borrow(), [id(7), id(7)]);
+}
+
+#[test]
+fn an_app_that_stays_open_while_hidden_only_wakes_its_card() {
+    let mut ui = ui("stays-hidden", registry(&[("files", Some(2), &[7])]));
+    ui.emit(Shown);
+    let files = ui.cards()[0];
+    let close = ui.card(files).close_button();
+    ui.click(close);
+    ui.emit(Hidden);
+    ui.timeout(files);
+    assert!(!ui.card(files).closing());
+    assert!(ui.activated.borrow().is_empty());
+    assert_eq!(ui.app.resource::<Launched>().0, 0);
 }
 
 #[test]
@@ -676,6 +883,9 @@ fn window_keyed_card_follows_its_title() {
                 key: AppKey::Window(id(5)),
                 entry: None,
                 windows: vec![id(5)],
+                dialogs: Vec::new(),
+                modal: false,
+                pids: Vec::new(),
                 front: id(5),
                 last_used: 1,
                 title: title.into(),

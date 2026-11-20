@@ -7,73 +7,133 @@ use std::path::{Path, PathBuf};
 use mecha_wayland::prelude::*;
 use screen::Shown;
 
+use crate::units::scope_app_id;
 use crate::{DesktopApp, scan};
 
 /// What identifies a running app.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AppKey {
-    /// The windows' app id, lowercased.
-    AppId(String),
-    /// A window with no app id: an app of its own.
+    /// An installed app: its desktop entry's id.
+    Entry(String),
+    /// A process whose windows match no entry: its windows go together.
+    Process(u32),
+    /// A window with nothing else to go by: an app of its own.
     Window(ToplevelId),
 }
 
-/// One running app: the windows that share an app id.
+/// One running app: its windows, and the dialogs over them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunningApp {
     pub key: AppKey,
     /// Index into the entries slice given to [`group`], when one matches.
     pub entry: Option<usize>,
     pub windows: Vec<ToplevelId>,
+    /// The dialogs open over its windows, a dialog's own dialogs included.
+    pub dialogs: Vec<ToplevelId>,
+    /// Whether one of its dialogs is modal.
+    pub modal: bool,
+    /// The processes its windows and dialogs belong to, where known.
+    pub pids: Vec<u32>,
     /// The window to activate: the most recently activated one.
     pub front: ToplevelId,
     /// The highest `last_activated` of the windows.
     pub last_used: u64,
-    /// For [`AppKey::Window`], that window's title, which is all there is
-    /// to name it by; empty for an app id, so a title change in a window
-    /// that has one is not a change to the running apps.
+    /// For an app without an entry, what there is to name it by: its first
+    /// window's app id, or else its title. Empty for an entry, so a title
+    /// change is not a change to the running apps.
     pub title: String,
 }
 
-/// Running apps from the open windows, most recently used first. Windows
-/// with a parent (dialogs) belong to their parent's app and are skipped.
-pub fn group(toplevels: &[ToplevelInfo], entries: &[DesktopApp]) -> Vec<RunningApp> {
+/// Running apps from the open windows, most recently used first. A window
+/// belongs to, in order:
+///
+/// 1. its parent's app, if it has a parent: it is one of its dialogs;
+/// 2. the entry its app id matches ([`match_entry`]);
+/// 3. the entry the app id of the systemd unit it runs in matches
+///    (`scope_app`, from its pid; see [`unit_app_id`](crate::unit_app_id));
+/// 4. the app of another window of its process;
+/// 5. its process, or itself when its pid is unknown.
+///
+/// An app id that matches no entry groups nothing: unrelated apps often
+/// share one (`python3`, `electron`).
+pub fn group(
+    toplevels: &[ToplevelInfo],
+    entries: &[DesktopApp],
+    scope_app: impl Fn(u32) -> Option<String>,
+) -> Vec<RunningApp> {
+    // Each window without a parent, with the entry it matches itself.
+    let tops: Vec<(&ToplevelInfo, Option<usize>)> = toplevels
+        .iter()
+        .filter(|t| t.parent.is_none())
+        .map(|t| {
+            let entry = Some(t.app_id.as_str())
+                .filter(|id| !id.is_empty())
+                .and_then(|id| match_entry(id, entries))
+                .or_else(|| match_entry(&scope_app(t.pid?)?, entries));
+            (t, entry)
+        })
+        .collect();
+    let by_pid: HashMap<u32, usize> = tops
+        .iter()
+        .filter_map(|&(t, entry)| Some((t.pid?, entry?)))
+        .collect();
     let mut apps: Vec<RunningApp> = Vec::new();
     let mut index: HashMap<AppKey, usize> = HashMap::new();
-    for t in toplevels.iter().filter(|t| t.parent.is_none()) {
-        let key = if t.app_id.is_empty() {
-            AppKey::Window(t.id)
-        } else {
-            AppKey::AppId(t.app_id.to_lowercase())
+    for (t, entry) in tops {
+        let entry = entry.or_else(|| by_pid.get(&t.pid?).copied());
+        let key = match (entry, t.pid) {
+            (Some(i), _) => AppKey::Entry(entries[i].id.clone()),
+            (None, Some(pid)) => AppKey::Process(pid),
+            (None, None) => AppKey::Window(t.id),
         };
         match index.get(&key) {
             Some(&i) => {
                 let app = &mut apps[i];
                 app.windows.push(t.id);
+                app.pids.extend(t.pid.filter(|p| !app.pids.contains(p)));
                 if t.last_activated > app.last_used {
                     app.last_used = t.last_activated;
                     app.front = t.id;
                 }
             }
             None => {
-                let entry = match &key {
-                    AppKey::AppId(id) => match_entry(id, entries),
-                    AppKey::Window(_) => None,
-                };
-                let title = match &key {
-                    AppKey::AppId(_) => String::new(),
-                    AppKey::Window(_) => t.title.clone(),
+                let title = match (entry, t.app_id.is_empty()) {
+                    (Some(_), _) => String::new(),
+                    (None, false) => t.app_id.clone(),
+                    (None, true) => t.title.clone(),
                 };
                 index.insert(key.clone(), apps.len());
                 apps.push(RunningApp {
                     key,
                     entry,
                     windows: vec![t.id],
+                    dialogs: Vec::new(),
+                    modal: false,
+                    pids: t.pid.into_iter().collect(),
                     front: t.id,
                     last_used: t.last_activated,
                     title,
                 });
             }
+        }
+    }
+    let parent_of: HashMap<ToplevelId, ToplevelId> = toplevels
+        .iter()
+        .filter_map(|t| Some((t.id, t.parent?)))
+        .collect();
+    for t in toplevels.iter().filter(|t| t.parent.is_some()) {
+        // Up to the window without a parent; bounded, in case of a cycle.
+        let mut top = t.id;
+        for _ in 0..toplevels.len() {
+            match parent_of.get(&top) {
+                Some(&p) => top = p,
+                None => break,
+            }
+        }
+        if let Some(app) = apps.iter_mut().find(|a| a.windows.contains(&top)) {
+            app.dialogs.push(t.id);
+            app.modal |= t.modal;
+            app.pids.extend(t.pid.filter(|p| !app.pids.contains(p)));
         }
     }
     // Stable, so equally recent apps keep the order they were first seen in.
@@ -82,7 +142,8 @@ pub fn group(toplevels: &[ToplevelInfo], entries: &[DesktopApp]) -> Vec<RunningA
 }
 
 /// The entry an app id belongs to: by desktop id, then `StartupWMClass`,
-/// then the basename of the command, all case-insensitively.
+/// then the basename of the command, then (for a reverse-DNS id) by its
+/// last part as the desktop id, all case-insensitively.
 pub fn match_entry(app_id: &str, entries: &[DesktopApp]) -> Option<usize> {
     let want = app_id.to_lowercase();
     let by_id = |e: &DesktopApp| {
@@ -100,7 +161,12 @@ pub fn match_entry(app_id: &str, entries: &[DesktopApp]) -> Option<usize> {
             .and_then(|c| Path::new(c).file_name())
             .is_some_and(|n| n.to_string_lossy().to_lowercase() == want)
     };
-    let rules: [&dyn Fn(&DesktopApp) -> bool; 3] = [&by_id, &by_class, &by_exec];
+    let last = want.rsplit_once('.').map(|(_, last)| last);
+    let by_last = |e: &DesktopApp| {
+        let id = e.id.to_lowercase();
+        last.is_some_and(|last| id.strip_suffix(".desktop").unwrap_or(&id) == last)
+    };
+    let rules: [&dyn Fn(&DesktopApp) -> bool; 4] = [&by_id, &by_class, &by_exec, &by_last];
     rules
         .iter()
         .find_map(|rule| entries.iter().position(|e| rule(e)))
@@ -152,7 +218,7 @@ impl Registry {
 
     fn regroup(&mut self, toplevels: &Toplevels) {
         let infos: Vec<ToplevelInfo> = toplevels.iter().cloned().collect();
-        self.apps = group(&infos, &self.entries);
+        self.apps = group(&infos, &self.entries, scope_app_id);
     }
 }
 
@@ -234,8 +300,15 @@ mod tests {
             activated: false,
             fullscreen: false,
             parent: None,
+            pid: None,
+            modal: false,
             last_activated,
         }
+    }
+
+    fn in_process(mut w: ToplevelInfo, pid: u32) -> ToplevelInfo {
+        w.pid = Some(pid);
+        w
     }
 
     fn entry(id: &str, exec: &str, wm_class: Option<&str>) -> DesktopApp {
@@ -245,17 +318,115 @@ mod tests {
             exec: exec.split(' ').map(String::from).collect(),
             icon: None,
             startup_wm_class: wm_class.map(String::from),
+            path: PathBuf::from(format!("/usr/share/applications/{id}")),
+            dbus_activatable: false,
         }
     }
 
+    /// Entries for the app ids the tests use.
+    fn installed() -> Vec<DesktopApp> {
+        ["a", "b", "c", "notes", "clock", "org.mecha.notes"]
+            .into_iter()
+            .map(|id| entry(&format!("{id}.desktop"), id, None))
+            .collect()
+    }
+
+    fn key(id: &str) -> AppKey {
+        AppKey::Entry(format!("{id}.desktop"))
+    }
+
+    /// Group with no unit to look up.
+    fn group_plain(toplevels: &[ToplevelInfo], entries: &[DesktopApp]) -> Vec<RunningApp> {
+        group(toplevels, entries, |_| None)
+    }
+
     #[test]
-    fn windows_group_by_app_id_case_insensitively() {
-        let apps = group(
+    fn windows_of_one_entry_group_whatever_the_case() {
+        let apps = group_plain(
             &[win(1, "Org.Mecha.Notes", 1), win(2, "org.mecha.notes", 2)],
-            &[],
+            &installed(),
         );
         assert_eq!(apps.len(), 1);
-        assert_eq!(apps[0].key, AppKey::AppId("org.mecha.notes".into()));
+        assert_eq!(apps[0].key, key("org.mecha.notes"));
+        assert_eq!(apps[0].windows, [id(1), id(2)]);
+    }
+
+    #[test]
+    fn an_app_id_without_an_entry_groups_nothing() {
+        // Two unrelated apps both calling themselves `python3`.
+        let apps = group_plain(
+            &[
+                in_process(win(1, "python3", 1), 10),
+                in_process(win(2, "python3", 2), 20),
+                win(3, "python3", 3),
+            ],
+            &installed(),
+        );
+        let keys: Vec<_> = apps.iter().map(|a| a.key.clone()).collect();
+        assert_eq!(
+            keys,
+            [
+                AppKey::Window(id(3)),
+                AppKey::Process(20),
+                AppKey::Process(10)
+            ]
+        );
+        assert!(apps.iter().all(|a| a.title == "python3"));
+    }
+
+    #[test]
+    fn one_process_without_an_entry_is_one_app() {
+        let apps = group_plain(
+            &[
+                in_process(win(1, "tool", 1), 10),
+                in_process(win(2, "", 2), 10),
+            ],
+            &installed(),
+        );
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].key, AppKey::Process(10));
+        assert_eq!(apps[0].title, "tool", "named by its first window");
+    }
+
+    #[test]
+    fn the_unit_names_the_app_when_the_app_id_does_not() {
+        let scope = |pid| (pid == 10).then(|| "notes".to_string());
+        let apps = group(
+            &[
+                in_process(win(1, "python3", 1), 10),
+                in_process(win(2, "python3", 2), 20),
+            ],
+            &installed(),
+            scope,
+        );
+        let notes = apps.iter().find(|a| a.key == key("notes")).unwrap();
+        assert_eq!(notes.windows, [id(1)]);
+        assert!(apps.iter().any(|a| a.key == AppKey::Process(20)));
+    }
+
+    #[test]
+    fn the_app_id_outranks_the_unit() {
+        // An app started from a terminal runs in the terminal's unit.
+        let terminal = |_| Some("a".to_string());
+        let apps = group(
+            &[in_process(win(1, "clock", 1), 10)],
+            &installed(),
+            terminal,
+        );
+        assert_eq!(apps[0].key, key("clock"));
+    }
+
+    #[test]
+    fn a_process_goes_with_its_known_window() {
+        let apps = group_plain(
+            &[
+                in_process(win(1, "notes", 1), 10),
+                in_process(win(2, "helper", 2), 10),
+            ],
+            &installed(),
+        );
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].key, key("notes"));
         assert_eq!(apps[0].windows, [id(1), id(2)]);
     }
 
@@ -263,15 +434,35 @@ mod tests {
     fn child_windows_never_make_cards() {
         let mut dialog = win(2, "notes", 5);
         dialog.parent = Some(id(1));
-        assert!(group(&[dialog.clone()], &[]).is_empty());
-        let apps = group(&[win(1, "notes", 1), dialog], &[]);
+        assert!(group_plain(&[dialog.clone()], &installed()).is_empty());
+        let apps = group_plain(&[win(1, "notes", 1), dialog], &installed());
         assert_eq!(apps.len(), 1);
         assert_eq!(apps[0].windows, [id(1)]);
     }
 
     #[test]
+    fn dialogs_go_with_their_windows_app_however_deep() {
+        let mut dialog = win(2, "", 5);
+        dialog.parent = Some(id(1));
+        let mut inner = win(3, "other", 6);
+        inner.parent = Some(id(2));
+        inner.modal = true;
+        let apps = group_plain(
+            &[win(1, "notes", 1), dialog, inner, win(4, "clock", 2)],
+            &installed(),
+        );
+        assert_eq!(apps.len(), 2);
+        let notes = apps.iter().find(|a| a.windows == [id(1)]).unwrap();
+        assert_eq!(notes.dialogs, [id(2), id(3)]);
+        assert!(notes.modal);
+        let clock = apps.iter().find(|a| a.windows == [id(4)]).unwrap();
+        assert!(clock.dialogs.is_empty());
+        assert!(!clock.modal);
+    }
+
+    #[test]
     fn empty_app_id_is_its_own_app() {
-        let apps = group(&[win(1, "", 1), win(2, "", 2)], &[]);
+        let apps = group_plain(&[win(1, "", 1), win(2, "", 2)], &installed());
         assert_eq!(apps.len(), 2);
         assert!(apps.iter().any(|a| a.key == AppKey::Window(id(1))));
         assert!(apps.iter().any(|a| a.key == AppKey::Window(id(2))));
@@ -284,61 +475,63 @@ mod tests {
         lone.title = "Scratch".into();
         let mut notes = win(2, "notes", 2);
         notes.title = "Shopping list".into();
-        let apps = group(&[lone.clone(), notes.clone()], &[]);
+        let apps = group_plain(&[lone.clone(), notes.clone()], &installed());
         let by_window = apps
             .iter()
             .find(|a| a.key == AppKey::Window(id(1)))
             .unwrap();
         assert_eq!(by_window.title, "Scratch");
-        let by_id = apps
-            .iter()
-            .find(|a| a.key != AppKey::Window(id(1)))
-            .unwrap();
-        assert_eq!(by_id.title, "", "an app id names its own card");
+        let by_entry = apps.iter().find(|a| a.key == key("notes")).unwrap();
+        assert_eq!(by_entry.title, "", "an entry names its own card");
 
         // Renaming the window-keyed app's window changes the running apps;
-        // renaming an app-id window does not.
+        // renaming an entry's window does not.
         let mut renamed = lone.clone();
         renamed.title = "Renamed".into();
-        assert_ne!(group(&[renamed, notes.clone()], &[]), apps);
+        assert_ne!(group_plain(&[renamed, notes.clone()], &installed()), apps);
         let mut retitled = notes;
         retitled.title = "Todo".into();
-        assert_eq!(group(&[lone, retitled], &[]), apps);
+        assert_eq!(group_plain(&[lone, retitled], &installed()), apps);
     }
 
     #[test]
     fn front_is_most_recently_activated() {
-        let apps = group(&[win(1, "a", 3), win(2, "a", 7), win(3, "a", 7)], &[]);
+        let apps = group_plain(
+            &[win(1, "a", 3), win(2, "a", 7), win(3, "a", 7)],
+            &installed(),
+        );
         assert_eq!(apps[0].front, id(2));
         assert_eq!(apps[0].last_used, 7);
     }
 
     #[test]
     fn apps_order_most_recent_first() {
-        let apps = group(
+        let apps = group_plain(
             &[
                 win(1, "a", 1),
                 win(2, "b", 9),
                 win(3, "c", 1),
                 win(4, "a", 4),
             ],
-            &[],
+            &installed(),
         );
         let keys: Vec<_> = apps.iter().map(|a| a.key.clone()).collect();
-        assert_eq!(
-            keys,
-            [
-                AppKey::AppId("b".into()),
-                AppKey::AppId("a".into()),
-                AppKey::AppId("c".into())
-            ]
-        );
+        assert_eq!(keys, [key("b"), key("a"), key("c")]);
     }
 
     #[test]
     fn grouped_app_carries_its_entry() {
         let entries = [entry("foot.desktop", "foot", None)];
-        assert_eq!(group(&[win(1, "foot", 1)], &entries)[0].entry, Some(0));
+        assert_eq!(
+            group_plain(&[win(1, "foot", 1)], &entries)[0].entry,
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn a_reverse_dns_id_matches_by_its_last_part() {
+        let entries = [entry("calculator.desktop", "calc", None)];
+        assert_eq!(match_entry("org.example.Calculator", &entries), Some(0));
     }
 
     #[test]

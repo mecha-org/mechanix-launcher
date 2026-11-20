@@ -119,7 +119,7 @@ impl Resource for Sets {}
 
 /// The module over a compositor that grants grabs.
 fn fake() -> Fake {
-    let mut f = Fake::new(&[("phosh_private", 8)], |m| m);
+    let mut f = Fake::new(&[("mx_accelerators_v1", 1)], |m| m);
     f.app
         .init_resource::<Sets>()
         .system(|app: &mut App, s: &SetVolume| app.resource_mut::<Sets>().0.push(s.0));
@@ -175,7 +175,7 @@ fn other_keys_failures_and_no_volume_do_nothing() {
 }
 
 #[test]
-fn no_phosh_private_no_module() {
+fn no_accelerators_no_module() {
     let mut f = Fake::new(&[("wl_seat", 9)], |m| m);
     f.app.add_module(VolumeKeysModule);
     f.turn();

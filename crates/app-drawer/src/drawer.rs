@@ -39,7 +39,6 @@ impl Signal for SetKeyboard {}
 pub(crate) struct DrawerBuilder {
     pub data_dirs: Vec<PathBuf>,
     pub icon_dirs: Rc<IconDirs>,
-    pub launcher: Launcher,
     pub at_top: Rc<Cell<bool>>,
 }
 
@@ -50,7 +49,6 @@ impl Build for DrawerBuilder {
 pub(crate) struct Drawer {
     data_dirs: Vec<PathBuf>,
     icon_dirs: Rc<IconDirs>,
-    launcher: Launcher,
     at_top: Rc<Cell<bool>>,
     apps: Vec<DesktopApp>,
     icons: Vec<RowIcon>,
@@ -121,7 +119,6 @@ impl Widget for Drawer {
         let mut drawer = Drawer {
             data_dirs: b.data_dirs,
             icon_dirs: b.icon_dirs,
-            launcher: b.launcher,
             at_top: b.at_top,
             apps,
             icons,
@@ -149,12 +146,18 @@ impl Widget for Drawer {
 struct Running {
     fronts: Vec<(String, ToplevelId)>,
     activator: Activator,
+    launcher: Launcher,
 }
 impl Resource for Running {}
 
 /// Sent by a tap on a running app; the activator runs with the app.
 struct Activate(ToplevelId);
 impl Signal for Activate {}
+
+/// Sent by a tap on an app that isn't running; the launcher runs with the
+/// app.
+struct Launch(DesktopApp);
+impl Signal for Launch {}
 
 /// Production activator: raise the window for the seat, if the compositor
 /// offers toplevel management.
@@ -188,17 +191,23 @@ fn sync_running(app: &mut App) {
 }
 
 /// Registers the drawer's systems. Call once.
-pub(crate) fn install(app: &mut App, activator: Activator) {
+pub(crate) fn install(app: &mut App, activator: Activator, launcher: Launcher) {
     app.insert_resource(Running {
         fronts: Vec::new(),
         activator,
+        launcher,
     });
     sync_running(app);
+    crate::launch::install(app);
     app.system(|app: &mut App, _: &RegistryChanged| sync_running(app))
         .system(|app: &mut App, _: &Emitted<Shown>| sync_running(app))
         .system(|app: &mut App, e: &Activate| {
             let activator = app.resource::<Running>().activator.clone();
             activator(app, e.0);
+        })
+        .system(|app: &mut App, e: &Launch| {
+            let launcher = app.resource::<Running>().launcher.clone();
+            launcher(app, &e.0);
         });
     if !app.has_resource::<IconCache>() {
         let cache = IconCache::new(&mut app.resource_mut::<Atlas>());
@@ -326,26 +335,20 @@ fn launch(ctx: &mut Context<'_, Drawer>, index: usize) {
     let Some(app) = d.apps.get(index) else {
         return;
     };
-    let (id, exec, launcher) = (app.id.clone(), app.exec.clone(), d.launcher.clone());
+    let entry = app.clone();
     let front = ctx
         .resource::<Running>()
         .fronts
         .iter()
-        .find(|(running, _)| *running == id)
+        .find(|(running, _)| *running == entry.id)
         .map(|&(_, front)| front);
-    if let Some(front) = front {
-        ctx.signal(Activate(front));
-        clear_query(ctx);
-        ctx.signal(AppLaunched);
-        return;
+    match front {
+        Some(front) => ctx.signal(Activate(front)),
+        // Starting is asynchronous: a failure is only logged.
+        None => ctx.signal(Launch(entry)),
     }
-    match launcher(&exec) {
-        Ok(()) => {
-            clear_query(ctx);
-            ctx.signal(AppLaunched);
-        }
-        Err(e) => tracing::warn!(%id, "launch failed: {e}"),
-    }
+    clear_query(ctx);
+    ctx.signal(AppLaunched);
 }
 
 /// Hands the keyboard back and clears the search; safe to repeat.
@@ -689,9 +692,9 @@ mod tests {
     fn tap_launches_clears_and_signals() {
         let seen: Rc<RefCell<Vec<Vec<String>>>> = Rc::default();
         let rec = seen.clone();
-        let screen = drawer(&three("tap")).launcher(move |argv| {
-            rec.borrow_mut().push(argv.to_vec());
-            Ok(())
+        let screen = drawer(&three("tap")).launcher(move |_, entry| {
+            assert_eq!(entry.id, "chromium.desktop");
+            rec.borrow_mut().push(entry.exec.clone());
         });
         let mut ui = ui(screen);
         ui.type_in("chr");
@@ -711,13 +714,18 @@ mod tests {
             exec: vec!["chromium-browser".into(), "--incognito".into()],
             icon: None,
             startup_wm_class: None,
+            path: PathBuf::from("/usr/share/applications/chromium.desktop"),
+            dbus_activatable: false,
         }];
         let apps = running
             .iter()
             .map(|&(app_id, n)| RunningApp {
-                key: AppKey::AppId(app_id.into()),
+                key: AppKey::Entry(app_id.into()),
                 entry: Some(0),
                 windows: vec![ToplevelId::from_raw(n)],
+                dialogs: Vec::new(),
+                modal: false,
+                pids: Vec::new(),
                 front: ToplevelId::from_raw(n),
                 last_used: 1,
                 title: String::new(),
@@ -732,10 +740,7 @@ mod tests {
         let activated: Rc<RefCell<Vec<ToplevelId>>> = Rc::default();
         let (l, a) = (launched.clone(), activated.clone());
         let screen = drawer(&three("run"))
-            .launcher(move |argv| {
-                l.borrow_mut().push(argv.to_vec());
-                Ok(())
-            })
+            .launcher(move |_, entry| l.borrow_mut().push(entry.exec.clone()))
             .activator(move |_, id| a.borrow_mut().push(id));
         let mut ui = ui_with(screen, Some(registry_with(&[("chromium", 7)])));
         ui.type_in("chr");
@@ -754,10 +759,7 @@ mod tests {
         let activated: Rc<RefCell<Vec<ToplevelId>>> = Rc::default();
         let (l, a) = (launched.clone(), activated.clone());
         let screen = drawer(&three("stopped"))
-            .launcher(move |argv| {
-                l.borrow_mut().push(argv.to_vec());
-                Ok(())
-            })
+            .launcher(move |_, entry| l.borrow_mut().push(entry.exec.clone()))
             .activator(move |_, id| a.borrow_mut().push(id));
         let mut ui = ui_with(screen, Some(registry_with(&[])));
         ui.type_in("chr");

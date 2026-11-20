@@ -4,9 +4,12 @@ pub mod bluetooth;
 pub mod display;
 pub mod keep_awake;
 pub mod keys;
+mod logind;
 pub mod network_manager;
 pub mod power;
 pub mod session;
+#[cfg(test)]
+mod test_bus;
 pub mod upower;
 
 pub use bluetooth::{
@@ -20,7 +23,7 @@ pub use keys::{Key, KeyAction, grab_key};
 pub use network_manager::{APUpdate, NetworkManagerModule, SetWifiEnabled, StateUpdate, WifiState};
 pub use power::{LogOut, PowerModule, PowerOff, Restart, Suspend};
 pub use session::{
-    LockRequested, PrepareForSleep, SessionLockChanged, SessionModule, SetIdleHint, SleepReady,
-    TakePowerKey, UnlockRequested,
+    LockRequested, PrepareForSleep, SessionEnded, SessionLockChanged, SessionModule, SetIdleHint,
+    SleepReady, TakePowerKey, UnlockRequested,
 };
 pub use upower::{BatteryPercentageChanged, UpowerModule};

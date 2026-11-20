@@ -53,7 +53,7 @@ enum Pressed {
 
 pub(crate) fn install(app: &mut App) {
     if !grab_key(app, POWER) {
-        tracing::warn!("no phosh_private: logind keeps the power key");
+        tracing::warn!("no mx_accelerators_v1: logind keeps the power key");
         return;
     }
     app.init_resource::<Press>()

@@ -123,7 +123,7 @@ fn main() {
 
     let font = app
         .resource_mut::<Atlas>()
-        .add_font(include_bytes!("../resources/Geist-Regular.ttf"))
+        .add_font(include_bytes!("../resources/fonts/Geist-Regular.ttf"))
         .expect("Geist loads");
 
     let root = app.root();

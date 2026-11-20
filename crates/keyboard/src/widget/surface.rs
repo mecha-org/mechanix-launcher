@@ -240,6 +240,7 @@ impl Widget for KeyboardUI {
             // The usual OSK namespace: compositors show it over fullscreen apps.
             namespace: "osk".into(),
             keyboard_interactivity: KeyboardInteractivity::None,
+            shell_role: Some(ShellRole::Osk),
         });
 
         let win = s.spawn_with(

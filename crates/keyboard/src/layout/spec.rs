@@ -107,6 +107,8 @@ pub(crate) struct Button {
     pub(crate) outline: Option<String>,
     pub(crate) label: Option<String>,
     pub(crate) icon: Option<String>,
+    /// A colour emoji face, drawn from the emoji font.
+    pub(crate) emoji: Option<String>,
     /// Emit fields the Key action resolves from; see `resolve_action`.
     pub(crate) keysym: Option<String>,
     pub(crate) text: Option<String>,
