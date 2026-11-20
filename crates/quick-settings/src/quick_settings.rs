@@ -241,6 +241,10 @@ mod tests {
 
     #[test]
     fn portrait_sections_fit_in_a_compact_panel() {
+        // Leave room for two 24-unit controls, their 15-unit gap, and
+        // both section gaps after the header and tile bar take their share.
+        const PANEL_HEIGHT: f32 = 250.0;
+
         let mut app = App::new();
         app.add_module(LayoutModule)
             .add_module(PaintModule)
@@ -265,7 +269,7 @@ mod tests {
             div().style(
                 LayoutStyle::default()
                     .width(percent(100.0))
-                    .height(px(230.0))
+                    .height(px(PANEL_HEIGHT))
                     .shrink(0.0),
             ),
         );
@@ -297,7 +301,7 @@ mod tests {
         let bottom_row = rect(&app, tile_rows[1]);
         let bottom = |r: Rect| r.origin.y + r.height();
 
-        assert_eq!(panel_rect.height(), 230.0);
+        assert_eq!(panel_rect.height(), PANEL_HEIGHT);
         for control in [controls[0], controls[2]] {
             let control_rect = rect(&app, control);
             let row = app.children(control).unwrap()[0];
@@ -306,8 +310,16 @@ mod tests {
             assert!(!ticks.is_empty());
             for &tick in ticks {
                 let tick = rect(&app, tick);
-                assert_eq!(tick.origin.y, control_rect.origin.y);
-                assert_eq!(tick.height(), control_rect.height());
+                // Centred on the control, 80% of the (thumb-tall) track.
+                let center = control_rect.origin.y + control_rect.height() / 2.0;
+                assert!(
+                    (tick.origin.y + tick.height() / 2.0 - center).abs() <= 1.0,
+                    "{tick:?} not centred on {control_rect:?}"
+                );
+                assert!(
+                    (tick.height() - rect(&app, track).height() * 0.8).abs() <= 1.0,
+                    "{tick:?}"
+                );
                 assert!(tick.origin.y >= bottom(header), "{header:?} {tick:?}");
                 assert!(bottom(tick) <= top_row.origin.y, "{tick:?} {top_row:?}");
             }

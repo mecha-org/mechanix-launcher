@@ -1,5 +1,5 @@
-//! The power menu: power off or restart, each asked for once more before
-//! it goes to logind.
+//! The power menu: power off, restart or log out, each confirmed by
+//! sliding its row to the end before it goes to logind.
 //!
 //! [`PowerMenuModule`] gives it a window of its own, a full-screen overlay
 //! layer above everything else, shown by [`ShowPowerMenu`] and hidden by
@@ -9,12 +9,16 @@
 //! host opens it with [`OpenPowerMenu`] and closes it with
 //! [`ClosePowerMenu`].
 
-use mecha_wayland::mechanix_widgets::prelude::{
-    Button, ButtonBuilder, ButtonContextExt, ButtonSize, ButtonVariant, Text, TextContextExt,
-    button, text,
-};
+mod row;
+#[cfg(test)]
+mod tests;
+
+use mecha_wayland::mechanix_widgets::prelude::{SliderContextExt, Text, TextContextExt, text};
 use mecha_wayland::prelude::*;
-use services::{PowerModule, PowerOff, Restart};
+use row::{
+    Action, ICON_GAP, ICON_SIZE, Row, Slide, divider, padded_row, slide_progress, spawn_row,
+};
+use services::{LogOut, PowerModule, PowerOff, Restart};
 
 /// Show the power menu's own window.
 pub struct ShowPowerMenu;
@@ -30,12 +34,12 @@ pub fn hide_power_menu(app: &mut App) {
     }
 }
 
-/// The [`PowerMenu`] it is emitted at closed: by its close button, or
+/// The [`PowerMenu`] it is emitted at closed: by its cancel row, or
 /// after asking logind.
 pub struct PowerMenuClosed;
 impl Event for PowerMenuClosed {}
 
-/// Open the [`PowerMenu`] it is emitted at, on power off.
+/// Open the [`PowerMenu`] it is emitted at.
 pub struct OpenPowerMenu;
 impl Event for OpenPowerMenu {}
 
@@ -43,18 +47,16 @@ impl Event for OpenPowerMenu {}
 pub struct ClosePowerMenu;
 impl Event for ClosePowerMenu {}
 
-/// The namespace prefix stacks it above everything, fullscreen apps and
-/// the shell's bars included.
-const NAMESPACE: &str = "mx-prompt-power";
+const NAMESPACE: &str = "power-menu";
 
 const ALL_SIDES: Anchor = Anchor::from_bits_truncate(
     Anchor::TOP.bits() | Anchor::BOTTOM.bits() | Anchor::LEFT.bits() | Anchor::RIGHT.bits(),
 );
 
-/// Installs the power menu's window, hidden, and logind's power-off and
-/// reboot. Expects the host to have installed `DBusModule::new().system()`,
-/// `RingModule` and `WindowModule`, and to have inserted the [`Atlas`] and
-/// `FontBook`.
+/// Installs the power menu's window, hidden, and logind's power-off,
+/// reboot and log out. Expects the host to have installed
+/// `DBusModule::new().system()`, `RingModule` and `WindowModule`, and to
+/// have inserted the [`Atlas`] and `FontBook`.
 pub struct PowerMenuModule;
 
 /// The power menu's own window and the menu in it.
@@ -78,6 +80,7 @@ impl Module for PowerMenuModule {
             exclusive_zone: -1,
             namespace: NAMESPACE.into(),
             keyboard_interactivity: KeyboardInteractivity::None,
+            shell_role: Some(ShellRole::Prompt),
         });
         let window = app
             .spawn_with(
@@ -115,59 +118,27 @@ fn set_mapped(app: &mut App, mapped: bool) {
     surfaces.set_mapped(window, mapped, &mut wl);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Action {
-    PowerOff,
-    Restart,
-}
+// ── layout, in percent of the menu ───────────────────────────────────────
 
-impl Action {
-    fn other(self) -> Self {
-        match self {
-            Action::PowerOff => Action::Restart,
-            Action::Restart => Action::PowerOff,
-        }
-    }
-}
+const HEADER_HEIGHT: f32 = 12.0;
+const CANCEL_HEIGHT: f32 = 12.0;
+/// How far along the slide confirms.
+const COMPLETE: f32 = 0.95;
 
-/// Power off, or restart, behind one more tap; the top-left button
-/// switches to the other. Fills its parent, hidden until
+/// Power off, restart or log out, each run by sliding its row to the
+/// right; letting go first cancels. Fills its parent, hidden until
 /// [`OpenPowerMenu`].
 pub struct PowerMenu {
-    /// Offers the action not chosen.
-    switch: Handle<Button>,
-    confirm: Handle<Button>,
-    label: Handle<Text>,
-    power_icon: SpriteId,
-    restart_icon: SpriteId,
-    action: Action,
+    /// "Slide to confirm", or "Release to cancel" while sliding.
+    hint: Handle<Text>,
+    rows: Vec<Row>,
+    slide: Option<Slide>,
 }
 
 pub struct PowerMenuBuilder;
 
 impl Build for PowerMenuBuilder {
     type Widget = PowerMenu;
-}
-
-fn choose(ctx: &mut Context<'_, PowerMenu>, action: Action) {
-    let (label, confirm, switch) = (ctx.me().label, ctx.me().confirm, ctx.me().switch);
-    let (name, icon) = match action {
-        Action::PowerOff => ("Power off", ctx.me().power_icon),
-        Action::Restart => ("Restart", ctx.me().restart_icon),
-    };
-    ctx.me().action = action;
-    ctx.at(label).unwrap().set_text(name);
-    ctx.at(confirm).unwrap().set_icon(icon);
-    ctx.at(switch)
-        .unwrap()
-        .set_label(switch_label(action.other()));
-}
-
-fn switch_label(action: Action) -> &'static str {
-    match action {
-        Action::PowerOff => "POWER OFF",
-        Action::Restart => "RESTART",
-    }
 }
 
 /// The menu shows.
@@ -177,6 +148,9 @@ fn is_open(ctx: &Context<'_, PowerMenu>) -> bool {
 
 fn set_open(ctx: &mut Context<'_, PowerMenu>, open: bool) {
     let was = is_open(ctx);
+    if ctx.me().slide.take().is_some() {
+        render(ctx);
+    }
     ctx.set_display(if open { Display::Flex } else { Display::Hidden });
     if was && !open {
         let me = ctx.handle();
@@ -184,14 +158,148 @@ fn set_open(ctx: &mut Context<'_, PowerMenu>, open: bool) {
     }
 }
 
-fn text_button(label: &str) -> ButtonBuilder {
-    button()
-        .variant(ButtonVariant::Text)
-        .text_color(ColorRole::OnSurface)
-        .label(label)
-        .hover_background(Color::TRANSPARENT)
-        .pressed_background(Color::TRANSPARENT)
-        .height(px(40.0))
+fn start_slide(ctx: &mut Context<'_, PowerMenu>, row: usize, e: &Press) {
+    if !is_open(ctx) || ctx.me().slide.is_some() {
+        return;
+    }
+    // The row keeps the contact even if the finger strays off it.
+    ctx.claim_contact(e.contact);
+    ctx.me().slide = Some(Slide {
+        row,
+        contact: e.contact,
+        start_x: e.position.x,
+        progress: 0.0,
+    });
+    render(ctx);
+}
+
+fn move_slide(ctx: &mut Context<'_, PowerMenu>, e: &PressMoved) {
+    let Some(slide) = ctx.me().slide.filter(|s| s.contact == e.contact) else {
+        return;
+    };
+    let node = ctx.me().rows[slide.row].node;
+    let Some(rect) = ctx
+        .at(node)
+        .and_then(|c| c.component::<ComputedLayout>().map(|l| l.rect))
+    else {
+        return;
+    };
+    let progress = slide_progress(slide.start_x, e.position.x, rect.x(), rect.width());
+    if progress >= COMPLETE {
+        let action = ctx.me().rows[slide.row].action;
+        set_open(ctx, false);
+        match action {
+            Action::PowerOff => ctx.signal(PowerOff),
+            Action::Restart => ctx.signal(Restart),
+            Action::LogOut => ctx.signal(LogOut),
+        }
+        return;
+    }
+    if progress != slide.progress {
+        ctx.me().slide = Some(Slide { progress, ..slide });
+        render(ctx);
+    }
+}
+
+/// Letting go before the end cancels.
+fn end_slide(ctx: &mut Context<'_, PowerMenu>, contact: ContactId) {
+    if ctx.me().slide.is_some_and(|s| s.contact == contact) {
+        ctx.me().slide = None;
+        render(ctx);
+    }
+}
+
+/// Writes `node`'s style through `f`, unless that leaves it unchanged, so
+/// moves that change nothing on screen skip the relayout.
+fn restyle(
+    ctx: &mut Context<'_, PowerMenu>,
+    node: Handle<Div>,
+    f: impl FnOnce(LayoutStyle) -> LayoutStyle,
+) {
+    if let Some(mut c) = ctx.at(node)
+        && let Some(mut style) = c.component_mut::<LayoutStyle>()
+    {
+        let new = f(style.clone());
+        if *style != new {
+            *style = new;
+        }
+    }
+}
+
+fn display(shown: bool) -> Display {
+    if shown {
+        Display::Flex
+    } else {
+        Display::Hidden
+    }
+}
+
+/// Brings the header hint and every row in line with the slide.
+fn render(ctx: &mut Context<'_, PowerMenu>) {
+    let slide = ctx.me().slide;
+
+    let hint = ctx.me().hint;
+    if let Some(mut h) = ctx.at(hint) {
+        if slide.is_some() {
+            h.set_text("Release to cancel");
+            h.set_color(ColorRole::Primary);
+        } else {
+            h.set_text("Slide to confirm");
+            h.set_color(ColorRole::OnSurfaceVariant);
+        }
+    }
+
+    let (on_surface, dim, arrow_color, fill_color) = (
+        ctx.color(ColorRole::OnSurface),
+        ctx.color(ColorRole::Outline),
+        ctx.color(ColorRole::OnSecondaryFixed),
+        ctx.color(ColorRole::SurfaceContainerLow),
+    );
+
+    for i in 0..ctx.me().rows.len() {
+        let (action, fill, icon, label, arrow, slider) = {
+            let r = &ctx.me().rows[i];
+            (r.action, r.fill, r.icon, r.label, r.arrow, r.slider)
+        };
+        // `Some(progress)` on the row being slid.
+        let progress = slide.filter(|s| s.row == i).map(|s| s.progress);
+        let dimmed = slide.is_some() && progress.is_none();
+
+        let fg = if dimmed { dim } else { on_surface };
+        if let Some(mut c) = ctx.at(icon) {
+            c.set_color(fg);
+        }
+        if let Some(mut c) = ctx.at(label) {
+            c.set_color(fg);
+            c.set_text(if progress.is_some() {
+                action.busy_label()
+            } else {
+                action.label()
+            });
+        }
+        if let Some(mut c) = ctx.at(arrow) {
+            c.set_color(if dimmed { dim } else { arrow_color });
+            c.set_display(display(progress.is_none()));
+        }
+
+        let p = progress.unwrap_or(0.0);
+        // The shade ends under the slider's thumb. The slider spans the
+        // row from its left edge, so the thumb's centre along the slider
+        // is the shade's width.
+        let mut thumb = 0.0;
+        if let Some(mut c) = ctx.at(slider) {
+            c.set_value(p);
+            c.set_held(progress.is_some());
+            c.set_display(display(progress.is_some()));
+            thumb = c.me().thumb_center().round();
+        }
+        restyle(ctx, fill, |s| {
+            s.display(display(progress.is_some())).width(px(thumb))
+        });
+        if let Some(mut c) = ctx.at(fill) {
+            c.set_background(fill_color);
+        }
+    }
 }
 
 impl Widget for PowerMenu {
@@ -203,238 +311,76 @@ impl Widget for PowerMenu {
             .absolute()
             .inset(Insets::all(px(0.0)))
             .size(percent(100.0), percent(100.0))
-            .column()
-            .padding(Insets::all(px(24.0)));
+            .column();
         *s.component_mut::<Paint>(me).unwrap() =
             Paint::Quad(Quad::new(s.color(ColorRole::SurfaceDim)));
 
-        let top = s.spawn(
+        let header = s.spawn(
             me,
-            div().style(
-                LayoutStyle::default()
-                    .row()
-                    .justify(Justify::SpaceBetween)
-                    .align_items(Align::Center)
-                    .width(percent(100.0)),
-            ),
+            div().style(padded_row(HEADER_HEIGHT).justify(Justify::SpaceBetween)),
         );
-        let switch = s.spawn(top, text_button(switch_label(Action::Restart)));
-        let close = s.spawn(top, text_button("CLOSE"));
+        s.spawn(
+            header,
+            text("POWER")
+                .variant(TextVariant::LabelLarge)
+                .color(ColorRole::OnSurfaceVariant),
+        );
+        let hint = s.spawn(
+            header,
+            text("Slide to confirm")
+                .variant(TextVariant::BodyMedium)
+                .color(ColorRole::OnSurfaceVariant),
+        );
 
-        let center = s.spawn(
-            me,
-            div().style(
-                LayoutStyle::default()
-                    .grow(1.0)
-                    .width(percent(100.0))
-                    .column()
-                    .center()
-                    .gap(px(20.0)),
-            ),
-        );
-        let icon_size = ButtonSize::XLarge.icon_size() as u32;
-        let (power_icon, restart_icon) = {
+        let (arrow_sprite, cancel_sprite) = {
             let mut atlas = s.resource_mut::<Atlas>();
-            let mut icon = |svg| {
+            let mut load = |svg| {
                 atlas
-                    .insert_svg(svg, icon_size)
+                    .insert_svg(svg, ICON_SIZE)
                     .expect("embedded icon SVG should render and fit in the atlas")
             };
-            (icon(assets::icons::POWER), icon(assets::icons::ROTATE))
+            (load(assets::icons::RIGHT_ARROW), load(assets::icons::CLEAR))
         };
-        let confirm = s.spawn(
-            center,
-            button()
-                .variant(ButtonVariant::Outlined)
-                .size(ButtonSize::XLarge)
-                .icon(power_icon)
-                .radius(Corners::all(64.))
-                .width(px(128.0))
-                .height(px(128.0))
-                .padding(Insets::all(px(0.))),
+
+        let divider_color = s.color(ColorRole::SurfaceContainer);
+        let mut rows = Vec::new();
+        for action in Action::ALL {
+            rows.push(spawn_row(s, me, action, arrow_sprite));
+            s.spawn(me, divider().background(divider_color));
+        }
+
+        let cancel = s.spawn(
+            me,
+            div().style(padded_row(CANCEL_HEIGHT).gap(percent(ICON_GAP))),
         );
-        let label = s.spawn(
-            center,
-            text("Power off")
-                .variant(TextVariant::TitleLarge)
-                .color(ColorRole::OnSurface),
+        s.spawn(
+            cancel,
+            icon(cancel_sprite)
+                .size(Size::new(ICON_SIZE as f32, ICON_SIZE as f32))
+                .color(s.color(ColorRole::OnSurface))
+                .style(LayoutStyle::default().shrink(0.0)),
+        );
+        s.spawn(
+            cancel,
+            text("CANCEL")
+                .variant(TextVariant::LabelLarge)
+                .color(ColorRole::OnSurfaceVariant),
         );
 
-        s.on::<OpenPowerMenu>(me, |ctx, _| {
-            choose(ctx, Action::PowerOff);
-            set_open(ctx, true);
-        });
+        for (i, row) in rows.iter().enumerate() {
+            s.on::<Press>(row.node, move |ctx, e| start_slide(ctx, i, e));
+            s.on::<PressMoved>(row.node, move_slide);
+            s.on::<Release>(row.node, |ctx, e| end_slide(ctx, e.contact));
+            s.on::<PressCancelled>(row.node, |ctx, e| end_slide(ctx, e.contact));
+        }
+        s.on::<Clicked>(cancel, |ctx, _| set_open(ctx, false));
+        s.on::<OpenPowerMenu>(me, |ctx, _| set_open(ctx, true));
         s.on::<ClosePowerMenu>(me, |ctx, _| set_open(ctx, false));
-        s.on::<Clicked>(switch, |ctx, _| {
-            let other = ctx.me().action.other();
-            choose(ctx, other);
-        });
-        s.on::<Clicked>(close, |ctx, _| set_open(ctx, false));
-        s.on::<Clicked>(confirm, |ctx, _| {
-            if !is_open(ctx) {
-                return;
-            }
-            let action = ctx.me().action;
-            set_open(ctx, false);
-            match action {
-                Action::PowerOff => ctx.signal(PowerOff),
-                Action::Restart => ctx.signal(Restart),
-            }
-        });
 
         PowerMenu {
-            switch,
-            confirm,
-            label,
-            power_icon,
-            restart_icon,
-            action: Action::PowerOff,
+            hint,
+            rows,
+            slide: None,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use mecha_wayland::mechanix_widgets::prelude::FontBook;
-
-    #[derive(Default)]
-    struct Seen {
-        shutdowns: usize,
-        restarts: usize,
-        closed: usize,
-    }
-    impl Resource for Seen {}
-
-    fn app() -> App {
-        let mut app = App::new();
-        app.add_module(LayoutModule)
-            .add_module(WindowModule)
-            .add_module(PaintModule)
-            .add_module(MechanixTheme::dark());
-        let mut atlas = Atlas::new();
-        let font = atlas.add_font(assets::fonts::GEIST_MONO).unwrap();
-        app.insert_resource(atlas);
-        app.insert_resource(FontBook::new(font));
-        app.init_resource::<Seen>();
-        app.system(|app: &mut App, _: &PowerOff| app.resource_mut::<Seen>().shutdowns += 1)
-            .system(|app: &mut App, _: &Restart| app.resource_mut::<Seen>().restarts += 1)
-            .system(|app: &mut App, _: &Emitted<PowerMenuClosed>| {
-                app.resource_mut::<Seen>().closed += 1;
-            });
-        app
-    }
-
-    const CLICK: Clicked = Clicked {
-        contact: ContactId::Mouse,
-        position: Point::ZERO,
-    };
-
-    struct Parts {
-        menu: NodeId,
-        switch: NodeId,
-        close: NodeId,
-        confirm: NodeId,
-    }
-
-    fn parts(app: &App, menu: NodeId) -> Parts {
-        let top = app.children(menu).unwrap()[0];
-        let center = app.children(menu).unwrap()[1];
-        Parts {
-            menu,
-            switch: app.children(top).unwrap()[0],
-            close: app.children(top).unwrap()[1],
-            confirm: app.children(center).unwrap()[0],
-        }
-    }
-
-    fn shown(app: &App, node: NodeId) -> bool {
-        app.component::<LayoutStyle>(node).unwrap().display == Display::Flex
-    }
-
-    #[test]
-    fn asks_once_more_and_can_restart_or_close() {
-        let mut app = app();
-        let root = app.root();
-        let menu = app.spawn(root, PowerMenuBuilder).id();
-        let p = parts(&app, menu);
-
-        // Hidden, it does nothing.
-        app.emit(CLICK, p.confirm);
-        app.flush();
-        assert_eq!(app.resource::<Seen>().shutdowns, 0);
-        assert!(!shown(&app, p.menu));
-
-        app.emit(OpenPowerMenu, menu);
-        app.flush();
-        assert!(shown(&app, p.menu));
-        app.emit(CLICK, p.confirm);
-        app.flush();
-        assert_eq!(app.resource::<Seen>().shutdowns, 1);
-        assert_eq!(app.resource::<Seen>().closed, 1);
-        assert!(!shown(&app, p.menu));
-
-        app.emit(OpenPowerMenu, menu);
-        app.emit(CLICK, p.switch);
-        app.emit(CLICK, p.confirm);
-        app.flush();
-        assert_eq!(app.resource::<Seen>().restarts, 1);
-
-        // The switch goes back to power off.
-        app.emit(OpenPowerMenu, menu);
-        app.emit(CLICK, p.switch);
-        app.flush();
-        assert_eq!(switch_text(&app, p.switch), "POWER OFF");
-        app.emit(CLICK, p.switch);
-        app.flush();
-        assert_eq!(switch_text(&app, p.switch), "RESTART");
-        app.emit(CLICK, p.confirm);
-        app.flush();
-        assert_eq!(app.resource::<Seen>().shutdowns, 2);
-
-        // Opening again starts over at power off.
-        app.emit(OpenPowerMenu, menu);
-        app.emit(CLICK, p.switch);
-        app.emit(OpenPowerMenu, menu);
-        app.flush();
-        assert_eq!(switch_text(&app, p.switch), "RESTART");
-        app.emit(CLICK, p.close);
-        app.flush();
-        assert_eq!(app.resource::<Seen>().closed, 4);
-        assert_eq!(app.resource::<Seen>().shutdowns, 2);
-        assert_eq!(app.resource::<Seen>().restarts, 1);
-    }
-
-    fn switch_text(app: &App, switch: NodeId) -> String {
-        let label = app.widget::<Button>(switch).unwrap().label().unwrap();
-        let native = app.widget::<Text>(label).unwrap().native();
-        app.widget::<mecha_wayland::prelude::Text>(native)
-            .unwrap()
-            .string
-            .clone()
-    }
-
-    #[test]
-    fn the_module_shows_and_hides_its_window() {
-        let mut app = app();
-        // PresentationModule registers Role; it needs a live compositor.
-        app.register_component::<Role>();
-        app.add_module(RingModule::default())
-            .add_module(DBusModule::new().system())
-            .add_module(PowerMenuModule);
-        app.flush();
-        let menu = app.resource::<Overlay>().menu.id();
-        let window = app.resource::<Overlay>().window;
-        assert_eq!(app.parent(menu), Some(window));
-        assert!(!shown(&app, menu));
-
-        app.signal(ShowPowerMenu);
-        app.flush();
-        assert!(shown(&app, menu));
-
-        hide_power_menu(&mut app);
-        app.flush();
-        assert!(!shown(&app, menu));
-        assert_eq!(app.resource::<Seen>().closed, 1);
     }
 }

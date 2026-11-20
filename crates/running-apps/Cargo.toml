@@ -8,3 +8,4 @@ mecha-wayland.workspace = true
 screen.workspace = true
 apps.workspace = true
 assets.workspace = true
+libc = "0.2"

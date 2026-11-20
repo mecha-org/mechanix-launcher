@@ -68,6 +68,11 @@ fn shown(f: &mut Fake) {
 #[test]
 fn registry_follows_the_window_list() {
     let dir = data_dir("windows");
+    std::fs::write(
+        dir.join("applications/org.notes.desktop"),
+        "[Desktop Entry]\nType=Application\nName=Notes\nExec=notes\n",
+    )
+    .unwrap();
     let mut f = fake(&dir);
     assert!(f.app.resource::<Registry>().apps().is_empty());
 
@@ -77,7 +82,7 @@ fn registry_follows_the_window_list() {
     {
         let r = f.app.resource::<Registry>();
         assert_eq!(r.apps().len(), 1);
-        assert_eq!(r.apps()[0].key, AppKey::AppId("org.notes".into()));
+        assert_eq!(r.apps()[0].key, AppKey::Entry("org.notes.desktop".into()));
         assert_eq!(r.apps()[0].windows.len(), 2);
     }
     assert_eq!(changes(&f), 1, "one signal for the batch");

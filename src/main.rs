@@ -83,16 +83,23 @@ const ALL_SIDES: Anchor = Anchor::from_bits_truncate(
     Anchor::TOP.bits() | Anchor::BOTTOM.bits() | Anchor::LEFT.bits() | Anchor::RIGHT.bits(),
 );
 
-/// A layer role. The namespace prefix tells the compositor the surface's role,
-/// which decides its stacking: `mx-edge-` gesture zones and `mx-bar-` bars
-/// above `mx-view-` views, all above a fullscreen app.
-fn role(layer: Layer, anchor: Anchor, exclusive_zone: i32, namespace: &str) -> Role {
+/// A layer role. `shell_role` tells the compositor the surface's role,
+/// which decides its stacking and edge-gesture routing: `Edge` gesture zones
+/// and `Bar` bars above `View` views, all above a fullscreen app.
+fn role(
+    layer: Layer,
+    anchor: Anchor,
+    exclusive_zone: i32,
+    shell_role: ShellRole,
+    namespace: &str,
+) -> Role {
     Role::Layer(LayerRole {
         layer,
         anchor,
         exclusive_zone,
         namespace: namespace.into(),
         keyboard_interactivity: KeyboardInteractivity::None,
+        shell_role: Some(shell_role),
     })
 }
 
@@ -169,7 +176,7 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
         .window(
             nav_window(
                 HOME,
-                role(Layer::Top, ALL_SIDES, 0, "mx-view-home"),
+                role(Layer::Top, ALL_SIDES, 0, ShellRole::View, "home"),
                 LayoutStyle::default(),
             )
             .container(home),
@@ -177,18 +184,27 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
         .window(
             nav_window(
                 RUNNING_APPS,
-                role(Layer::Top, ALL_SIDES, 0, "mx-view-running-apps"),
+                role(Layer::Top, ALL_SIDES, 0, ShellRole::View, "running-apps"),
                 LayoutStyle::default(),
             )
             .container(running),
         )
+        // FIXME: the compositor never draws the edge strips; give them a
+        // single-pixel buffer scaled by wp_viewporter instead of rendering
+        // them.
         .window(
             nav_window(
                 BOTTOM_EDGE,
                 // Above the keyboard, in the gap it leaves under its keys;
                 // zone -1 keeps it on the edge rather than above the
                 // keyboard's zone.
-                role(Layer::Overlay, Anchor::BOTTOM | sides, -1, "mx-edge-bottom"),
+                role(
+                    Layer::Overlay,
+                    Anchor::BOTTOM | sides,
+                    -1,
+                    ShellRole::Edge,
+                    "bottom-edge",
+                ),
                 strip,
             )
             .transparent(),
@@ -196,7 +212,7 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
         .window(
             nav_window(
                 PANEL,
-                role(Layer::Top, ALL_SIDES, 0, "mx-view-panel"),
+                role(Layer::Top, ALL_SIDES, 0, ShellRole::View, "panel"),
                 LayoutStyle::default(),
             )
             .container(panel(CONTROL_CENTER, ControlCenterScreen, Span::Whole)),
@@ -204,7 +220,13 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
         .window(
             nav_window(
                 TOP_EDGE,
-                role(Layer::Overlay, Anchor::TOP | sides, -1, "mx-edge-top"),
+                role(
+                    Layer::Overlay,
+                    Anchor::TOP | sides,
+                    -1,
+                    ShellRole::Edge,
+                    "top-edge",
+                ),
                 bar.clone(),
             )
             .transparent(),
@@ -216,7 +238,8 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
                     Layer::Overlay,
                     Anchor::TOP | sides,
                     DEFAULT_BAR_HEIGHT as i32,
-                    "mx-bar-status",
+                    ShellRole::Bar,
+                    "status-bar",
                 ),
                 bar,
             )
@@ -307,9 +330,11 @@ fn main() {
         // Last, so its lock windows stack above everything else's.
         .add_module(LockscreenModule {
             settings: LockSettings {
-                // Until the configuration has it: `MECHANIX_SUSPEND=1` for a
-                // device that resumes.
-                suspend: std::env::var("MECHANIX_SUSPEND").is_ok_and(|v| v == "1"),
+                // Until the configuration has it: `MECHANIX_SUSPEND=1` or `=0`
+                // overrides the default.
+                suspend: std::env::var("MECHANIX_SUSPEND")
+                    .map(|v| v == "1")
+                    .unwrap_or(LockSettings::default().suspend),
                 ..LockSettings::default()
             },
         })

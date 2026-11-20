@@ -19,8 +19,16 @@ pub mod icons {
     pub const EYE: &[u8] = include_bytes!("../icons/eye.svg");
     pub const EYE_SLASH: &[u8] = include_bytes!("../icons/eye-slash.svg");
     pub const POWER: &[u8] = include_bytes!("../icons/power.svg");
+    /// Force close: end an app's processes.
+    pub const SKULL: &[u8] = include_bytes!("../icons/skull.svg");
     /// Turning arrows: rotation, and restart.
     pub const ROTATE: &[u8] = include_bytes!("../icons/rotate.svg");
+    /// A circling arrow: restart.
+    pub const REBOOT: &[u8] = include_bytes!("../icons/reboot.svg");
+    /// Slide this way: the power menu's rows.
+    pub const RIGHT_ARROW: &[u8] = include_bytes!("../icons/rightarrow.svg");
+    /// A door bracket with an arrow leaving it: log out.
+    pub const SIGN_OUT: &[u8] = include_bytes!("../icons/sign-out.svg");
     /// The Comet wheel, traced from the boot splash.
     pub const COMET_LOGO: &[u8] = include_bytes!("../icons/comet-logo.svg");
 

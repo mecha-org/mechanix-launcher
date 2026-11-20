@@ -26,30 +26,9 @@ struct Harness {
 
 impl Harness {
     fn new() -> Self {
-        let (client, mut peer) = UnixStream::pair().unwrap();
-        peer.write_all(b"OK 0123456789abcdef0123456789abcdef\r\nERROR no fd passing\r\n")
-            .unwrap();
-        let hello = Message::method_return(1)
-            .with_sender("org.freedesktop.DBus")
-            .with_destination(":1.1")
-            .with_body(&(":1.1",));
-        let (bytes, fds) = hello.encode(1);
-        assert!(fds.is_empty());
-        peer.write_all(&bytes).unwrap();
-
-        let mut app = App::new();
-        app.add_module(RingModule::default())
-            .add_module(DBusModule::new().over(BusId::System, client))
-            .init_resource::<Updates>()
-            .system(record_update);
-
-        // Consume authentication text, leaving the binary Hello for requests().
-        let mut auth = Vec::new();
-        while !auth.ends_with(b"BEGIN\r\n") {
-            let mut byte = [0];
-            peer.read_exact(&mut byte).unwrap();
-            auth.push(byte[0]);
-        }
+        // The binary Hello is left for requests().
+        let (mut app, peer) = crate::test_bus::system_bus();
+        app.init_resource::<Updates>().system(record_update);
         peer.set_nonblocking(true).unwrap();
         app.add_module(UpowerModule);
         Self { app, peer }

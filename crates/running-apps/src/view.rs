@@ -3,14 +3,17 @@
 
 use std::rc::Rc;
 
-use apps::{AppKey, IconCache, IconDirs, Registry, RegistryChanged, RowIcon};
+use apps::{AppKey, IconCache, IconDirs, Registry, RegistryChanged, RowIcon, RunningApp};
 use mecha_wayland::mechanix_widgets::{self as mw, TextWrap};
 use mecha_wayland::prelude::*;
 use screen::{Hidden, Shown};
 
-use crate::WindowAction;
-use crate::card::{self, Activate, Card, CardBuilder, CloseWindows, HEADER, SIDE, hole_style};
+use crate::card::{
+    self, Activate, Card, CardBuilder, CloseWindows, ForceClose, HEADER, SIDE, WindowsChanged,
+    hole_style,
+};
 use crate::thumbs::{Place, ThumbKey, ThumbSink};
+use crate::{Killer, WindowAction};
 
 /// Glyph size of the ✕.
 const CROSS: u32 = 20;
@@ -39,6 +42,7 @@ pub(crate) struct View {
     icon_dirs: Rc<IconDirs>,
     thumbs: Rc<dyn ThumbSink>,
     cross: SpriteId,
+    skull: SpriteId,
     list: Handle<Scrollable>,
     empty: NodeId,
     slots: Vec<Slot>,
@@ -58,6 +62,10 @@ impl View {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn empty(&self) -> NodeId {
         self.empty
+    }
+
+    pub(crate) fn shown(&self) -> bool {
+        self.shown
     }
 }
 
@@ -97,14 +105,22 @@ impl Widget for View {
                     .hidden(),
             ),
         );
-        let cross = s
-            .resource_mut::<Atlas>()
-            .insert_svg(assets::icons::CLEAR, CROSS)
-            .expect("embedded clear glyph is a valid SVG");
+        let (cross, skull) = {
+            let mut atlas = s.resource_mut::<Atlas>();
+            (
+                atlas
+                    .insert_svg(assets::icons::CLEAR, CROSS)
+                    .expect("embedded clear glyph is a valid SVG"),
+                atlas
+                    .insert_svg(assets::icons::SKULL, CROSS)
+                    .expect("embedded skull glyph is a valid SVG"),
+            )
+        };
         View {
             icon_dirs: b.icon_dirs,
             thumbs: b.thumbs,
             cross,
+            skull,
             list,
             empty: empty.id(),
             slots: Vec::new(),
@@ -115,17 +131,27 @@ impl Widget for View {
     }
 }
 
-/// What the screen does with a window, swappable for tests.
+/// What the screen does with a window or an app, swappable for tests.
 struct Hooks {
     activator: WindowAction,
     closer: WindowAction,
+    killer: Killer,
 }
 impl Resource for Hooks {}
 
 /// Registers the screen's systems; once, however many screens build.
-pub(crate) fn install(app: &mut App, activator: WindowAction, closer: WindowAction) {
+pub(crate) fn install(
+    app: &mut App,
+    activator: WindowAction,
+    closer: WindowAction,
+    killer: Killer,
+) {
     let first = !app.has_resource::<Hooks>();
-    app.insert_resource(Hooks { activator, closer });
+    app.insert_resource(Hooks {
+        activator,
+        closer,
+        killer,
+    });
     if !app.has_resource::<IconCache>() {
         let cache = IconCache::new(&mut app.resource_mut::<Atlas>());
         app.insert_resource(cache);
@@ -144,6 +170,10 @@ pub(crate) fn install(app: &mut App, activator: WindowAction, closer: WindowActi
                 for &id in &e.0 {
                     f(app, id);
                 }
+            })
+            .system(|app: &mut App, e: &ForceClose| {
+                let f = app.resource::<Hooks>().killer.clone();
+                f(app, &e.0);
             });
     }
 }
@@ -205,6 +235,9 @@ struct Want {
     icon: RowIcon,
     front: ToplevelId,
     windows: Vec<ToplevelId>,
+    dialogs: Vec<ToplevelId>,
+    modal: bool,
+    pids: Vec<u32>,
 }
 
 fn wanted(app: &mut App, view: NodeId) -> Vec<Want> {
@@ -212,40 +245,34 @@ fn wanted(app: &mut App, view: NodeId) -> Vec<Want> {
         return Vec::new();
     }
     let dirs = app.widget::<View>(view).unwrap().icon_dirs.clone();
-    let found: Vec<(
-        AppKey,
-        String,
-        Option<apps::IconFile>,
-        ToplevelId,
-        Vec<ToplevelId>,
-    )> = {
+    // Each app with the name and icon file its card shows.
+    let found: Vec<(RunningApp, String, Option<apps::IconFile>)> = {
         let registry = app.resource::<Registry>();
         registry
             .apps()
             .iter()
             .map(|a| {
                 let entry = a.entry.and_then(|i| registry.entries().get(i));
-                let name = match (entry, &a.key) {
-                    (Some(e), _) => e.name.clone(),
-                    (None, AppKey::AppId(id)) => id.clone(),
-                    (None, AppKey::Window(_)) => a.title.clone(),
-                };
+                let name = entry.map_or_else(|| a.title.clone(), |e| e.name.clone());
                 let file = entry
                     .and_then(|e| e.icon.as_deref())
                     .and_then(|i| dirs.find(i));
-                (a.key.clone(), name, file, a.front, a.windows.clone())
+                (a.clone(), name, file)
             })
             .collect()
     };
     let (mut atlas, mut cache) = app.query::<(ResMut<Atlas>, ResMut<IconCache>)>();
     found
         .into_iter()
-        .map(|(key, name, file, front, windows)| Want {
-            key,
+        .map(|(a, name, file)| Want {
+            key: a.key,
             name,
             icon: cache.get(&mut atlas, file.as_ref()),
-            front,
-            windows,
+            front: a.front,
+            windows: a.windows,
+            dialogs: a.dialogs,
+            modal: a.modal,
+            pids: a.pids,
         })
         .collect()
 }
@@ -280,23 +307,28 @@ fn sync(app: &mut App, view: NodeId) {
             let card = app.widget_mut::<Card>(slot.card).unwrap();
             card.front = w.front;
             card.windows = w.windows.clone();
+            card.dialogs = w.dialogs.clone();
+            card.modal = w.modal;
+            card::set_pids(app, slot.card, w.pids.clone());
         }
     } else {
-        let closing: Vec<AppKey> = kept
+        let closing: Vec<(AppKey, card::Closing)> = kept
             .iter()
             .filter_map(|s| app.widget::<Card>(s.card))
-            .filter(|c| c.closing())
-            .map(|c| c.key().clone())
+            .filter_map(|c| Some((c.key().clone(), c.closing_state()?)))
             .collect();
         for slot in std::mem::take(&mut kept) {
             drop_slot(app, &*sink, slot);
         }
-        let (list, cross, width, hole_height) = {
+        let (list, cross, skull, width, hole_height) = {
             let v = app.widget::<View>(view).unwrap();
-            (v.list, v.cross, v.card_width, v.hole_height)
+            (v.list, v.cross, v.skull, v.card_width, v.hole_height)
         };
         for w in want {
-            let closing = closing.contains(&w.key);
+            let closing = closing
+                .iter()
+                .find(|(k, _)| *k == w.key)
+                .map(|(_, c)| c.clone());
             let card = app
                 .spawn(
                     list,
@@ -305,8 +337,13 @@ fn sync(app: &mut App, view: NodeId) {
                         name: w.name,
                         icon: w.icon,
                         cross,
+                        skull,
                         front: w.front,
                         windows: w.windows,
+                        dialogs: w.dialogs,
+                        modal: w.modal,
+                        pids: w.pids,
+                        view,
                         width,
                         hole_height,
                         closing,
@@ -321,6 +358,9 @@ fn sync(app: &mut App, view: NodeId) {
         }
     }
 
+    for slot in &kept {
+        app.emit(WindowsChanged, slot.card);
+    }
     let (list, empty, none) = {
         let v = app.widget_mut::<View>(view).unwrap();
         v.slots = kept;
@@ -390,7 +430,7 @@ fn sync_thumbs(app: &mut App, view: NodeId) {
 /// The preview box keeps the window's aspect: apps on the phone fill the
 /// output, and this screen's window does too. A card takes most of the
 /// width, narrower when header and box would not fit the height. With no
-/// previews to show (a compositor without `phosh_private`) there is no
+/// previews to show (a compositor without thumbnail views) there is no
 /// box: the cards are headers only.
 fn fit_holes(app: &mut App, _: &LayoutDone) {
     for view in views(app) {

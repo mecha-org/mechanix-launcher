@@ -1,6 +1,7 @@
-use mecha_wayland::mechanix_widgets::prelude::{ButtonVariant, ClockInterval, button, clock};
+use mecha_wayland::mechanix_widgets::prelude::{
+    ButtonSize, ButtonVariant, ClockInterval, button, clock,
+};
 use mecha_wayland::prelude::*;
-
 use power_menu::ShowPowerMenu;
 
 use crate::util::{full_width, load_icon_sized};
@@ -65,6 +66,7 @@ impl Widget for Header {
         let power = s.spawn(
             me,
             button()
+                .size(ButtonSize::Small)
                 .variant(ButtonVariant::Text)
                 .icon(sprite)
                 .label("POWER")

@@ -23,3 +23,7 @@ target
 docs/
 
 *.png
+
+# mechanix-packager output
+/dist/
+/stage/

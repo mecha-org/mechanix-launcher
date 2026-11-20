@@ -13,6 +13,11 @@ pub struct DesktopApp {
     pub icon: Option<String>,
     /// `StartupWMClass`: the app id its windows are expected to carry.
     pub startup_wm_class: Option<String>,
+    /// The `.desktop` file it was read from.
+    pub path: PathBuf,
+    /// `DBusActivatable`: started through D-Bus activation, its `Exec` the
+    /// fallback.
+    pub dbus_activatable: bool,
 }
 
 /// The fields of one displayable `[Desktop Entry]`.
@@ -22,6 +27,7 @@ pub struct Parsed {
     pub exec: Vec<String>,
     pub icon: Option<String>,
     pub startup_wm_class: Option<String>,
+    pub dbus_activatable: bool,
 }
 
 const FIELD_CODES: &str = "fFuUicdDnNvmk";
@@ -31,6 +37,7 @@ pub fn parse(contents: &str) -> Option<Parsed> {
     let mut in_entry = false;
     let (mut kind, mut name, mut exec, mut icon, mut wm_class) = (None, None, None, None, None);
     let (mut no_display, mut hidden, mut terminal) = (false, false, false);
+    let mut dbus_activatable = false;
     for line in contents.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -56,6 +63,7 @@ pub fn parse(contents: &str) -> Option<Parsed> {
             "NoDisplay" => no_display = value == "true",
             "Hidden" => hidden = value == "true",
             "Terminal" => terminal = value == "true",
+            "DBusActivatable" => dbus_activatable = value == "true",
             _ => {}
         }
     }
@@ -69,6 +77,7 @@ pub fn parse(contents: &str) -> Option<Parsed> {
         exec,
         icon: icon.filter(|i| !i.is_empty()),
         startup_wm_class: wm_class.filter(|c| !c.is_empty()),
+        dbus_activatable,
     })
 }
 
@@ -214,6 +223,8 @@ pub fn scan(data_dirs: &[PathBuf]) -> Vec<DesktopApp> {
                     exec: p.exec,
                     icon: p.icon,
                     startup_wm_class: p.startup_wm_class,
+                    path: file.clone(),
+                    dbus_activatable: p.dbus_activatable,
                 });
             }
         }
@@ -286,6 +297,13 @@ mod tests {
         assert_eq!(p.name, "Foo");
         assert_eq!(p.exec, vec!["foo"]);
         assert_eq!(p.icon.as_deref(), Some("foo"));
+    }
+
+    #[test]
+    fn dbus_activatable_is_parsed() {
+        assert!(!parse(GOOD).unwrap().dbus_activatable);
+        let p = parse(&format!("{GOOD}DBusActivatable=true\n")).unwrap();
+        assert!(p.dbus_activatable);
     }
 
     #[test]
