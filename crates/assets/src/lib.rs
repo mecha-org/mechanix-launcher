@@ -9,6 +9,8 @@ pub mod fonts {
 pub mod icons {
     pub const AIRPLANE: &[u8] = include_bytes!("../icons/airplane.svg");
     pub const APP: &[u8] = include_bytes!("../icons/app.svg");
+    /// Notifications; the empty notifications state.
+    pub const BELL: &[u8] = include_bytes!("../icons/bell.svg");
     /// Go on: send what was typed.
     pub const ARROW_RIGHT: &[u8] = include_bytes!("../icons/arrow-right.svg");
     pub const SEARCH: &[u8] = include_bytes!("../icons/magnifying-glass.svg");

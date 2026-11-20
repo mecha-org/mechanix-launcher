@@ -40,6 +40,8 @@ pub mod color {
     /// Heads-up "Decline" / "Accept".
     pub const DECLINE: ColorRole = ColorRole::Error;
     pub const ACCEPT: ColorRole = ColorRole::Success;
+    /// Empty-state bell. Figma white.
+    pub const EMPTY_ICON: ColorRole = ColorRole::OnSurface;
     /// Card shadow. Figma `rgba(0,0,0,0.25)`, offset 2,0, blur 1.5.
     pub const SHADOW: ColorRole = ColorRole::Shadow;
 }
@@ -77,9 +79,9 @@ pub mod text {
         TextStyle::new(TextVariant::LabelMedium, ColorRole::OnSecondaryContainer);
     /// Badge digit. Figma SemiBold 14–16.
     pub const BADGE: TextStyle = TextStyle::new(TextVariant::LabelMedium, ColorRole::OnError);
-    /// "No notifications". Figma centered caption.
+    /// "No new notifications.". Figma same as the date header, 16/20 `#8D8D91`.
     pub const EMPTY: TextStyle =
-        TextStyle::new(TextVariant::BodyMedium, ColorRole::OnSurfaceVariant);
+        TextStyle::new(TextVariant::TitleSmall, ColorRole::OnSecondaryFixed);
 }
 
 pub mod space {
@@ -110,6 +112,8 @@ pub mod space {
     pub const SWIPE_GAP: Spacing = Spacing::Space175;
     /// Chip horizontal padding. Figma 21–24.
     pub const CHIP_X: Spacing = Spacing::Space250;
+    /// Empty-state bell to its caption. Figma ~8.
+    pub const EMPTY_ICON_TO_TEXT: Spacing = Spacing::Space100;
     /// Menu list top/bottom padding, and each item's top/bottom inset. Figma 2.
     pub const MENU_Y: Spacing = Spacing::Space25;
     /// Each menu item's left/right inset. Figma 4.

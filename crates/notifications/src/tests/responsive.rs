@@ -5,6 +5,7 @@ use services::KeepAwake;
 
 use crate::Notifications;
 use crate::notification_store::NotificationStore;
+use crate::notifications::on_store_changed;
 use crate::notify::{Notification, Notify, append_notifications};
 use crate::notify_signal::notify_signal;
 
@@ -25,7 +26,8 @@ fn app() -> App {
     app.insert_resource(FontBook::new(font));
     app.init_resource::<KeepAwake>()
         .init_resource::<NotificationStore>()
-        .system(notify_signal);
+        .system(notify_signal)
+        .system(on_store_changed);
     crate::ongoing::install(&mut app);
     app
 }
