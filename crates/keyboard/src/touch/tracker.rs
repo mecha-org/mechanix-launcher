@@ -631,7 +631,11 @@ mod tests {
         assert_eq!(t.track(A, Point::new(110.0, 20.0), 200), vec![]);
         assert_eq!(
             t.track(A, Point::new(140.0, 90.0), 400),
-            vec![TouchOut::Glide(Steps { x: 1, y: 0 })]
+            vec![TouchOut::Glide(Steps {
+                x: 1,
+                y: 0,
+                tick: true
+            })]
         );
         assert_eq!(t.release(A, 500), vec![TouchOut::Unpressed(3)]);
         assert!(!t.overlay_open());

@@ -330,8 +330,11 @@ fn apply(ctx: &mut Context<'_, Keyboard>, view: usize, out: Vec<TouchOut>, time:
                 }
             }
             TouchOut::Glide(steps) => {
-                // One haptic tick per move that steps, however many arrows.
-                feedbackd::key_pressed(ctx);
+                // Feedback once per movement (start, reversal, restart
+                // after a rest), not per move or per arrow.
+                if steps.tick {
+                    feedbackd::key_pressed(ctx);
+                }
                 for (d, n) in steps.runs() {
                     tap_direction(ctx, d, n);
                 }

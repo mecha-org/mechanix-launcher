@@ -32,6 +32,9 @@ const SMOOTHING: f32 = 0.5;
 const PAUSE_MS: u32 = 40;
 /// Most arrows one move sends per axis, against a stray jump.
 const MAX_PER_MOVE: i32 = 12;
+/// Arrows this long (ms) after the previous ones start a new movement, which
+/// gets its own feedback tick.
+const BURST_GAP_MS: u32 = 250;
 
 /// How a key glides: which axes move the caret, with the travel per arrow at
 /// slow speed on each, and the travel that starts the glide.
@@ -85,6 +88,7 @@ impl GlideSpec {
             last_time: time,
             speed: 0.0,
             acc: (0.0, 0.0),
+            heading: None,
         }
     }
 }
@@ -94,6 +98,10 @@ impl GlideSpec {
 pub(crate) struct Steps {
     pub x: i32,
     pub y: i32,
+    /// Whether these arrows begin a movement worth one feedback tick: the
+    /// glide's first, a change of direction, or a restart after a rest.
+    /// Every other step stays silent, however many arrows it sends.
+    pub tick: bool,
 }
 
 impl Steps {
@@ -128,6 +136,9 @@ pub(crate) struct Glide {
     speed: f32,
     /// Fractions of an arrow carried to the next move, per axis.
     acc: (f32, f32),
+    /// The signs of the latest arrows per axis, and when they were sent;
+    /// `None` before the first.
+    heading: Option<((i32, i32), u32)>,
 }
 
 impl Glide {
@@ -159,10 +170,18 @@ impl Glide {
             };
         }
         let gain = gain(self.speed);
-        Steps {
-            x: advance(&mut self.acc.0, dx, self.spec.step_x, gain),
-            y: advance(&mut self.acc.1, dy, self.spec.step_y, gain),
+        let x = advance(&mut self.acc.0, dx, self.spec.step_x, gain);
+        let y = advance(&mut self.acc.1, dy, self.spec.step_y, gain);
+        if x == 0 && y == 0 {
+            return Steps::default();
         }
+        let signs = (x.signum(), y.signum());
+        let tick = match self.heading {
+            None => true,
+            Some((was, at)) => was != signs || time.wrapping_sub(at) >= BURST_GAP_MS,
+        };
+        self.heading = Some((signs, time));
+        Steps { x, y, tick }
     }
 }
 
@@ -285,8 +304,36 @@ mod tests {
     }
 
     #[test]
+    fn feedback_ticks_once_per_movement() {
+        let mut g = spec().open(Point::new(0.0, 0.0), 0);
+        let mut ticks = Vec::new();
+        let mut track = |g: &mut Glide, x: f32, t: u32| {
+            if g.track(Point::new(x, 0.0), t).tick {
+                ticks.push(t);
+            }
+        };
+        // A long steady slide left: many arrows, one tick.
+        for i in 1..=30u32 {
+            track(&mut g, -10.0 * i as f32, i * 16);
+        }
+        // Reversing: one tick.
+        for i in 1..=10u32 {
+            track(&mut g, -300.0 + 10.0 * i as f32, 480 + i * 16);
+        }
+        // Rest 400 ms, then on again the same way: one tick.
+        for i in 1..=10u32 {
+            track(&mut g, -200.0 + 10.0 * i as f32, 1040 + i * 16);
+        }
+        assert_eq!(ticks.len(), 3, "{ticks:?}");
+    }
+
+    #[test]
     fn runs_name_each_direction() {
-        let s = Steps { x: -3, y: 2 };
+        let s = Steps {
+            x: -3,
+            y: 2,
+            tick: false,
+        };
         let v: Vec<_> = s.runs().collect();
         assert_eq!(v, vec![(Direction::Left, 3), (Direction::Down, 2)]);
         assert!(Steps::default().is_empty());
