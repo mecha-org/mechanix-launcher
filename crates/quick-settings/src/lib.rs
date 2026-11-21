@@ -25,8 +25,8 @@ use volume_keys::VolumeKeysModule;
 /// Expects the host to have installed `RingModule`, `PulseAudioModule` and
 /// `VolumeControlModule` (for the volume slider and keys), `WaylandModule`
 /// (before this module, for the volume keys), `TimerModule` (for the header's
-/// date) and `DBusModule::new().system()`, and to have inserted the [`Atlas`]
-/// and `FontBook`.
+/// date) and `DBusModule::new().system().session()` (display brightness is
+/// on the session bus), and to have inserted the [`Atlas`] and `FontBook`.
 pub struct QuickSettingsModule;
 
 impl Module for QuickSettingsModule {
