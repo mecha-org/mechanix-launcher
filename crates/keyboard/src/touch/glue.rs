@@ -356,9 +356,12 @@ fn apply(ctx: &mut Context<'_, Keyboard>, view: usize, out: Vec<TouchOut>, time:
                 }
             }
             TouchOut::Hold(i) => {
-                if let Some(KeyAction::EmitKeysym(ks)) = entry_action(ctx, view, i) {
+                // A backspace that undid a suggestion holds nothing, so
+                // its release neither repeats nor drops the word.
+                if let Some(KeyAction::EmitKeysym(ks)) = entry_action(ctx, view, i)
+                    && hold(ctx, ks)
+                {
                     ctx.me().touch.held = Some(ks);
-                    hold(ctx, ks);
                 }
             }
             TouchOut::StopHold { held_ms } => {

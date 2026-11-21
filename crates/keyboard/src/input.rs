@@ -194,10 +194,16 @@ pub(crate) fn repeats(action: &KeyAction) -> bool {
 /// Press a [`repeats`] key's keysym through the virtual keyboard and leave it
 /// down until [`release`], consuming any latched modifier. The latch is
 /// cleared now but its mask stays applied until the key is released. Like
-/// any other key used, it ends the pointing stick's select mode.
-pub(crate) fn hold(ctx: &mut Context<'_, Keyboard>, ks: Keysym) {
+/// any other key used, it ends the pointing stick's select mode. A
+/// BackSpace right after a suggestion was accepted undoes that instead and
+/// presses nothing. Returns whether the key was pressed.
+pub(crate) fn hold(ctx: &mut Context<'_, Keyboard>, ks: Keysym) -> bool {
     pointing_stick::reset(ctx);
+    if ks == Keysym::BackSpace && undo_suggestion(ctx) {
+        return false;
+    }
     press_and_hold(ctx, ks, 0);
+    true
 }
 
 /// Press the arrow `ks` for the pointing stick's held direction and leave it
@@ -272,11 +278,40 @@ pub(crate) fn accept_suggestion(ctx: &mut Context<'_, Keyboard>, index: usize) {
     // No haptic here: the touch gave one when it landed on the suggestion,
     // as a key's press does.
     tracing::info!(word = %suggestion.label, kind = ?suggestion.kind, "accepted suggestion");
-    let words = ctx
-        .resource_mut::<TypingContext>()
-        .replaced_word(&suggestion.edit.insert);
+    let (words, original, rev) = {
+        let mut typing = ctx.resource_mut::<TypingContext>();
+        let original = format!("{}{}", typing.prefix(), typing.word_after());
+        let words = typing.replaced_word(&suggestion.edit.insert);
+        (words, original, typing.rev())
+    };
+    ctx.resource_mut::<Completion>()
+        .remember_undo(original, suggestion.edit.insert.clone(), rev);
     record(ctx, words);
     shift::typed_letter(ctx);
+}
+
+/// Take back the last accepted suggestion, if a backspace now may (see
+/// [`Completion::take_undo`]): the suggestion's text is replaced by the word
+/// as it was typed, the caret after it. Returns whether it did.
+fn undo_suggestion(ctx: &mut Context<'_, Keyboard>) -> bool {
+    let rev = ctx.resource::<TypingContext>().rev();
+    let Some(undo) = ctx
+        .resource_mut::<Completion>()
+        .take_undo(rev, std::time::Instant::now())
+    else {
+        return false;
+    };
+    let sent = {
+        let (st, mut wl) = ctx.fetch::<(Res<InputMethodState>, ResMut<Wayland>)>();
+        input_method::apply_edit(st, &mut wl, &undo.edit())
+    };
+    if !sent {
+        return false;
+    }
+    tracing::info!(word = %undo.original, "undid suggestion");
+    ctx.resource_mut::<TypingContext>()
+        .replaced_word(&undo.original);
+    true
 }
 
 /// Finish the word being typed, handing it to the recorder.

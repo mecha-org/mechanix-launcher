@@ -18,7 +18,7 @@ mod backends;
 pub(crate) mod config;
 mod edit;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use mecha_wayland::prelude::*;
 
@@ -84,6 +84,33 @@ pub(crate) struct Completion {
     /// The caret moved since `current` was computed and has not yet rested:
     /// its edits no longer match the text.
     stale: bool,
+    /// How to take back the last accepted suggestion.
+    undo: Option<Undo>,
+}
+
+/// An accepted suggestion, remembered so a backspace right after can take it
+/// back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Undo {
+    /// The word as it was before (both sides of the caret).
+    pub(crate) original: String,
+    /// What the suggestion typed in its place, ending at the caret.
+    inserted: String,
+    /// The typing context's revision right after: any later change to the
+    /// word makes the undo stale.
+    rev: u64,
+    at: Instant,
+}
+
+impl Undo {
+    /// The edit that puts the original word back, the caret after it.
+    pub(crate) fn edit(&self) -> TextEdit {
+        TextEdit {
+            delete_before: self.inserted.len() as u32,
+            delete_after: 0,
+            insert: self.original.clone(),
+        }
+    }
 }
 impl Resource for Completion {}
 
@@ -104,7 +131,29 @@ impl Completion {
             current: Vec::new(),
             seen: None,
             stale: false,
+            undo: None,
         }
+    }
+
+    /// A suggestion replaced `original` with `inserted`, leaving the typing
+    /// context at revision `rev`: remember how to undo it.
+    pub(crate) fn remember_undo(&mut self, original: String, inserted: String, rev: u64) {
+        self.undo = Some(Undo {
+            original,
+            inserted,
+            rev,
+            at: Instant::now(),
+        });
+    }
+
+    /// The undo of the last accepted suggestion, if it is still good at
+    /// `now` with the typing context at revision `rev`: within
+    /// [`config::UNDO_WINDOW`] and nothing changed the word since. It can be
+    /// taken once.
+    pub(crate) fn take_undo(&mut self, rev: u64, now: Instant) -> Option<Undo> {
+        let undo = self.undo.take()?;
+        let fresh = now.saturating_duration_since(undo.at) <= config::UNDO_WINDOW;
+        (undo.rev == rev && fresh).then_some(undo)
     }
 
     /// The suggestion at `index`, if the bar shows one that still matches
@@ -363,6 +412,35 @@ mod tests {
         assert!(!e.shown);
         assert!(c.get(0).is_none());
         assert!(settle(&mut c, &ctx, &st).is_none());
+    }
+
+    #[test]
+    fn undo_restores_the_typed_word_once() {
+        let mut c = completion();
+        c.remember_undo("teh".into(), "the".into(), 7);
+        let now = Instant::now();
+        let undo = c.take_undo(7, now).unwrap();
+        assert_eq!(
+            undo.edit(),
+            TextEdit {
+                delete_before: 3,
+                delete_after: 0,
+                insert: "teh".into()
+            }
+        );
+        assert!(c.take_undo(7, now).is_none());
+    }
+
+    #[test]
+    fn undo_is_gone_after_a_change_or_the_window() {
+        let mut c = completion();
+        c.remember_undo("teh".into(), "the ".into(), 7);
+        assert!(c.take_undo(8, Instant::now()).is_none());
+        // A stale one is dropped, not kept for later.
+        assert!(c.take_undo(7, Instant::now()).is_none());
+        c.remember_undo("teh".into(), "the ".into(), 7);
+        let late = Instant::now() + config::UNDO_WINDOW + Duration::from_millis(1);
+        assert!(c.take_undo(7, late).is_none());
     }
 
     #[test]

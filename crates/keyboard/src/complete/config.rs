@@ -2,6 +2,8 @@
 //! change either. [`CompletionConfig::hardcoded`] stands in for a config
 //! system.
 
+use std::time::Duration;
+
 use super::Completer;
 use super::backends::{DictionaryCompleter, Merge};
 use crate::dictionaries::Dictionaries;
@@ -22,6 +24,11 @@ pub(crate) enum Backend {
     /// Several sources, their suggestions interleaved in this order.
     Merge(Vec<Backend>),
 }
+
+/// How long after accepting a suggestion a backspace undoes it (restoring
+/// the word as typed) instead of deleting a character. Anything else done to
+/// the word first (typing, moving the caret) ends the chance.
+pub(crate) const UNDO_WINDOW: Duration = Duration::from_secs(3);
 
 /// Whether accepting a suggestion also types a space after the word (in
 /// fields where that fits; never in addresses).
