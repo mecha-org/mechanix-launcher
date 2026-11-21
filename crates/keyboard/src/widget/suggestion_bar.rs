@@ -16,7 +16,9 @@ const LINE: f32 = 1.0;
 /// Height of the line between suggestions, as a share of the bar's.
 const DIVIDER_HEIGHT: f32 = 0.4;
 
-const LINE_ROLE: ColorRole = ColorRole::OutlineVariant;
+// Outline, not OutlineVariant: the theme sets the variant to the keyboard's own
+// background (surface-container-low) in both schemes, which hides the lines.
+const LINE_ROLE: ColorRole = ColorRole::Outline;
 const INK_ROLE: ColorRole = ColorRole::OnSurface;
 const PRESSED_ROLE: ColorRole = ColorRole::SurfaceContainerHigh;
 
