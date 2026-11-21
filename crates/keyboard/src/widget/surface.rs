@@ -18,6 +18,7 @@ use crate::visibility::{ApplyKeyboardVisibility, KeyboardVisibilityExt};
 use crate::widget::key::Key;
 use crate::widget::keyboard::{Keyboard, KeyboardBuilder};
 use crate::widget::more_keys::MoreKeys;
+use crate::widget::pointing_stick::PointingStickOverlay;
 #[cfg(test)]
 use crate::widget::popup::GAP;
 use crate::widget::popup::{HEIGHT_SCALE, KeyPopup};
@@ -345,7 +346,7 @@ pub(crate) fn relayout(app: &mut App) {
     let Some(kb) = app.widgets::<Keyboard>().map(|(id, _)| id).next() else {
         return;
     };
-    let (views, current, popup, choices_row, old_radius) = {
+    let (views, current, popup, choices_row, pointing_stick, old_radius) = {
         let me = app.widget_mut::<Keyboard>(kb).unwrap();
         me.headroom = headroom;
         me.popup_gap = popup_gap;
@@ -358,7 +359,14 @@ pub(crate) fn relayout(app: &mut App) {
             .iter()
             .map(|v| (v.node.id(), v.height, v.rows.clone()))
             .collect();
-        (views, me.current_view, me.popup, me.choices_row, old_radius)
+        (
+            views,
+            me.current_view,
+            me.popup,
+            me.choices_row,
+            me.pointing_stick,
+            old_radius,
+        )
     };
 
     restyle(app, kb, |s| {
@@ -391,6 +399,9 @@ pub(crate) fn relayout(app: &mut App) {
         }
         if let Some(c) = app.widget_mut::<MoreKeys>(choices_row) {
             c.radius = style.radius;
+        }
+        if let Some(p) = app.widget_mut::<PointingStickOverlay>(pointing_stick) {
+            p.radius = style.radius;
         }
     }
     if let Some(p) = app.widget_mut::<KeyPopup>(popup) {

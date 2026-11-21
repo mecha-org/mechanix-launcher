@@ -205,7 +205,9 @@ fn on_input_method_event(app: &mut App, event: &ZwpInputMethodV2Event) {
                     || prev.hint != st.current.hint;
                 st.serial = st.serial.wrapping_add(1);
                 let now = &st.current;
-                tracing::info!(
+                // Debug, not info: the client sends one per caret move,
+                // dozens a second while gliding.
+                tracing::debug!(
                     active = now.active,
                     serial = st.serial,
                     "input-method: state applied"

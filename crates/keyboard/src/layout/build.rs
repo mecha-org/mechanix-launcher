@@ -247,6 +247,7 @@ fn types_digit(action: &KeyAction) -> bool {
         | KeyAction::LatchModifier(_)
         | KeyAction::Page(_)
         | KeyAction::Shift
+        | KeyAction::PointingStick
         | KeyAction::Unhandled(_) => None,
     };
     text.is_some_and(|c| c.is_ascii_digit())
@@ -274,6 +275,9 @@ fn resolve_action(token: &str, button: Option<&Button>) -> KeyAction {
                 ));
             }
             Some(ActionSpec::Named(a)) if a == "shift" => return KeyAction::Shift,
+            Some(ActionSpec::Named(a)) if a == "pointing_stick" => {
+                return KeyAction::PointingStick;
+            }
             Some(ActionSpec::Page { page }) => match Page::from_name(page) {
                 Some(p) => return KeyAction::Page(p),
                 None => {

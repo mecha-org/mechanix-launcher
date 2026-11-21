@@ -50,6 +50,12 @@ pub(crate) struct Deferral {
 }
 
 impl Deferral {
+    /// Whether a press is held back: only then does an event's gate depend
+    /// on the layout, so callers can skip measuring it otherwise.
+    pub(crate) fn waiting(&self) -> bool {
+        self.pending.is_some()
+    }
+
     /// Decide what to do with `event`, given whether the current view is
     /// [`laid_out`] now.
     pub(crate) fn gate(&mut self, event: Contact, laid_out: bool) -> Gate {

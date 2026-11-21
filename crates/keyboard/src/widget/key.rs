@@ -10,6 +10,7 @@ use crate::layout::icons::Icons;
 use crate::layout::style::{KeyLook, KeyState};
 use crate::layout::{KeyAction, KeyFace};
 use crate::modifiers::latch::LatchedState;
+use crate::modifiers::pointing_stick::PointingStickMode;
 use crate::modifiers::shift::{Shift, ShiftState};
 use crate::touch::{KeyFeedback, popup_text};
 
@@ -32,6 +33,7 @@ fn kind_of(action: &KeyAction) -> KeyKind {
         | KeyAction::SetView(_)
         | KeyAction::Page(_)
         | KeyAction::Shift
+        | KeyAction::PointingStick
         | KeyAction::Unhandled(_) => KeyKind::Function,
     }
 }
@@ -189,9 +191,16 @@ impl Widget for Key {
         // Latch and shift keys show their on state, so a press doesn't
         // flash them.
         let is_latch = latch.is_some() || shift;
+        // The pointing stick shows select mode in its latched colours, and
+        // flashes from (and back to) whichever colours its mode has.
+        let pointing_stick = matches!(b.key.action, KeyAction::PointingStick);
+        let selecting = move |ctx: &Context<'_, Key>| {
+            pointing_stick && ctx.resource::<PointingStickMode>().select()
+        };
         s.on_theme(me, move |ctx| {
             let lit = latch.is_some_and(|m| ctx.resource::<LatchedState>().get(m))
-                || (shift && ctx.resource::<Shift>().state() != ShiftState::Off);
+                || (shift && ctx.resource::<Shift>().state() != ShiftState::Off)
+                || selecting(ctx);
             let state = KeyState::latched_if(lit);
             let (bg_role, fg_role) = key_roles(look, kind, state);
             let bg = ctx.color(bg_role);
@@ -211,6 +220,8 @@ impl Widget for Key {
 
         if !is_latch {
             s.on::<KeyFeedback>(me, move |ctx, e| {
+                let state = KeyState::latched_if(selecting(ctx));
+                let (bg_role, fg_role) = key_roles(look, kind, state);
                 let bg = ctx.color(bg_role);
                 let fg = ctx.color(fg_role);
                 // Pressed swaps the colours; released restores them.
@@ -267,6 +278,7 @@ mod tests {
         app.insert_resource(icons);
         app.insert_resource(LatchedState::default());
         app.insert_resource(Shift::default());
+        app.insert_resource(PointingStickMode::default());
 
         let view = keymap.views.iter().find(|v| v.name == "base").unwrap();
         let mut rows = Vec::new();

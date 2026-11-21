@@ -54,7 +54,7 @@ views:
         more_keys: letters
         rows:
             - "q w e r t y u i o p"
-            - "[5] a s d f g h j k l [5]"
+            - "a s d f pointing_stick g h j k l"
             - "shift z x c v b n m BackSpace"
             - "to_symbols comma emoji space period Return"
     symbols:
@@ -227,6 +227,13 @@ views:
             - { height: 0.75, keys: "Esc Tab Ctrl Alt ← ↓ ↑ →" }
 
 buttons:
+    # Tap: toggle caret / select mode. Hold: a direction pad around the key;
+    # slide toward a direction to hold that arrow (Shift+arrow in select mode).
+    pointing_stick:
+        key_style: strip
+        outline: default
+        action: pointing_stick
+        icon: pointing-stick-symbolic
     shift:
         key_style: function
         action: shift

@@ -18,18 +18,23 @@ use xkbcommon::xkb::Keysym;
 use super::KeyFeedback;
 use super::defer::PendingPress;
 use super::flow::{self, Board, Flow};
+use super::glide::GlideSpec;
 use super::long_press::{ChoicesRow, LONG_PRESS};
+use super::pointing_stick::{POINTING_STICK_HOLD, PointingStickPad};
 use super::resolve::KeyGeom;
 use super::tracker::{TouchOut, TouchTracker};
 use crate::feedbackd;
 use crate::field::Field;
-use crate::input::{dispatch, dispatch_choice, hold, release, repeats};
+use crate::input::{
+    dispatch, dispatch_choice, hold, hold_direction, release, repeats, tap_direction,
+};
 use crate::layout::KeyAction;
 use crate::modifiers::shift::{self, Shift};
 use crate::predict::{LetterPrior, Prediction, TypingContext};
 use crate::visibility::KeyboardVisibilityExt;
 use crate::widget::keyboard::Keyboard;
 use crate::widget::more_keys::ChoicesFeedback;
+use crate::widget::pointing_stick::PointingStickFeedback;
 
 /// Bookkeeping the input layer keeps besides the tracker.
 #[derive(Default)]
@@ -67,20 +72,36 @@ impl Board for Kb<'_, '_> {
     fn choices_row(&mut self, index: usize) -> Option<ChoicesRow> {
         let me = self.0.me();
         let choices = me.keys[me.current_view].get(index)?.choices.clone();
-        let (headroom, gap) = (me.headroom, me.popup_gap);
         if choices.is_empty() {
             return None;
         }
+        let gap = me.popup_gap;
         let key = *key_geoms(self.0).get(index)?;
-        let container = self.0.component::<ComputedLayout>()?.rect;
-        // The row may rise into the headroom strip, as the pop-up does.
-        let bounds = Rect::new(
-            container.origin.x,
-            container.origin.y - headroom,
-            container.size.width,
-            container.size.height + headroom,
-        );
+        let bounds = overlay_bounds(self.0)?;
         Some(ChoicesRow::open(key.rect, bounds, gap, choices))
+    }
+    fn is_pointing_stick(&mut self, index: usize) -> bool {
+        let me = self.0.me();
+        matches!(
+            me.keys[me.current_view].get(index).map(|k| &k.action),
+            Some(KeyAction::PointingStick)
+        )
+    }
+    fn pointing_stick_pad(&mut self, index: usize, origin: Point) -> Option<PointingStickPad> {
+        let gap = self.0.me().popup_gap;
+        let key = *key_geoms(self.0).get(index)?;
+        let bounds = overlay_bounds(self.0)?;
+        Some(PointingStickPad::open(key.rect, bounds, gap, origin))
+    }
+    fn glide(&mut self, index: usize) -> Option<GlideSpec> {
+        // The space bar glides sideways. (A gliding pointing stick would
+        // return `GlideSpec::both` here and skip its direction pad.)
+        let me = self.0.me();
+        let node = me.keys[me.current_view].get(index).and_then(|k| {
+            matches!(&k.action, KeyAction::EmitText(t) if t == " ").then_some(k.node)
+        })?;
+        let rect = self.0.at(node)?.component::<ComputedLayout>()?.rect;
+        (rect.height() > 0.0).then(|| GlideSpec::horizontal(rect.height()))
     }
     fn tracker(&mut self) -> &mut TouchTracker {
         &mut self.0.me().tracker
@@ -152,6 +173,20 @@ pub(crate) fn long_pressed(ctx: &mut Context<'_, Keyboard>) {
     flow::long_pressed(&mut Kb(ctx), time);
 }
 
+/// Where a choices row or direction pad may open, in window coordinates: the
+/// keyboard container and the headroom strip above it, which they may rise
+/// into as the pop-up does.
+fn overlay_bounds(ctx: &mut Context<'_, Keyboard>) -> Option<Rect> {
+    let headroom = ctx.me().headroom;
+    let container = ctx.component::<ComputedLayout>()?.rect;
+    Some(Rect::new(
+        container.origin.x,
+        container.origin.y - headroom,
+        container.size.width,
+        container.size.height + headroom,
+    ))
+}
+
 /// The prior over the next letter, the prediction strength and whether the
 /// pop-up is on, for the focused field and the word typed so far.
 fn predict(ctx: &Context<'_, Keyboard>) -> (LetterPrior, f32, bool) {
@@ -214,14 +249,19 @@ fn apply(ctx: &mut Context<'_, Keyboard>, view: usize, out: Vec<TouchOut>, time:
                 if let Some(KeyAction::Shift) = entry_action(ctx, view, i) {
                     shift::pressed(ctx);
                 }
-                // Holding a key with choices opens them; sliding onto
-                // another key restarts the wait.
-                if ctx.me().keys[view]
-                    .get(i)
-                    .is_some_and(|k| !k.choices.is_empty())
-                {
+                // Holding a key with choices opens them, and holding the
+                // pointing stick (in half the time) its direction pad;
+                // sliding onto another key restarts the wait.
+                let wait = ctx.me().keys[view].get(i).and_then(|k| {
+                    if matches!(k.action, KeyAction::PointingStick) {
+                        Some(POINTING_STICK_HOLD)
+                    } else {
+                        (!k.choices.is_empty()).then_some(LONG_PRESS)
+                    }
+                });
+                if let Some(wait) = wait {
                     let id = ctx.me().long_press_timer;
-                    ctx.start_timer_for(id, LONG_PRESS);
+                    ctx.start_timer_for(id, wait);
                 }
                 feedback(ctx, view, i, |key| KeyFeedback::Pressed { key });
             }
@@ -268,6 +308,44 @@ fn apply(ctx: &mut Context<'_, Keyboard>, view: usize, out: Vec<TouchOut>, time:
                 }
             }
             TouchOut::CloseChoices => show_choices(ctx, ChoicesFeedback::Close),
+            TouchOut::OpenPointingStick(_) => open_pointing_stick(ctx),
+            TouchOut::PointingStick(direction) => {
+                show_pointing_stick(ctx, PointingStickFeedback::Light(direction));
+                if let Some(d) = direction {
+                    feedbackd::key_pressed(ctx);
+                    ctx.me().touch.held = Some(d.keysym());
+                    hold_direction(ctx, d.keysym());
+                }
+            }
+            TouchOut::ClosePointingStick => {
+                show_pointing_stick(ctx, PointingStickFeedback::Close);
+            }
+            TouchOut::OpenGlide(i) => {
+                // Take the contact over: its moves then come straight here,
+                // skipping the toolkit's hit test of the whole keyboard tree
+                // (every view, the emoji page included) and its enter/exit
+                // events on every move of the glide.
+                if let Some(c) = ctx.me().tracker.contact() {
+                    ctx.claim_contact(c);
+                }
+                // No hold wait or pop-up while gliding; the key stays lit.
+                let id = ctx.me().long_press_timer;
+                ctx.cancel_timer(id);
+                if let Some(node) = ctx.me().keys[view].get(i).map(|k| k.node.id()) {
+                    let popup = ctx.me().popup.id();
+                    ctx.emit(KeyFeedback::Released { key: node }, [popup]);
+                }
+            }
+            TouchOut::Glide(steps) => {
+                // Feedback once per movement (start, reversal, restart
+                // after a rest), not per move or per arrow.
+                if steps.tick {
+                    feedbackd::key_pressed(ctx);
+                }
+                for (d, n) in steps.runs() {
+                    tap_direction(ctx, d, n);
+                }
+            }
         }
     }
 }
@@ -304,6 +382,46 @@ fn open_choices(ctx: &mut Context<'_, Keyboard>, view: usize, i: usize) {
             highlighted,
         },
     );
+}
+
+/// The tracker opened the pointing stick's direction pad: show it, nothing
+/// lit until the finger moves.
+fn open_pointing_stick(ctx: &mut Context<'_, Keyboard>) {
+    let Some(pad) = ctx.me().tracker.pointing_stick().cloned() else {
+        return;
+    };
+    let Some(container) = ctx.component::<ComputedLayout>().map(|l| l.rect) else {
+        return;
+    };
+    let r = pad.rect();
+    let cells = pad.cells.map(|c| {
+        Rect::new(
+            c.origin.x - r.origin.x,
+            c.origin.y - r.origin.y,
+            c.size.width,
+            c.size.height,
+        )
+    });
+    let rect = Rect::new(
+        r.origin.x - container.origin.x,
+        r.origin.y - container.origin.y,
+        r.size.width,
+        r.size.height,
+    );
+    show_pointing_stick(
+        ctx,
+        PointingStickFeedback::Open {
+            rect,
+            cells,
+            lit: pad.direction,
+        },
+    );
+}
+
+/// Tell the direction pad widget.
+fn show_pointing_stick(ctx: &mut Context<'_, Keyboard>, e: PointingStickFeedback) {
+    let pad = ctx.me().pointing_stick.id();
+    ctx.emit(e, [pad]);
 }
 
 /// Tell the choices row widget.
@@ -384,7 +502,7 @@ mod tests {
             finish_stale(&mut t, 0, 1, 400),
             vec![TouchOut::CloseChoices, TouchOut::Unpressed(2)]
         );
-        assert!(!t.choices_open());
+        assert!(!t.overlay_open());
         assert_eq!(t.release(A, 450), vec![]);
     }
 

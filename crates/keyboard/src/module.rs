@@ -66,6 +66,7 @@ pub fn spawn_ui(app: &mut App, bottom_gap: f32) {
 
     app.insert_resource(LatchedState::default());
     app.insert_resource(Shift::default());
+    app.insert_resource(crate::modifiers::pointing_stick::PointingStickMode::default());
     app.insert_resource(crate::predict::TypingContext::default());
     app.insert_resource(crate::predict::Prediction::from_config(&keymap.prediction));
     app.insert_resource(ExclusiveZone::default());
