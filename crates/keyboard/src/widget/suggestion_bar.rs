@@ -45,7 +45,9 @@ impl Build for SuggestionBarBuilder {
     type Widget = SuggestionBar;
 }
 
-/// The bar. Its cells are spawned per [`BarFeedback::Show`].
+/// The bar. Its cells persist: a [`BarFeedback::Show`] relabels them in
+/// place, adding or removing only the difference in count, so a word that
+/// stays in its slot is not redrawn.
 pub(crate) struct SuggestionBar {
     font: FontId,
     font_size: u16,
@@ -53,6 +55,8 @@ pub(crate) struct SuggestionBar {
     pub(crate) padding: f32,
     /// One per suggestion, in order.
     cells: Vec<Handle<Div>>,
+    /// Each cell's label.
+    texts: Vec<Handle<Text>>,
     /// The lines between cells.
     dividers: Vec<Handle<Div>>,
     pressed: Option<usize>,
@@ -101,6 +105,7 @@ impl Widget for SuggestionBar {
             font_size: (f32::from(b.font_size) * FONT_SCALE).round() as u16,
             padding: b.padding,
             cells: Vec::new(),
+            texts: Vec::new(),
             dividers: Vec::new(),
             pressed: None,
         }
@@ -114,57 +119,75 @@ fn underline(color: Color) -> Quad {
         .border_color(color)
 }
 
-/// Replace the cells with one per label.
+/// Show `labels`, one per cell: relabel the cells there are (unchanged
+/// labels are left alone), spawn any more needed, and remove any extra. A
+/// pressed cell stays lit: the finger is still on it.
 fn show(ctx: &mut Context<'_, SuggestionBar>, labels: &[String]) {
-    for cell in std::mem::take(&mut ctx.me().cells) {
-        ctx.remove(cell);
+    let texts = ctx.me().texts.clone();
+    for (text, label) in texts.iter().zip(labels) {
+        ctx.at(*text).unwrap().set_text(label.as_str());
     }
-    for divider in std::mem::take(&mut ctx.me().dividers) {
-        ctx.remove(divider);
-    }
-    ctx.me().pressed = None;
-    let me = ctx.handle();
-    let (font, font_size, padding) = {
+    while ctx.me().cells.len() > labels.len() {
         let bar = ctx.me();
-        (bar.font, bar.font_size, bar.padding)
-    };
-    let ink = ctx.color(INK_ROLE);
-    let line = ctx.color(LINE_ROLE);
-    for (i, label) in labels.iter().enumerate() {
-        if i > 0 {
-            let divider = ctx.spawn(
-                me,
-                div().background(line).style(
-                    LayoutStyle::default()
-                        .size(px(LINE), percent(DIVIDER_HEIGHT * 100.0))
-                        .shrink(0.0),
-                ),
-            );
-            ctx.me().dividers.push(divider);
+        let cell = bar.cells.pop().unwrap();
+        bar.texts.pop();
+        // The line before the cell goes with it; the first cell has none.
+        let divider = bar.dividers.pop();
+        ctx.remove(cell);
+        if let Some(divider) = divider {
+            ctx.remove(divider);
         }
-        // Cells take their text's width, shrinking (with an ellipsis) only
-        // when the labels do not fit.
-        let cell = ctx.spawn(
+    }
+    let have = ctx.me().cells.len();
+    for label in labels.iter().skip(have) {
+        spawn_cell(ctx, label);
+    }
+    restyle_cells(ctx);
+}
+
+/// Append a cell labelled `label`, after a divider unless it is the first.
+fn spawn_cell(ctx: &mut Context<'_, SuggestionBar>, label: &str) {
+    let me = ctx.handle();
+    let (font, font_size, padding, first) = {
+        let bar = ctx.me();
+        (bar.font, bar.font_size, bar.padding, bar.cells.is_empty())
+    };
+    if !first {
+        let divider = ctx.spawn(
             me,
             div().style(
                 LayoutStyle::default()
-                    .row()
-                    .align_items(Align::Center)
-                    .height(percent(100.0))
-                    .min_width(px(0.0))
-                    .padding(Insets::new(px(0.0), px(padding), px(0.0), px(padding))),
+                    .size(px(LINE), percent(DIVIDER_HEIGHT * 100.0))
+                    .shrink(0.0),
             ),
         );
-        ctx.spawn(
-            cell,
-            text(font, label.as_str())
-                .color(ink)
-                .size(font_size)
-                .overflow(TextOverflow::Ellipsis)
-                .opaque(false),
-        );
-        ctx.me().cells.push(cell);
+        ctx.me().dividers.push(divider);
     }
+    // Cells take their text's width, shrinking (with an ellipsis) only when
+    // the labels do not fit.
+    let cell = ctx.spawn(
+        me,
+        div().style(
+            LayoutStyle::default()
+                .row()
+                .align_items(Align::Center)
+                .height(percent(100.0))
+                .min_width(px(0.0))
+                .padding(Insets::new(px(0.0), px(padding), px(0.0), px(padding))),
+        ),
+    );
+    let ink = ctx.color(INK_ROLE);
+    let text = ctx.spawn(
+        cell,
+        text(font, label)
+            .color(ink)
+            .size(font_size)
+            .overflow(TextOverflow::Ellipsis)
+            .opaque(false),
+    );
+    let bar = ctx.me();
+    bar.cells.push(cell);
+    bar.texts.push(text);
 }
 
 /// Light cell `i` as pressed (and unlight the one before).
@@ -173,14 +196,24 @@ fn press(ctx: &mut Context<'_, SuggestionBar>, i: Option<usize>) {
     restyle_cells(ctx);
 }
 
-/// Paint every cell for the pressed state and the current theme.
+/// Paint every cell, label and divider for the pressed state and the
+/// current theme.
 fn restyle_cells(ctx: &mut Context<'_, SuggestionBar>) {
     let fill = ctx.color(PRESSED_ROLE);
     let line = ctx.color(LINE_ROLE);
-    let (cells, dividers, pressed) = {
+    let ink = ctx.color(INK_ROLE);
+    let (cells, texts, dividers, pressed) = {
         let bar = ctx.me();
-        (bar.cells.clone(), bar.dividers.clone(), bar.pressed)
+        (
+            bar.cells.clone(),
+            bar.texts.clone(),
+            bar.dividers.clone(),
+            bar.pressed,
+        )
     };
+    for text in texts {
+        ctx.at(text).unwrap().set_color(ink);
+    }
     for (i, cell) in cells.into_iter().enumerate() {
         let paint = if pressed == Some(i) {
             Paint::Quad(Quad::new(fill))

@@ -62,6 +62,30 @@ pub(crate) fn suggestions(
     out
 }
 
+/// `next` reordered to keep the bar steady: a word `prev` also showed (in
+/// any casing) keeps its slot when that slot still exists, so the word under
+/// a finger about to tap stays put; the rest fill the free slots in `next`'s
+/// order.
+pub(crate) fn stabilize(prev: &[Suggestion], next: Vec<Suggestion>) -> Vec<Suggestion> {
+    let mut slots: Vec<Option<Suggestion>> = (0..next.len()).map(|_| None).collect();
+    let mut rest = Vec::new();
+    for s in next {
+        let was = prev
+            .iter()
+            .position(|p| p.label.to_lowercase() == s.label.to_lowercase());
+        match was {
+            Some(i) if slots.get(i).is_some_and(Option::is_none) => slots[i] = Some(s),
+            _ => rest.push(s),
+        }
+    }
+    // As many slots are free as words are left.
+    let mut rest = rest.into_iter();
+    slots
+        .into_iter()
+        .filter_map(|slot| slot.or_else(|| rest.next()))
+        .collect()
+}
+
 /// `candidate` cased to match `typed`: all capitals if `typed` is (two or
 /// more letters, all uppercase), a capital first letter if `typed` starts
 /// with one, else as the source gave it (keeping capitals it has, like
@@ -163,6 +187,44 @@ mod tests {
             labels(&suggestions(&q("i", ""), cands(&["I"]), true)),
             ["I"]
         );
+    }
+
+    fn sugg(words: &[&str]) -> Vec<Suggestion> {
+        suggestions(&q("", ""), cands(words), true)
+    }
+
+    #[test]
+    fn stabilize_keeps_words_in_their_slots() {
+        // "that" stays second though it now ranks first; "the" takes the
+        // free slot.
+        let s = stabilize(
+            &sugg(&["this", "that", "they"]),
+            sugg(&["that", "the", "this"]),
+        );
+        assert_eq!(labels(&s), ["this", "that", "the"]);
+    }
+
+    #[test]
+    fn stabilize_matches_words_in_any_casing() {
+        // "Then" (capitalised now) was "then" in the first slot.
+        let s = stabilize(&sugg(&["then", "than"]), sugg(&["The", "Then"]));
+        assert_eq!(labels(&s), ["Then", "The"]);
+    }
+
+    #[test]
+    fn stabilize_ranks_words_whose_slot_is_gone() {
+        // "then" was third, but only two slots remain: it goes by rank.
+        let s = stabilize(&sugg(&["a", "b", "then"]), sugg(&["the", "then"]));
+        assert_eq!(labels(&s), ["the", "then"]);
+        // A word in the middle slot stays there among new ones.
+        let s = stabilize(&sugg(&["a", "the"]), sugg(&["x", "y", "The"]));
+        assert_eq!(labels(&s), ["x", "The", "y"]);
+    }
+
+    #[test]
+    fn stabilize_with_nothing_before_keeps_the_ranking() {
+        let next = sugg(&["a", "b", "c"]);
+        assert_eq!(stabilize(&[], next.clone()), next);
     }
 
     #[test]

@@ -186,10 +186,13 @@ fn recompute(
 ) -> SuggestionsChanged {
     completion.stale = false;
     let policy = completion.policy(field, active);
-    completion.current = match policy {
+    // Words still suggested keep their slots, so the bar does not reshuffle
+    // under a finger about to tap.
+    let next = match policy {
         Some(p) => completion.suggest(ctx, p),
         None => Vec::new(),
     };
+    completion.current = edit::stabilize(&completion.current, next);
     SuggestionsChanged {
         shown: policy.is_some(),
         labels: completion.current.iter().map(|s| s.label.clone()).collect(),
