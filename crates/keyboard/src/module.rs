@@ -68,7 +68,18 @@ pub fn spawn_ui(app: &mut App, bottom_gap: f32) {
     app.insert_resource(Shift::default());
     app.insert_resource(crate::modifiers::pointing_stick::PointingStickMode::default());
     app.insert_resource(crate::predict::TypingContext::default());
-    app.insert_resource(crate::predict::Prediction::from_config(&keymap.prediction));
+    let mut dictionaries = crate::dictionaries::Dictionaries::default();
+    app.insert_resource(crate::predict::Prediction::from_config(
+        &keymap.prediction,
+        &mut dictionaries,
+    ));
+    let completion = crate::complete::Completion::new(
+        crate::complete::config::CompletionConfig::hardcoded(),
+        &mut dictionaries,
+    );
+    let suggestions = completion.enabled();
+    app.insert_resource(completion);
+    app.insert_resource(dictionaries);
     app.insert_resource(ExclusiveZone::default());
     crate::feedbackd::install(app);
     app.insert_resource(KeyboardGeometry::new(keymap.keyboard));
@@ -105,6 +116,7 @@ pub fn spawn_ui(app: &mut App, bottom_gap: f32) {
                 fonts,
                 keymap,
                 bottom_gap,
+                suggestions,
             },
         )
         .id();
@@ -117,6 +129,7 @@ pub fn spawn_ui(app: &mut App, bottom_gap: f32) {
     crate::lent::install(app, keys);
     app.insert_resource(InputRegion::default());
     app.system(ensure_input_region);
+    app.system(crate::complete::refresh);
 
     // Starts hidden: the surface is created unmapped.
     if app.has_resource::<Surfaces>() {

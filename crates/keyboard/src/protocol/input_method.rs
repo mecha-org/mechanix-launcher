@@ -11,6 +11,7 @@
 
 use mecha_wayland::prelude::*;
 
+use crate::complete::TextEdit;
 use crate::predict::TypingContext;
 use crate::visibility::KeyboardVisibilityExt;
 use crate::zone::ExclusiveZone;
@@ -90,6 +91,27 @@ pub(crate) fn commit_text(state: &InputMethodState, wl: &mut Wayland, text: &str
     let serial = state.serial;
     im.commit_string(&mut *wl, text);
     im.commit(&mut *wl, serial);
+    true
+}
+
+/// Apply `edit` through `zwp_input_method_v2` as one atomic change: a
+/// `delete_surrounding_text` (when it deletes anything), a `commit_string`
+/// and `commit(serial)`, which the client applies together. Returns `true`
+/// if sent (IM bound and active).
+pub(crate) fn apply_edit(state: &InputMethodState, wl: &mut Wayland, edit: &TextEdit) -> bool {
+    if !state.should_commit() {
+        return false;
+    }
+    let Some(im) = state.input_method else {
+        return false;
+    };
+    if edit.delete_before > 0 || edit.delete_after > 0 {
+        im.delete_surrounding_text(&mut *wl, edit.delete_before, edit.delete_after);
+    }
+    if !edit.insert.is_empty() {
+        im.commit_string(&mut *wl, &edit.insert);
+    }
+    im.commit(&mut *wl, state.serial);
     true
 }
 

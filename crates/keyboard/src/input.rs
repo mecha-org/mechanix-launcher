@@ -12,6 +12,8 @@
 use mecha_wayland::prelude::*;
 use xkbcommon::xkb::Keysym;
 
+use crate::complete::Completion;
+use crate::feedbackd;
 use crate::field::Field;
 use crate::layout::{KeyAction, Modifier};
 use crate::modifiers::latch::{LatchedState, consume_latch, toggle_latch};
@@ -248,6 +250,33 @@ pub(crate) fn release(ctx: &mut Context<'_, Keyboard>) {
     virtual_keyboard::release_held(&mut vk, &mut wl);
 }
 
+/// Accept suggestion `index` of the bar: replace the word around the cursor
+/// with it in one input-method commit. The bar only shows while the input
+/// method is active, so there is no virtual-keyboard fallback; if it went
+/// inactive meanwhile, nothing is typed. Like any key, it ends the pointing
+/// stick's select mode and spends a one-shot shift.
+pub(crate) fn accept_suggestion(ctx: &mut Context<'_, Keyboard>, index: usize) {
+    pointing_stick::reset(ctx);
+    let Some(suggestion) = ctx.resource::<Completion>().current.get(index).cloned() else {
+        return;
+    };
+    let sent = {
+        let (st, mut wl) = ctx.fetch::<(Res<InputMethodState>, ResMut<Wayland>)>();
+        input_method::apply_edit(st, &mut wl, &suggestion.edit)
+    };
+    if !sent {
+        tracing::warn!("suggestion tapped with no active input method; ignored");
+        return;
+    }
+    tracing::info!(word = %suggestion.label, kind = ?suggestion.kind, "accepted suggestion");
+    feedbackd::key_pressed(ctx);
+    let words = ctx
+        .resource_mut::<TypingContext>()
+        .replaced_word(&suggestion.edit.insert);
+    record(ctx, words);
+    shift::typed_letter(ctx);
+}
+
 /// Finish the word being typed, handing it to the recorder.
 pub(crate) fn end_word(ctx: &mut Context<'_, Keyboard>) {
     let word = ctx.resource_mut::<TypingContext>().end_word();
@@ -272,15 +301,17 @@ fn note_control(ctx: &mut Context<'_, Keyboard>, ks: Keysym) {
     }
 }
 
-/// Hand finished words to the recorder, if the focused field's profile allows.
+/// Hand finished words to the recorder and the completion source, if the
+/// focused field's profile allows.
 fn record(ctx: &mut Context<'_, Keyboard>, words: impl IntoIterator<Item = String>) {
     let field = Field::current(ctx);
-    let mut prediction = ctx.resource_mut::<Prediction>();
+    let (mut prediction, mut completion) = ctx.fetch::<(ResMut<Prediction>, ResMut<Completion>)>();
     if !prediction.active(field).0.may_record {
         return;
     }
     for word in words {
         prediction.recorder.record(&word);
+        completion.learn(&word);
     }
 }
 

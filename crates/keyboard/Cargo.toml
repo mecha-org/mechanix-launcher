@@ -16,6 +16,10 @@ rustix = { version = "1.1.4", features = ["fs"] }
 # Reads Noto Color Emoji's PNG glyph bitmaps (fontdue draws outlines only).
 ttf-parser = "0.25"
 
+# Opens the system's libhunspell at runtime for the `hunspell` feature, so
+# neither hunspell's headers nor libclang are needed to build.
+libloading = { version = "0.8", optional = true }
+
 # Only for the standalone `mechanix-osk` binary.
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 
@@ -23,6 +27,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = tr
 # Builds the `mechanix-osk` binary: the keyboard as its own process, for
 # shells other than the launcher. `cargo build -p keyboard --features standalone`
 standalone = ["dep:tracing-subscriber"]
+# Hunspell corrections in the suggestion bar, merged with the word list's
+# completions. Opens libhunspell and the /usr/share/hunspell dictionaries at
+# runtime; without them the source is left out.
+hunspell = ["dep:libloading"]
 
 [[bin]]
 name = "mechanix-osk"

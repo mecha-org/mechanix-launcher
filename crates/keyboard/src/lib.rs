@@ -10,6 +10,8 @@
 
 #![recursion_limit = "1024"]
 
+mod complete;
+mod dictionaries;
 mod feedbackd;
 mod field;
 mod input;

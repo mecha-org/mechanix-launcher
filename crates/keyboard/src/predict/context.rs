@@ -20,6 +20,11 @@ pub(crate) struct TypingContext {
     surrounding: String,
     /// Letters committed locally since the last surrounding update.
     local: String,
+    /// Word part after the cursor, as reported by the client (the caret was
+    /// moved into a word).
+    after: String,
+    /// Bumped on every change, so a reader can tell the word changed.
+    rev: u64,
 }
 impl Resource for TypingContext {}
 
@@ -29,11 +34,29 @@ impl TypingContext {
         format!("{}{}", self.surrounding, self.local)
     }
 
+    /// The word part after the cursor; empty unless the client reported one.
+    pub(crate) fn word_after(&self) -> &str {
+        &self.after
+    }
+
+    /// A number that changes whenever the word does.
+    pub(crate) fn rev(&self) -> u64 {
+        self.rev
+    }
+
     /// Take the client's surrounding text; the prefix becomes the word run
-    /// immediately before byte offset `cursor`. An invalid cursor gives an
-    /// empty prefix. Drops the local part, which the client's text supersedes.
+    /// immediately before byte offset `cursor`, the word after it the run
+    /// right after. An invalid cursor gives an empty word. Drops the local
+    /// part, which the client's text supersedes.
     pub(crate) fn set_surrounding(&mut self, text: &str, cursor: u32) {
+        self.rev += 1;
         self.local.clear();
+        self.after = match text.get(cursor as usize..) {
+            Some(rest) if text.is_char_boundary(cursor as usize) => {
+                rest.chars().take_while(|&c| is_word_char(c)).collect()
+            }
+            _ => String::new(),
+        };
         self.surrounding = match text.get(..cursor as usize) {
             Some(before) => {
                 let run: String = before
@@ -49,12 +72,18 @@ impl TypingContext {
 
     /// Record committed text; returns the words it finished, in order.
     pub(crate) fn committed(&mut self, text: &str) -> Vec<String> {
+        self.rev += 1;
         let mut done = Vec::new();
         for c in text.chars() {
             if is_word_char(c) {
                 self.local.push(c);
-            } else if let Some(word) = self.end_word() {
-                done.push(word);
+            } else {
+                // The word now ends here; what was after the cursor follows
+                // the separator, not this word.
+                self.after.clear();
+                if let Some(word) = self.end_word() {
+                    done.push(word);
+                }
             }
         }
         done
@@ -62,6 +91,7 @@ impl TypingContext {
 
     /// A single character was deleted before the cursor.
     pub(crate) fn backspace(&mut self) {
+        self.rev += 1;
         if self.local.pop().is_none() {
             self.surrounding.pop();
         }
@@ -81,10 +111,19 @@ impl TypingContext {
         (!word.is_empty()).then_some(word)
     }
 
+    /// A suggestion replaced the whole word around the cursor with
+    /// `insert`: record that, returning the words it finished.
+    pub(crate) fn replaced_word(&mut self, insert: &str) -> Vec<String> {
+        self.clear();
+        self.committed(insert)
+    }
+
     /// Drop the word without returning it.
     pub(crate) fn clear(&mut self) {
+        self.rev += 1;
         self.surrounding.clear();
         self.local.clear();
+        self.after.clear();
     }
 
     /// Forget everything (a field was activated, deactivated or changed).
@@ -191,6 +230,49 @@ mod tests {
         c.committed("l");
         c.reset();
         assert_eq!(c.prefix(), "");
+    }
+
+    #[test]
+    fn surrounding_sets_the_word_after_the_cursor() {
+        let mut c = TypingContext::default();
+        c.set_surrounding("hello wor ld", 8);
+        assert_eq!((c.prefix().as_str(), c.word_after()), ("wo", "r"));
+        c.set_surrounding("é", 1);
+        assert_eq!(c.word_after(), "");
+    }
+
+    #[test]
+    fn a_separator_ends_the_word_after_too() {
+        let mut c = TypingContext::default();
+        c.set_surrounding("abcd", 2);
+        c.committed(" ");
+        assert_eq!((c.prefix().as_str(), c.word_after()), ("", ""));
+    }
+
+    #[test]
+    fn replacing_the_word_finishes_the_new_one() {
+        let mut c = TypingContext::default();
+        c.set_surrounding("documen", 7);
+        assert_eq!(c.replaced_word("documents "), vec!["documents".to_string()]);
+        assert_eq!(c.prefix(), "");
+    }
+
+    #[test]
+    fn every_change_bumps_the_revision() {
+        let mut c = TypingContext::default();
+        let mut last = c.rev();
+        let mut step = |c: &mut TypingContext| {
+            assert_ne!(c.rev(), last);
+            last = c.rev();
+        };
+        c.committed("a");
+        step(&mut c);
+        c.backspace();
+        step(&mut c);
+        c.set_surrounding("x", 1);
+        step(&mut c);
+        c.clear();
+        step(&mut c);
     }
 
     #[test]
