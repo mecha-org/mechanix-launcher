@@ -11,6 +11,7 @@ pub struct RichTextBuilder {
 pub struct RichText {
     /// One text node per run, in order.
     texts: Vec<Handle<mw::Text>>,
+    wrap: TextWrap,
 }
 
 impl Build for RichTextBuilder {
@@ -25,18 +26,22 @@ impl Widget for RichText {
         let texts = builder
             .runs
             .into_iter()
-            .map(|run| s.spawn(me, run_text(run)))
+            .map(|run| s.spawn(me, run_text(run, TextWrap::NoWrap)))
             .collect();
-        Self { texts }
+        Self {
+            texts,
+            wrap: TextWrap::NoWrap,
+        }
     }
 }
 
-fn run_text(run: Run) -> mw::TextBuilder {
+fn run_text(run: Run, wrap: TextWrap) -> mw::TextBuilder {
     let words = mw::text(run.words)
         .variant(text::CARD_BODY.variant)
         .color(text::CARD_BODY.color)
         .max_lines(1)
-        .overflow(TextOverflow::Ellipsis);
+        .overflow(TextOverflow::Ellipsis)
+        .wrap(wrap);
     let Some(style) = run.style else {
         return words;
     };
@@ -46,6 +51,7 @@ fn run_text(run: Run) -> mw::TextBuilder {
 
 pub trait RichTextExt {
     fn set_run(&mut self, run: Vec<Run>);
+    fn set_text_wrap(&mut self, wrap: TextWrap);
 }
 
 impl RichTextExt for Context<'_, RichText> {
@@ -62,7 +68,8 @@ impl RichTextExt for Context<'_, RichText> {
                     new_texts.push(text);
                 }
                 None => {
-                    new_texts.push(self.spawn(me, run_text(run)));
+                    let wrap = self.me().wrap;
+                    new_texts.push(self.spawn(me, run_text(run, wrap)));
                 }
             }
         }
@@ -71,6 +78,15 @@ impl RichTextExt for Context<'_, RichText> {
             self.remove(text);
         }
         self.me().texts = new_texts;
+    }
+
+    fn set_text_wrap(&mut self, wrap: TextWrap) {
+        self.me().wrap = wrap;
+        for text in self.me().texts.clone() {
+            if let Some(mut node) = self.at(text) {
+                TextContextExt::set_wrap(&mut node, wrap);
+            }
+        }
     }
 }
 

@@ -5,6 +5,7 @@ use crate::{
     dbus::{NotificationServer, on_call},
     dbus_spec::register_notifications_interface,
     notification_store::NotificationStore,
+    notifications::on_store_changed,
     notify_signal::notify_signal,
 };
 
@@ -20,6 +21,7 @@ impl Module for NotificationsModule {
 
         app.system(notify_signal);
         app.system(on_call);
+        app.system(on_store_changed);
 
         app.init_resource::<NotificationStore>();
         crate::ongoing::install(app);

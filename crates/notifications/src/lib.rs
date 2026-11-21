@@ -9,6 +9,7 @@ pub mod card_options;
 pub mod count_badge;
 pub mod dbus;
 pub mod dbus_spec;
+pub mod empty_notifications_screen;
 pub mod group;
 pub mod hints;
 pub mod image;
@@ -25,6 +26,9 @@ pub mod popup;
 pub mod rich_text;
 pub mod snooze_controls;
 pub mod style;
+
+#[cfg(test)]
+mod tests;
 
 use crate::notifications::NotificationsCenterBuilder;
 pub use module::NotificationsModule;

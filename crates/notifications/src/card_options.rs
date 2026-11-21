@@ -1,4 +1,6 @@
-use crate::style::{color, size, space, text};
+use crate::card::restyle;
+use crate::card_drag::open_offset;
+use crate::style::{color, space, text};
 use mecha_wayland::mechanix_widgets as mw;
 use mecha_wayland::prelude::*;
 
@@ -31,10 +33,8 @@ impl CardOption {
         }
     }
 
-    fn style(self) -> LayoutStyle {
-        let fixed = LayoutStyle::default()
-            .width(px(size::OPTIONS_WIDTH))
-            .shrink(0.0);
+    fn style(self, width: f32) -> LayoutStyle {
+        let fixed = LayoutStyle::default().width(px(width)).shrink(0.0).center();
         match self {
             Self::Options => fixed,
             Self::Dismiss => fixed.grow(1.0),
@@ -46,7 +46,9 @@ pub struct CardOptionsBuilder {
     pub card: NodeId,
 }
 
-pub struct CardOptions {}
+pub struct CardOptions {
+    buttons: [Handle<Div>; 2],
+}
 
 impl Build for CardOptionsBuilder {
     type Widget = CardOptions;
@@ -60,12 +62,12 @@ impl Widget for CardOptions {
         s.component_mut::<Viewport>(me).unwrap().clip = true;
 
         let card = builder.card;
-        for option in CardOption::ALL {
+        let buttons = CardOption::ALL.map(|option| {
             let option_button = s.spawn(
                 me,
                 div()
                     .background(s.color(option.color()))
-                    .style(option.style().center()),
+                    .style(option.style(0.0)),
             );
             s.spawn(
                 option_button,
@@ -83,13 +85,29 @@ impl Widget for CardOptions {
                 };
                 ctx.emit(CardOptionsPressed { option, anchor }, card);
             });
-        }
+            option_button
+        });
 
-        CardOptions {}
+        CardOptions { buttons }
     }
 }
 
-pub fn style(offset: f32) -> LayoutStyle {
+pub fn reveal(n: &mut Context<'_, CardOptions>, offset: f32, card_width: f32) {
+    restyle(n, style(offset));
+    let width = button_width(card_width);
+    let buttons = n.me().buttons;
+    for (option, button) in CardOption::ALL.into_iter().zip(buttons) {
+        if let Some(mut b) = n.at(button) {
+            restyle(&mut b, option.style(width));
+        }
+    }
+}
+
+fn button_width(card_width: f32) -> f32 {
+    (open_offset(card_width) / 2.0 - space::SWIPE_GAP.dp()).max(0.0)
+}
+
+fn style(offset: f32) -> LayoutStyle {
     let gap = space::SWIPE_GAP.dp();
     let width = (-offset - gap).max(0.0);
     LayoutStyle::default()
@@ -103,4 +121,21 @@ pub fn style(offset: f32) -> LayoutStyle {
         } else {
             Display::Hidden
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::style::size;
+
+    #[test]
+    fn buttons_follow_the_card_and_stop_at_figma() {
+        assert_eq!(button_width(524.0), size::OPTIONS_WIDTH, "Figma card");
+        assert_eq!(button_width(1200.0), size::OPTIONS_WIDTH);
+        let narrow = button_width(300.0);
+        assert!(narrow > 0.0 && narrow < size::OPTIONS_WIDTH);
+        // Options, Clear and their gaps fill exactly where the card rests.
+        let gaps = 2.0 * space::SWIPE_GAP.dp();
+        assert!((2.0 * narrow + gaps - open_offset(300.0)).abs() < 0.01);
+    }
 }

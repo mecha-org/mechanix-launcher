@@ -106,6 +106,11 @@ impl Stack {
         std::mem::take(&mut self.fired)
     }
 
+    /// The contact driving the gesture in progress, if any.
+    pub fn live_contact(&self) -> Option<u32> {
+        self.live.as_ref().map(|l| l.contact)
+    }
+
     fn add(&mut self, spec: ContainerSpec, parent: Option<usize>, rows: &mut Vec<ScreenRow>) {
         assert!(
             self.nodes.iter().all(|n| n.id != spec.id),

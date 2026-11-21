@@ -1,4 +1,6 @@
 use crate::card_list::CardListBuilder;
+use crate::empty_notifications_screen::EmptyNotificationsScreenBuilder;
+use crate::notification_store::NotificationStore;
 use crate::notify_signal::NotificationSignal;
 use crate::ongoing::OngoingListBuilder;
 use crate::options_menu::{OptionsMenu, OptionsMenuBuilder};
@@ -8,6 +10,36 @@ use mecha_wayland::prelude::*;
 
 pub struct NotificationsCenter {
     pub menu: Handle<OptionsMenu>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum CenterView {
+    Content,
+    Empty,
+}
+
+impl From<&NotificationStore> for CenterView {
+    fn from(store: &NotificationStore) -> Self {
+        if store.entries.is_empty() {
+            Self::Empty
+        } else {
+            Self::Content
+        }
+    }
+}
+
+pub struct ShowView(pub CenterView);
+impl Event for ShowView {}
+
+pub(crate) fn on_store_changed(app: &mut App, _: &OnChanged<NotificationStore>) {
+    let view = CenterView::from(app.resource::<NotificationStore>());
+    let centers: Vec<_> = app
+        .widgets::<NotificationsCenter>()
+        .map(|(id, _)| id)
+        .collect();
+    for center in centers {
+        app.emit(ShowView(view), center);
+    }
 }
 
 pub struct NotificationsCenterBuilder;
@@ -74,9 +106,54 @@ impl Widget for NotificationsCenter {
         s.on::<Clicked>(close_all_notifications, move |ctx, _| {
             ctx.signal(NotificationSignal::CloseAllNotifications)
         });
-        s.spawn(me, CardListBuilder);
+        // The list, swapped with the empty view; hidden until the first notification.
+        let content = s.spawn(
+            me,
+            div().style(
+                LayoutStyle::default()
+                    .column()
+                    .width(percent(100.0))
+                    .grow(1.0)
+                    .min_height(px(0.0))
+                    .hidden(),
+            ),
+        );
+        let scroll = s.spawn(
+            content,
+            scrollable().style(
+                LayoutStyle::default()
+                    .block()
+                    .width(percent(100.0))
+                    .grow(1.0)
+                    .min_height(px(0.0)),
+            ),
+        );
+        s.spawn(scroll, CardListBuilder);
+        let empty = s.spawn(me, EmptyNotificationsScreenBuilder);
         let menu = s.spawn(me, OptionsMenuBuilder);
 
+        s.on::<ShowView>(me, move |ctx, e| match e.0 {
+            CenterView::Content => {
+                set_display(ctx, content, Display::Flex);
+                set_display(ctx, empty, Display::Hidden);
+            }
+            CenterView::Empty => {
+                set_display(ctx, content, Display::Hidden);
+                set_display(ctx, empty, Display::Flex);
+            }
+        });
+
         NotificationsCenter { menu }
+    }
+}
+
+fn set_display<W: Widget, T: Widget>(ctx: &mut Context<'_, W>, node: Handle<T>, display: Display) {
+    let Some(mut n) = ctx.at(node) else {
+        return;
+    };
+    if let Some(mut style) = n.component_mut::<LayoutStyle>()
+        && style.display != display
+    {
+        style.display = display;
     }
 }

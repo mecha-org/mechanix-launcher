@@ -17,10 +17,7 @@ const MOUSE_CONTACT: u32 = u32::MAX;
 /// went down on, so releases and cancels need no window check beyond
 /// the contact being pressed.
 pub(crate) fn on_contact(app: &mut App, c: &ContactInput) {
-    let contact = match c.contact {
-        ContactId::Mouse => MOUSE_CONTACT,
-        ContactId::Touch(id) => id,
-    };
+    let contact = stack_contact(c.contact);
     let t = Instant::now();
     let live = app.is_live(c.window);
     {
@@ -79,6 +76,30 @@ pub(crate) fn on_contact(app: &mut App, c: &ContactInput) {
     };
     for f in fired {
         f(app);
+    }
+}
+
+/// A widget claimed a contact: nav forgets it and cancels its gesture.
+pub(crate) fn on_claimed(app: &mut App, c: &ContactClaimed) {
+    let contact = stack_contact(c.contact);
+    {
+        let mut nav = app.resource_mut::<Nav>();
+        if !nav.pressed.contains(&contact) {
+            return;
+        }
+        nav.pressed.retain(|&p| p != contact);
+        if nav.stack.live_contact() != Some(contact) {
+            return;
+        }
+        nav.stack.handle(Input::Cancel);
+    }
+    apply(app);
+}
+
+fn stack_contact(contact: ContactId) -> u32 {
+    match contact {
+        ContactId::Mouse => MOUSE_CONTACT,
+        ContactId::Touch(id) => id,
     }
 }
 
@@ -175,6 +196,45 @@ mod tests {
             assert_eq!(display(&app, node_of(&app, HOME)), Display::Hidden);
             assert!(app.resource::<Nav>().pressed.is_empty());
         }
+    }
+
+    #[test]
+    fn a_claimed_contact_fires_nothing() {
+        let mut app = app_with(module(false));
+        let strip = window_of(&app, BOTTOM_EDGE);
+        app.emit(
+            Resized {
+                size: Size::new(600.0, 20.0),
+            },
+            strip,
+        );
+        app.flush();
+        contact(&mut app, strip, ContactPhase::Pressed, 300.0, 10.0);
+        contact(&mut app, strip, ContactPhase::Moved, 300.0, 0.0);
+        app.signal(ContactClaimed {
+            contact: ContactId::Touch(0),
+            by: strip,
+        });
+        app.flush();
+        assert!(app.resource::<Nav>().pressed.is_empty());
+        assert_eq!(app.resource::<Nav>().stack.live_contact(), None);
+        contact(&mut app, strip, ContactPhase::Moved, 300.0, -70.0);
+        contact(&mut app, strip, ContactPhase::Released, 300.0, -70.0);
+        app.signal(Frame(window_of(&app, crate::core::AreaId("home"))));
+        app.flush();
+        assert_eq!(display(&app, node_of(&app, HOME)), Display::Hidden);
+    }
+
+    #[test]
+    fn a_claim_on_a_contact_nav_never_saw_is_ignored() {
+        let mut app = app_with(module(false));
+        let strip = window_of(&app, BOTTOM_EDGE);
+        app.signal(ContactClaimed {
+            contact: ContactId::Touch(7),
+            by: strip,
+        });
+        app.flush();
+        assert!(app.resource::<Nav>().pressed.is_empty());
     }
 
     #[test]

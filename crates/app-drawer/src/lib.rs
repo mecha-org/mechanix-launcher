@@ -7,7 +7,6 @@ mod rank;
 mod row;
 mod search_bar;
 
-use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -34,7 +33,6 @@ pub struct AppDrawer {
     icon_dirs: Rc<IconDirs>,
     launcher: Launcher,
     activator: Activator,
-    at_top: Rc<Cell<bool>>,
 }
 
 impl AppDrawer {
@@ -59,7 +57,6 @@ impl AppDrawer {
             icon_dirs: Rc::new(icon_dirs),
             launcher: Rc::new(launch::start),
             activator: Rc::new(drawer::activate_toplevel),
-            at_top: Rc::new(Cell::new(true)),
         }
     }
 
@@ -73,11 +70,6 @@ impl AppDrawer {
     pub(crate) fn activator(mut self, f: impl Fn(&mut App, ToplevelId) + 'static) -> AppDrawer {
         self.activator = Rc::new(f);
         self
-    }
-
-    /// Whether the list rests at its top: the gate for the nav's close swipe.
-    pub fn at_top(&self) -> Rc<Cell<bool>> {
-        self.at_top.clone()
     }
 }
 
@@ -95,7 +87,6 @@ impl Screen for AppDrawer {
             DrawerBuilder {
                 data_dirs: self.data_dirs.clone(),
                 icon_dirs: self.icon_dirs.clone(),
-                at_top: self.at_top.clone(),
             },
         )
         .id()
