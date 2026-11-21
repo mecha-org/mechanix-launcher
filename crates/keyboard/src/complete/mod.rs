@@ -54,7 +54,7 @@ pub(crate) struct Candidate {
 }
 
 /// A source of word suggestions. Implement this to plug in a new engine.
-pub(crate) trait Completer: Send {
+pub(crate) trait Completer {
     /// Candidates for the word in `q`, best first. May return more than
     /// `q.max`, and words equal to the typed one; the caller drops those.
     fn suggest(&mut self, q: &Query) -> Vec<Candidate>;
