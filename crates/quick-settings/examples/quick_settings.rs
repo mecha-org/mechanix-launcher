@@ -45,7 +45,7 @@ fn main() {
     app.insert_resource(FontBook::new(font));
 
     app.add_module(RingModule::default())
-        .add_module(DBusModule::new().system())
+        .add_module(DBusModule::new().system().session())
         .add_module(PulseAudioModule)
         .add_module(VolumeControlModule)
         .add_module(TimerModule)

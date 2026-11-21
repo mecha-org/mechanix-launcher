@@ -21,6 +21,8 @@ pub struct BrightnessSlider {
     pub slider: Handle<Slider>,
     throttle: TimerId,
     pending: Option<f32>,
+    /// The daemon's lowest level; the slider stays at or above it.
+    minimum: f32,
 }
 
 pub struct BrightnessSliderBuilder;
@@ -76,16 +78,26 @@ impl Widget for BrightnessSlider {
             }
         });
         s.on::<SliderChange>(slider_handle, |ctx, event| {
+            let minimum = ctx.me().minimum;
+            let value = event.value.max(minimum);
+            if value != event.value {
+                // Hold the thumb at the daemon's floor.
+                let slider = ctx.me().slider;
+                if let Some(mut slider) = ctx.at(slider) {
+                    slider.set_value(value);
+                }
+            }
             let throttle = ctx.me().throttle;
             if ctx.timer_running(throttle) {
-                ctx.me().pending = Some(event.value);
+                ctx.me().pending = Some(value);
             } else {
-                ctx.signal(SetBrightness(event.value));
+                ctx.signal(SetBrightness(value));
                 ctx.start_timer(throttle);
             }
         });
 
         s.on::<BrightnessChanged>(me, |ctx, event| {
+            ctx.me().minimum = event.minimum;
             let slider = ctx.me().slider;
             if let Some(mut slider) = ctx.at(slider) {
                 // Don't yank the thumb while the user is moving it.
@@ -100,6 +112,7 @@ impl Widget for BrightnessSlider {
             slider: slider_handle,
             throttle,
             pending: None,
+            minimum: MIN_BRIGHTNESS,
         }
     }
 }
