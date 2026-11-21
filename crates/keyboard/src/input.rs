@@ -13,7 +13,6 @@ use mecha_wayland::prelude::*;
 use xkbcommon::xkb::Keysym;
 
 use crate::complete::Completion;
-use crate::feedbackd;
 use crate::field::Field;
 use crate::layout::{KeyAction, Modifier};
 use crate::modifiers::latch::{LatchedState, consume_latch, toggle_latch};
@@ -270,8 +269,9 @@ pub(crate) fn accept_suggestion(ctx: &mut Context<'_, Keyboard>, index: usize) {
         tracing::warn!("suggestion tapped with no active input method; ignored");
         return;
     }
+    // No haptic here: the touch gave one when it landed on the suggestion,
+    // as a key's press does.
     tracing::info!(word = %suggestion.label, kind = ?suggestion.kind, "accepted suggestion");
-    feedbackd::key_pressed(ctx);
     let words = ctx
         .resource_mut::<TypingContext>()
         .replaced_word(&suggestion.edit.insert);

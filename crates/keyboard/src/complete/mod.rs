@@ -125,7 +125,7 @@ impl Completion {
     /// it gets no suggestions (and so no bar).
     fn policy(&self, field: Field, active: bool) -> Option<Policy> {
         (self.enabled() && active)
-            .then(|| config::policy(field))
+            .then(|| config::policy(field, self.cfg.append_space))
             .flatten()
     }
 

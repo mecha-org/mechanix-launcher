@@ -23,6 +23,10 @@ pub(crate) enum Backend {
     Merge(Vec<Backend>),
 }
 
+/// Whether accepting a suggestion also types a space after the word (in
+/// fields where that fits; never in addresses).
+pub(crate) const APPEND_SPACE: bool = false;
+
 /// Completion settings.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CompletionConfig {
@@ -31,6 +35,9 @@ pub(crate) struct CompletionConfig {
     pub(crate) backend: Backend,
     /// Most suggestions shown at once.
     pub(crate) max: usize,
+    /// Whether accepting a suggestion types a space after it; see
+    /// [`APPEND_SPACE`].
+    pub(crate) append_space: bool,
 }
 
 impl CompletionConfig {
@@ -46,6 +53,7 @@ impl CompletionConfig {
             enabled: true,
             backend,
             max: 3,
+            append_space: APPEND_SPACE,
         }
     }
 }
@@ -57,14 +65,15 @@ pub(crate) struct Policy {
     pub(crate) append_space: bool,
 }
 
-/// The policy for `field`; `None` means no suggestions, and no bar.
-/// Sensitive fields never get any; nor do terminals, numbers and phones.
-pub(crate) fn policy(field: Field) -> Option<Policy> {
+/// The policy for `field`, a space following accepted words where it fits
+/// if `append_space`; `None` means no suggestions, and no bar. Sensitive
+/// fields never get any; nor do terminals, numbers and phones.
+pub(crate) fn policy(field: Field, append_space: bool) -> Option<Policy> {
     if field.sensitive {
         return None;
     }
     match field.family {
-        Family::Text => Some(Policy { append_space: true }),
+        Family::Text => Some(Policy { append_space }),
         // An address goes on after a completed part (`.`, `@`, `/`).
         Family::Email | Family::Url => Some(Policy {
             append_space: false,
@@ -109,18 +118,27 @@ mod tests {
     }
 
     #[test]
-    fn text_gets_suggestions_with_a_space() {
-        assert_eq!(
-            policy(field(Family::Text, false)),
-            Some(Policy { append_space: true })
-        );
+    fn no_space_by_default() {
+        assert!(!CompletionConfig::hardcoded().append_space);
     }
 
     #[test]
-    fn addresses_get_suggestions_without_a_space() {
+    fn text_gets_a_space_only_when_configured() {
+        for space in [true, false] {
+            assert_eq!(
+                policy(field(Family::Text, false), space),
+                Some(Policy {
+                    append_space: space
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn addresses_never_get_a_space() {
         for f in [Family::Email, Family::Url] {
             assert_eq!(
-                policy(field(f, false)),
+                policy(field(f, false), true),
                 Some(Policy {
                     append_space: false
                 })
@@ -130,14 +148,14 @@ mod tests {
 
     #[test]
     fn sensitive_terminal_number_and_phone_get_none() {
-        assert_eq!(policy(field(Family::Text, true)), None);
+        assert_eq!(policy(field(Family::Text, true), true), None);
         for f in [
             Family::Password,
             Family::Terminal,
             Family::Number,
             Family::Phone,
         ] {
-            assert_eq!(policy(field(f, false)), None, "{f:?}");
+            assert_eq!(policy(field(f, false), true), None, "{f:?}");
         }
     }
 }
