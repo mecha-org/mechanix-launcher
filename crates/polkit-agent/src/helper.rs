@@ -81,13 +81,13 @@
 //! - `SO_PEERCRED`, unix(7):
 //!   <https://man7.org/linux/man-pages/man7/unix.7.html>
 
-use std::ffi::CStr;
 use std::net::Shutdown;
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 
 use mecha_wayland::prelude::*;
+use nix::unistd::{Uid, User};
 use zeroize::Zeroize;
 
 use crate::agent::{AuthCancelled, AuthFinished, AuthRequested, Identity};
@@ -602,40 +602,16 @@ fn choose_uid(identities: &[Identity], own: u32) -> Option<u32> {
 }
 
 fn own_uid() -> u32 {
-    // SAFETY: getuid has no preconditions and cannot fail.
-    unsafe { libc::getuid() }
+    Uid::current().as_raw()
 }
 
 /// The name of the user with `uid`, from the passwd database.
 fn user_name(uid: u32) -> Option<String> {
-    let mut buf = vec![0u8; 1024];
-    loop {
-        // SAFETY: an all-zero passwd is a valid value to be overwritten.
-        let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
-        let mut result: *mut libc::passwd = std::ptr::null_mut();
-        // SAFETY: `pwd`, `buf` and `result` outlive the call, and `buf`'s
-        // length is what is passed.
-        let rc = unsafe {
-            libc::getpwuid_r(
-                uid,
-                &mut pwd,
-                buf.as_mut_ptr().cast(),
-                buf.len(),
-                &mut result,
-            )
-        };
-        if rc == libc::ERANGE && buf.len() < 1 << 20 {
-            buf.resize(buf.len() * 2, 0);
-            continue;
-        }
-        if rc != 0 || result.is_null() || pwd.pw_name.is_null() {
-            return None;
-        }
-        // SAFETY: on success `pw_name` points to a NUL-terminated string
-        // in `buf`, which is still alive.
-        let name = unsafe { CStr::from_ptr(pwd.pw_name) };
-        return name.to_str().ok().map(str::to_owned);
-    }
+    User::from_uid(Uid::from_raw(uid))
+        .ok()
+        .flatten()
+        .map(|u| u.name)
+        .filter(|n| !n.is_empty())
 }
 
 #[cfg(test)]
