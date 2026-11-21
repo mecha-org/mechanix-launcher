@@ -5,13 +5,14 @@
 
 use mecha_wayland::prelude::*;
 
-use crate::complete::SuggestionsChanged;
+use crate::complete::{self, CARET_SETTLE, CaretMoved, Completion, SuggestionsChanged};
 use crate::layout::style::KeyState;
 use crate::layout::tokens::{Font, Fonts};
 use crate::layout::{Cell, Family, KeyAction, Keymap, Modifier, Page};
 use crate::modifiers::pointing_stick;
 use crate::modifiers::shift::{self, HOLD_LOCK, Shift};
 use crate::predict::TypingContext;
+use crate::protocol::input_method::InputMethodState;
 use crate::scale::KeyboardGeometry;
 use crate::touch::long_press::LONG_PRESS;
 use crate::touch::{self, KeyEntry, TouchState, TouchTracker, letter_views};
@@ -297,13 +298,13 @@ impl Widget for Keyboard {
 
         touch::attach(s, me);
         // A field was focused: cancel any touch first (even on the same
-        // view, nothing it holds belongs in the new field), then drop the
-        // word typed for the previous field rather than finish (and record)
-        // it, drop Shift and the pointing stick's select mode, and show the
-        // field's view.
+        // view, nothing it holds belongs in the new field), drop Shift and
+        // the pointing stick's select mode, and show the field's view. The
+        // word was already reset by the input method's activate, which then
+        // took the word under the caret from the client: clearing it here
+        // would lose that (a tap inside a word re-activates the field).
         s.on::<SwitchView>(me, |ctx, event| {
             touch::abort(ctx);
-            ctx.resource_mut::<TypingContext>().clear();
             ctx.resource_mut::<Shift>().reset();
             shift::refresh(ctx);
             pointing_stick::reset(ctx);
@@ -315,20 +316,33 @@ impl Widget for Keyboard {
             }
         });
 
+        // The suggestions changed: fill the bar, and show or hide it.
+        s.on::<SuggestionsChanged>(me, show_suggestions);
+
+        // The caret moved: the bar keeps what it shows until the caret has
+        // rested for `CARET_SETTLE` (each move restarts the wait), then
+        // follows it.
+        let settle_timer = s.add_timeout(CARET_SETTLE, |ctx, _| {
+            let e = {
+                let (mut completion, typing, st) = ctx.fetch::<(
+                    ResMut<Completion>,
+                    Res<TypingContext>,
+                    Res<InputMethodState>,
+                )>();
+                complete::settle(&mut completion, typing, st)
+            };
+            if let Some(e) = e {
+                show_suggestions(ctx, &e);
+            }
+        });
+        s.on::<CaretMoved>(me, move |ctx, _| {
+            ctx.start_timer(settle_timer);
+        });
+
         // Every hide (flick, input-method deactivate, `hide_keyboard`) ends
         // here: cancel any touch so nothing is typed into a hidden keyboard
         // and no long-press opens a row on it, and drop Shift and the
         // pointing stick's select mode.
-        // The suggestions changed: fill the bar, and show or hide it, which
-        // changes the keyboard's height.
-        s.on::<SuggestionsChanged>(me, |ctx, e| {
-            if e.shown != ctx.me().bar_shown && ctx.me().bar_height > 0.0 {
-                set_bar_shown(ctx, e.shown);
-            }
-            let bar = ctx.me().bar.id();
-            ctx.emit(BarFeedback::Show(e.labels.clone()), [bar]);
-        });
-
         s.on::<ApplyKeyboardVisibility>(me, |ctx, _| {
             if ctx.keyboard_visible() {
                 return;
@@ -363,6 +377,16 @@ impl Widget for Keyboard {
             bar_shown: false,
         }
     }
+}
+
+/// Fill the suggestion bar, showing or hiding it (which changes the
+/// keyboard's height) as `e` says.
+fn show_suggestions(ctx: &mut Context<'_, Keyboard>, e: &SuggestionsChanged) {
+    if e.shown != ctx.me().bar_shown && ctx.me().bar_height > 0.0 {
+        set_bar_shown(ctx, e.shown);
+    }
+    let bar = ctx.me().bar.id();
+    ctx.emit(BarFeedback::Show(e.labels.clone()), [bar]);
 }
 
 /// Show or hide the suggestion bar: the container's top padding makes or

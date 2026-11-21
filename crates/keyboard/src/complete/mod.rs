@@ -9,11 +9,16 @@
 //! [`refresh`] runs after every tick: when the word, the focused field or the
 //! input method's state changed, it asks the active source again and tells
 //! the keyboard ([`SuggestionsChanged`]), which shows or hides the bar and
-//! fills it.
+//! fills it. Typing refreshes at once; a caret move (a tap in the text, a
+//! glide, the pointing stick) only once the caret has rested for
+//! [`CARET_SETTLE`] ([`CaretMoved`], then [`settle`]), so a moving caret
+//! neither runs the sources at every step nor flickers the bar.
 
 mod backends;
 pub(crate) mod config;
 mod edit;
+
+use std::time::Duration;
 
 use mecha_wayland::prelude::*;
 
@@ -21,10 +26,13 @@ pub(crate) use edit::{Suggestion, TextEdit};
 
 use crate::dictionaries::Dictionaries;
 use crate::field::Field;
-use crate::predict::TypingContext;
+use crate::predict::{Change, TypingContext};
 use crate::protocol::input_method::InputMethodState;
 use crate::widget::keyboard::Keyboard;
 use config::{CompletionConfig, Policy};
+
+/// How long the caret must rest before the suggestions follow it.
+pub(crate) const CARET_SETTLE: Duration = Duration::from_millis(150);
 
 /// What a source is asked about: the word around the cursor.
 #[derive(Debug, Clone, Copy)]
@@ -71,8 +79,11 @@ pub(crate) struct Completion {
     completer: Option<Box<dyn Completer>>,
     /// What the bar shows now, in order.
     pub(crate) current: Vec<Suggestion>,
-    /// The inputs [`refresh`] last computed for, to skip unchanged ticks.
+    /// The inputs [`refresh`] last saw, to skip unchanged ticks.
     seen: Option<Inputs>,
+    /// The caret moved since `current` was computed and has not yet rested:
+    /// its edits no longer match the text.
+    stale: bool,
 }
 impl Resource for Completion {}
 
@@ -92,7 +103,17 @@ impl Completion {
             completer,
             current: Vec::new(),
             seen: None,
+            stale: false,
         }
+    }
+
+    /// The suggestion at `index`, if the bar shows one that still matches
+    /// the text (not while the caret is settling).
+    pub(crate) fn get(&self, index: usize) -> Option<&Suggestion> {
+        if self.stale {
+            return None;
+        }
+        self.current.get(index)
     }
 
     /// Whether the keyboard has a suggestion bar at all.
@@ -144,41 +165,107 @@ pub(crate) struct SuggestionsChanged {
 }
 impl Event for SuggestionsChanged {}
 
-/// System: after each tick, recompute the suggestions if the word, the
-/// focused field or the input method's state changed, and tell the keyboard.
+/// The keyboard's cue that the caret moved: (re)start the wait for it to
+/// rest, then call [`settle`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CaretMoved;
+impl Event for CaretMoved {}
+
+/// The focused field and whether the input method is active.
+fn field_state(st: &InputMethodState) -> (Field, bool) {
+    let field = Field::from_purpose(st.current.purpose, st.current.hint);
+    (field, st.should_commit())
+}
+
+/// Recompute the suggestions now, for the current word and field.
+fn recompute(
+    completion: &mut Completion,
+    ctx: &TypingContext,
+    field: Field,
+    active: bool,
+) -> SuggestionsChanged {
+    completion.stale = false;
+    let policy = completion.policy(field, active);
+    completion.current = match policy {
+        Some(p) => completion.suggest(ctx, p),
+        None => Vec::new(),
+    };
+    SuggestionsChanged {
+        shown: policy.is_some(),
+        labels: completion.current.iter().map(|s| s.label.clone()).collect(),
+    }
+}
+
+/// What [`refresh`] does about a change.
+#[derive(Debug, PartialEq, Eq)]
+enum Step {
+    /// Nothing changed.
+    Skip,
+    /// Recompute now.
+    Now,
+    /// The caret moved within the same field: wait for it to rest.
+    Settle,
+}
+
+/// The step for inputs going from `before` to `now`, the word's last change
+/// being `last`.
+fn step(before: Option<Inputs>, now: Inputs, last: Change) -> Step {
+    match before {
+        Some(b) if b == now => Step::Skip,
+        Some(b) if b.field == now.field && b.active == now.active && last == Change::Moved => {
+            Step::Settle
+        }
+        _ => Step::Now,
+    }
+}
+
+/// System: after each tick, if the word, the focused field or the input
+/// method's state changed, recompute the suggestions and tell the keyboard,
+/// or, for a caret move, have the keyboard wait for the caret to rest.
 pub(crate) fn refresh(app: &mut App, _: &PostTick) {
     if !app.has_resource::<Completion>() || !app.has_resource::<InputMethodState>() {
         return;
     }
-    let (active, field) = {
-        let st = app.resource::<InputMethodState>();
-        (
-            st.should_commit(),
-            Field::from_purpose(st.current.purpose, st.current.hint),
-        )
-    };
-    let inputs = Inputs {
-        rev: app.resource::<TypingContext>().rev(),
-        field,
-        active,
-    };
-    let (shown, labels) = {
-        let (mut completion, ctx) = app.query::<(ResMut<Completion>, Res<TypingContext>)>();
-        if completion.seen == Some(inputs) {
-            return;
-        }
-        completion.seen = Some(inputs);
-        let policy = completion.policy(field, active);
-        let current = match policy {
-            Some(p) => completion.suggest(ctx, p),
-            None => Vec::new(),
-        };
-        let labels = current.iter().map(|s| s.label.clone()).collect();
-        completion.current = current;
-        (policy.is_some(), labels)
-    };
+    let (field, active) = field_state(app.resource::<InputMethodState>());
     let targets: Vec<NodeId> = app.widgets::<Keyboard>().map(|(id, _)| id).collect();
-    app.emit(SuggestionsChanged { shown, labels }, targets);
+    let event = {
+        let (mut completion, ctx) = app.query::<(ResMut<Completion>, Res<TypingContext>)>();
+        let inputs = Inputs {
+            rev: ctx.rev(),
+            field,
+            active,
+        };
+        let step = step(completion.seen, inputs, ctx.last_change());
+        completion.seen = Some(inputs);
+        match step {
+            Step::Skip => return,
+            // Without suggestions there is nothing to go stale or flicker.
+            Step::Settle if completion.policy(field, active).is_none() => return,
+            Step::Settle => {
+                completion.stale = true;
+                None
+            }
+            Step::Now => Some(recompute(&mut completion, ctx, field, active)),
+        }
+    };
+    match event {
+        Some(e) => app.emit(e, targets),
+        None => app.emit(CaretMoved, targets),
+    }
+}
+
+/// The caret has rested: recompute the suggestions if a move left them
+/// stale. `None` if they are current.
+pub(crate) fn settle(
+    completion: &mut Completion,
+    ctx: &TypingContext,
+    st: &InputMethodState,
+) -> Option<SuggestionsChanged> {
+    if !completion.stale {
+        return None;
+    }
+    let (field, active) = field_state(st);
+    Some(recompute(completion, ctx, field, active))
 }
 
 #[cfg(test)]
@@ -225,6 +312,54 @@ mod tests {
         let c = completion();
         assert!(c.policy(text(), false).is_none());
         assert!(c.policy(text(), true).is_some());
+    }
+
+    fn inputs(rev: u64, family: Family) -> Inputs {
+        Inputs {
+            rev,
+            field: Field {
+                family,
+                sensitive: false,
+            },
+            active: true,
+        }
+    }
+
+    #[test]
+    fn typing_refreshes_now_and_caret_moves_settle() {
+        let a = inputs(1, Family::Text);
+        assert_eq!(step(Some(a), a, Change::Moved), Step::Skip);
+        assert_eq!(
+            step(Some(a), inputs(2, Family::Text), Change::Typed),
+            Step::Now
+        );
+        assert_eq!(
+            step(Some(a), inputs(2, Family::Text), Change::Moved),
+            Step::Settle
+        );
+        // A new field, or the first look, shows (or hides) the bar at once.
+        assert_eq!(
+            step(Some(a), inputs(2, Family::Email), Change::Moved),
+            Step::Now
+        );
+        assert_eq!(step(None, a, Change::Moved), Step::Now);
+    }
+
+    #[test]
+    fn stale_suggestions_cannot_be_taken_until_settled() {
+        let mut c = completion();
+        let ctx = typed("documen");
+        recompute(&mut c, &ctx, text(), true);
+        assert!(c.get(0).is_some());
+        c.stale = true;
+        assert!(c.get(0).is_none());
+        // The default state has no active input method: settling recomputes
+        // for that, hiding the bar.
+        let st = InputMethodState::default();
+        let e = settle(&mut c, &ctx, &st).unwrap();
+        assert!(!e.shown);
+        assert!(c.get(0).is_none());
+        assert!(settle(&mut c, &ctx, &st).is_none());
     }
 
     #[test]

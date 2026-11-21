@@ -13,6 +13,18 @@ fn is_word_char(c: char) -> bool {
     c.is_alphabetic() || c == '\''
 }
 
+/// What last changed the word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum Change {
+    /// Something was typed here: a commit, a backspace, an accepted
+    /// suggestion.
+    #[default]
+    Typed,
+    /// The caret moved, or the word was dropped: the client reported a
+    /// different word around the caret, or a key moved it somewhere unknown.
+    Moved,
+}
+
 /// The word currently being typed.
 #[derive(Default)]
 pub(crate) struct TypingContext {
@@ -25,6 +37,8 @@ pub(crate) struct TypingContext {
     after: String,
     /// Bumped on every change, so a reader can tell the word changed.
     rev: u64,
+    /// What made the last change.
+    last: Change,
 }
 impl Resource for TypingContext {}
 
@@ -44,20 +58,29 @@ impl TypingContext {
         self.rev
     }
 
+    /// What made the last change.
+    pub(crate) fn last_change(&self) -> Change {
+        self.last
+    }
+
+    fn changed(&mut self, kind: Change) {
+        self.rev += 1;
+        self.last = kind;
+    }
+
     /// Take the client's surrounding text; the prefix becomes the word run
     /// immediately before byte offset `cursor`, the word after it the run
     /// right after. An invalid cursor gives an empty word. Drops the local
-    /// part, which the client's text supersedes.
+    /// part, which the client's text supersedes. The client's echo of what
+    /// was just typed here is no change; any other word is a caret move.
     pub(crate) fn set_surrounding(&mut self, text: &str, cursor: u32) {
-        self.rev += 1;
-        self.local.clear();
-        self.after = match text.get(cursor as usize..) {
+        let after = match text.get(cursor as usize..) {
             Some(rest) if text.is_char_boundary(cursor as usize) => {
                 rest.chars().take_while(|&c| is_word_char(c)).collect()
             }
             _ => String::new(),
         };
-        self.surrounding = match text.get(..cursor as usize) {
+        let surrounding: String = match text.get(..cursor as usize) {
             Some(before) => {
                 let run: String = before
                     .chars()
@@ -68,11 +91,17 @@ impl TypingContext {
             }
             None => String::new(),
         };
+        let same = surrounding == self.prefix() && after == self.after;
+        self.surrounding = surrounding;
+        self.after = after;
+        self.local.clear();
+        if !same {
+            self.changed(Change::Moved);
+        }
     }
 
     /// Record committed text; returns the words it finished, in order.
     pub(crate) fn committed(&mut self, text: &str) -> Vec<String> {
-        self.rev += 1;
         let mut done = Vec::new();
         for c in text.chars() {
             if is_word_char(c) {
@@ -81,20 +110,21 @@ impl TypingContext {
                 // The word now ends here; what was after the cursor follows
                 // the separator, not this word.
                 self.after.clear();
-                if let Some(word) = self.end_word() {
+                if let Some(word) = self.take_word() {
                     done.push(word);
                 }
             }
         }
+        self.changed(Change::Typed);
         done
     }
 
     /// A single character was deleted before the cursor.
     pub(crate) fn backspace(&mut self) {
-        self.rev += 1;
         if self.local.pop().is_none() {
             self.surrounding.pop();
         }
+        self.changed(Change::Typed);
     }
 
     /// A held backspace ended after `held_ms`; long holds drop the word.
@@ -106,21 +136,32 @@ impl TypingContext {
 
     /// Finish the current word, returning it if non-empty.
     pub(crate) fn end_word(&mut self) -> Option<String> {
-        let word = self.prefix();
-        self.clear();
-        (!word.is_empty()).then_some(word)
+        let word = self.take_word();
+        self.changed(Change::Moved);
+        word
     }
 
     /// A suggestion replaced the whole word around the cursor with
     /// `insert`: record that, returning the words it finished.
     pub(crate) fn replaced_word(&mut self, insert: &str) -> Vec<String> {
-        self.clear();
+        self.drop_word();
         self.committed(insert)
     }
 
     /// Drop the word without returning it.
     pub(crate) fn clear(&mut self) {
-        self.rev += 1;
+        self.drop_word();
+        self.changed(Change::Moved);
+    }
+
+    /// Take the word out, leaving none; not counted as a change.
+    fn take_word(&mut self) -> Option<String> {
+        let word = self.prefix();
+        self.drop_word();
+        (!word.is_empty()).then_some(word)
+    }
+
+    fn drop_word(&mut self) {
         self.surrounding.clear();
         self.local.clear();
         self.after.clear();
@@ -255,6 +296,40 @@ mod tests {
         c.set_surrounding("documen", 7);
         assert_eq!(c.replaced_word("documents "), vec!["documents".to_string()]);
         assert_eq!(c.prefix(), "");
+    }
+
+    #[test]
+    fn the_clients_echo_of_typing_is_no_change() {
+        let mut c = TypingContext::default();
+        c.set_surrounding("hello wo", 8);
+        c.committed("r");
+        let rev = c.rev();
+        c.set_surrounding("hello wor", 9);
+        assert_eq!(c.rev(), rev);
+        assert_eq!(c.last_change(), Change::Typed);
+        assert_eq!(c.prefix(), "wor");
+    }
+
+    #[test]
+    fn a_different_word_around_the_caret_is_a_move() {
+        let mut c = TypingContext::default();
+        c.committed("wor");
+        c.set_surrounding("hello world", 3);
+        assert_eq!(c.last_change(), Change::Moved);
+        assert_eq!((c.prefix().as_str(), c.word_after()), ("hel", "lo"));
+        c.committed("p");
+        assert_eq!(c.last_change(), Change::Typed);
+        c.clear();
+        assert_eq!(c.last_change(), Change::Moved);
+    }
+
+    #[test]
+    fn typing_a_separator_is_typing() {
+        let mut c = TypingContext::default();
+        c.committed("hi ");
+        assert_eq!(c.last_change(), Change::Typed);
+        c.replaced_word("there ");
+        assert_eq!(c.last_change(), Change::Typed);
     }
 
     #[test]

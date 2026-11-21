@@ -257,7 +257,9 @@ pub(crate) fn release(ctx: &mut Context<'_, Keyboard>) {
 /// stick's select mode and spends a one-shot shift.
 pub(crate) fn accept_suggestion(ctx: &mut Context<'_, Keyboard>, index: usize) {
     pointing_stick::reset(ctx);
-    let Some(suggestion) = ctx.resource::<Completion>().current.get(index).cloned() else {
+    // While the caret settles the bar shows the last word's suggestions,
+    // whose edits no longer fit: a tap then does nothing.
+    let Some(suggestion) = ctx.resource::<Completion>().get(index).cloned() else {
         return;
     };
     let sent = {

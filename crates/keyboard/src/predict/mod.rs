@@ -5,7 +5,7 @@ mod context;
 mod dictionary;
 mod profile;
 
-pub(crate) use context::TypingContext;
+pub(crate) use context::{Change, TypingContext};
 pub(crate) use dictionary::DictionaryPredictor;
 pub(crate) use profile::Prediction;
 
