@@ -282,7 +282,7 @@ pub(crate) fn accept_suggestion(ctx: &mut Context<'_, Keyboard>, index: usize) {
         let mut typing = ctx.resource_mut::<TypingContext>();
         let original = format!("{}{}", typing.prefix(), typing.word_after());
         let words = typing.replaced_word(&suggestion.edit.insert);
-        (words, original, typing.rev())
+        (words, original, typing.local_rev())
     };
     ctx.resource_mut::<Completion>()
         .remember_undo(original, suggestion.edit.insert.clone(), rev);
@@ -294,11 +294,10 @@ pub(crate) fn accept_suggestion(ctx: &mut Context<'_, Keyboard>, index: usize) {
 /// [`Completion::take_undo`]): the suggestion's text is replaced by the word
 /// as it was typed, the caret after it. Returns whether it did.
 fn undo_suggestion(ctx: &mut Context<'_, Keyboard>) -> bool {
-    let rev = ctx.resource::<TypingContext>().rev();
-    let Some(undo) = ctx
-        .resource_mut::<Completion>()
-        .take_undo(rev, std::time::Instant::now())
-    else {
+    let Some(undo) = ({
+        let (mut completion, typing) = ctx.fetch::<(ResMut<Completion>, Res<TypingContext>)>();
+        completion.take_undo(typing, std::time::Instant::now())
+    }) else {
         return false;
     };
     let sent = {

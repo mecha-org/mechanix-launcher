@@ -96,9 +96,10 @@ pub(crate) struct Undo {
     pub(crate) original: String,
     /// What the suggestion typed in its place, ending at the caret.
     inserted: String,
-    /// The typing context's revision right after: any later change to the
-    /// word makes the undo stale.
-    rev: u64,
+    /// The typing context's local revision right after: anything this
+    /// keyboard does to the text first makes the undo stale. The client's
+    /// reports do not (an app may report the edit in steps).
+    local_rev: u64,
     at: Instant,
 }
 
@@ -136,24 +137,27 @@ impl Completion {
     }
 
     /// A suggestion replaced `original` with `inserted`, leaving the typing
-    /// context at revision `rev`: remember how to undo it.
-    pub(crate) fn remember_undo(&mut self, original: String, inserted: String, rev: u64) {
+    /// context at local revision `local_rev`: remember how to undo it.
+    pub(crate) fn remember_undo(&mut self, original: String, inserted: String, local_rev: u64) {
         self.undo = Some(Undo {
             original,
             inserted,
-            rev,
+            local_rev,
             at: Instant::now(),
         });
     }
 
     /// The undo of the last accepted suggestion, if it is still good at
-    /// `now` with the typing context at revision `rev`: within
-    /// [`config::UNDO_WINDOW`] and nothing changed the word since. It can be
+    /// `now` for the typing context `ctx`: within [`config::UNDO_WINDOW`],
+    /// nothing typed or pressed here since, and the inserted text still
+    /// right before the caret (the caret was not moved away). It can be
     /// taken once.
-    pub(crate) fn take_undo(&mut self, rev: u64, now: Instant) -> Option<Undo> {
+    pub(crate) fn take_undo(&mut self, ctx: &TypingContext, now: Instant) -> Option<Undo> {
         let undo = self.undo.take()?;
         let fresh = now.saturating_duration_since(undo.at) <= config::UNDO_WINDOW;
-        (undo.rev == rev && fresh).then_some(undo)
+        let untouched = undo.local_rev == ctx.local_rev();
+        let in_place = ctx.before().ends_with(&undo.inserted);
+        (fresh && untouched && in_place).then_some(undo)
     }
 
     /// The suggestion at `index`, if the bar shows one that still matches
@@ -414,12 +418,22 @@ mod tests {
         assert!(settle(&mut c, &ctx, &st).is_none());
     }
 
+    /// A context where "teh" was just replaced by `inserted`, and `c`
+    /// remembering that.
+    fn accepted(c: &mut Completion, inserted: &str) -> TypingContext {
+        let mut ctx = TypingContext::default();
+        ctx.set_surrounding("say teh", 7);
+        ctx.replaced_word(inserted);
+        c.remember_undo("teh".into(), inserted.into(), ctx.local_rev());
+        ctx
+    }
+
     #[test]
     fn undo_restores_the_typed_word_once() {
         let mut c = completion();
-        c.remember_undo("teh".into(), "the".into(), 7);
+        let ctx = accepted(&mut c, "the");
         let now = Instant::now();
-        let undo = c.take_undo(7, now).unwrap();
+        let undo = c.take_undo(&ctx, now).unwrap();
         assert_eq!(
             undo.edit(),
             TextEdit {
@@ -428,19 +442,36 @@ mod tests {
                 insert: "teh".into()
             }
         );
-        assert!(c.take_undo(7, now).is_none());
+        assert!(c.take_undo(&ctx, now).is_none());
     }
 
     #[test]
-    fn undo_is_gone_after_a_change_or_the_window() {
+    fn undo_survives_the_app_reporting_the_edit_in_steps() {
         let mut c = completion();
-        c.remember_undo("teh".into(), "the ".into(), 7);
-        assert!(c.take_undo(8, Instant::now()).is_none());
+        let mut ctx = accepted(&mut c, "the ");
+        // The word deleted, then the replacement inserted, as GTK reports.
+        ctx.set_surrounding("say ", 4);
+        ctx.set_surrounding("say the ", 8);
+        assert!(c.take_undo(&ctx, Instant::now()).is_some());
+    }
+
+    #[test]
+    fn undo_is_gone_after_typing_a_caret_move_or_the_window() {
+        let mut c = completion();
+        let mut ctx = accepted(&mut c, "the");
+        ctx.committed("y");
+        assert!(c.take_undo(&ctx, Instant::now()).is_none());
         // A stale one is dropped, not kept for later.
-        assert!(c.take_undo(7, Instant::now()).is_none());
-        c.remember_undo("teh".into(), "the ".into(), 7);
+        ctx.backspace();
+        assert!(c.take_undo(&ctx, Instant::now()).is_none());
+
+        let mut ctx = accepted(&mut c, "the");
+        ctx.set_surrounding("say the word", 12);
+        assert!(c.take_undo(&ctx, Instant::now()).is_none(), "caret moved");
+
+        let ctx = accepted(&mut c, "the");
         let late = Instant::now() + config::UNDO_WINDOW + Duration::from_millis(1);
-        assert!(c.take_undo(7, late).is_none());
+        assert!(c.take_undo(&ctx, late).is_none());
     }
 
     #[test]

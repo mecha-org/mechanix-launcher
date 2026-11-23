@@ -8,6 +8,10 @@ use mecha_wayland::prelude::*;
 /// word being tracked can no longer be trusted and is dropped.
 pub(crate) const HOLD_CLEAR_MS: u32 = 400;
 
+/// The most text before the cursor kept, in bytes: enough to check that an
+/// accepted suggestion is still right before it.
+const BEFORE_CAP: usize = 256;
+
 /// Whether `c` belongs inside a word.
 fn is_word_char(c: char) -> bool {
     c.is_alphabetic() || c == '\''
@@ -35,8 +39,16 @@ pub(crate) struct TypingContext {
     /// Word part after the cursor, as reported by the client (the caret was
     /// moved into a word).
     after: String,
+    /// The text before the cursor, as far as it is known (the client's
+    /// surrounding text, then what was typed here), at most [`BEFORE_CAP`]
+    /// bytes; empty when unknown.
+    before: String,
     /// Bumped on every change, so a reader can tell the word changed.
     rev: u64,
+    /// Bumped on every change this keyboard made (typing, keys, a field
+    /// change), but not on the client's reports: those may come in steps
+    /// for one edit.
+    local_rev: u64,
     /// What made the last change.
     last: Change,
 }
@@ -63,9 +75,33 @@ impl TypingContext {
         self.last
     }
 
+    /// A number that changes whenever this keyboard changes the text or
+    /// the caret, but not when the client reports text.
+    pub(crate) fn local_rev(&self) -> u64 {
+        self.local_rev
+    }
+
+    /// The text before the cursor, as far as it is known (its tail).
+    pub(crate) fn before(&self) -> &str {
+        &self.before
+    }
+
+    /// Record a change this keyboard made.
     fn changed(&mut self, kind: Change) {
         self.rev += 1;
+        self.local_rev += 1;
         self.last = kind;
+    }
+
+    /// Keep only the last [`BEFORE_CAP`] bytes of `before`.
+    fn cap_before(&mut self) {
+        if self.before.len() > BEFORE_CAP {
+            let mut cut = self.before.len() - BEFORE_CAP;
+            while !self.before.is_char_boundary(cut) {
+                cut += 1;
+            }
+            self.before.drain(..cut);
+        }
     }
 
     /// Take the client's surrounding text; the prefix becomes the word run
@@ -95,13 +131,19 @@ impl TypingContext {
         self.surrounding = surrounding;
         self.after = after;
         self.local.clear();
+        self.before = text.get(..cursor as usize).unwrap_or_default().to_string();
+        self.cap_before();
+        // The client's report, not a change of ours: `local_rev` stays.
         if !same {
-            self.changed(Change::Moved);
+            self.rev += 1;
+            self.last = Change::Moved;
         }
     }
 
     /// Record committed text; returns the words it finished, in order.
     pub(crate) fn committed(&mut self, text: &str) -> Vec<String> {
+        self.before.push_str(text);
+        self.cap_before();
         let mut done = Vec::new();
         for c in text.chars() {
             if is_word_char(c) {
@@ -121,6 +163,7 @@ impl TypingContext {
 
     /// A single character was deleted before the cursor.
     pub(crate) fn backspace(&mut self) {
+        self.before.pop();
         if self.local.pop().is_none() {
             self.surrounding.pop();
         }
@@ -144,13 +187,20 @@ impl TypingContext {
     /// A suggestion replaced the whole word around the cursor with
     /// `insert`: record that, returning the words it finished.
     pub(crate) fn replaced_word(&mut self, insert: &str) -> Vec<String> {
+        // The part of the word before the cursor was deleted.
+        let prefix = self.prefix();
+        match self.before.strip_suffix(prefix.as_str()) {
+            Some(rest) => self.before.truncate(rest.len()),
+            None => self.before.clear(),
+        }
         self.drop_word();
         self.committed(insert)
     }
 
-    /// Drop the word without returning it.
+    /// Drop the word without returning it: the caret went somewhere unknown.
     pub(crate) fn clear(&mut self) {
         self.drop_word();
+        self.before.clear();
         self.changed(Change::Moved);
     }
 
@@ -330,6 +380,44 @@ mod tests {
         assert_eq!(c.last_change(), Change::Typed);
         c.replaced_word("there ");
         assert_eq!(c.last_change(), Change::Typed);
+    }
+
+    #[test]
+    fn before_follows_reports_typing_and_replacements() {
+        let mut c = TypingContext::default();
+        c.set_surrounding("say teh", 7);
+        assert_eq!(c.before(), "say teh");
+        c.replaced_word("the");
+        assert_eq!(c.before(), "say the");
+        c.backspace();
+        assert_eq!(c.before(), "say th");
+        c.committed("e ");
+        assert_eq!(c.before(), "say the ");
+        c.clear();
+        assert_eq!(c.before(), "");
+    }
+
+    #[test]
+    fn before_keeps_only_its_tail() {
+        let mut c = TypingContext::default();
+        c.committed(&"é".repeat(200));
+        assert!(c.before().len() <= BEFORE_CAP);
+        assert!(c.before().chars().all(|ch| ch == 'é'));
+    }
+
+    #[test]
+    fn client_reports_are_not_local_changes() {
+        let mut c = TypingContext::default();
+        c.committed("the");
+        let (rev, local) = (c.rev(), c.local_rev());
+        // An app reporting an edit in steps: the word deleted, then the new
+        // one inserted.
+        c.set_surrounding("", 0);
+        c.set_surrounding("the", 3);
+        assert_eq!(c.local_rev(), local);
+        assert_ne!(c.rev(), rev, "the word did change on the way");
+        c.backspace();
+        assert_ne!(c.local_rev(), local);
     }
 
     #[test]
