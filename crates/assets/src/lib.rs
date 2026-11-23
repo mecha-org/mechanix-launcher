@@ -13,6 +13,7 @@ pub mod icons {
     pub const ARROW_RIGHT: &[u8] = include_bytes!("../icons/arrow-right.svg");
     pub const SEARCH: &[u8] = include_bytes!("../icons/magnifying-glass.svg");
     pub const CLEAR: &[u8] = include_bytes!("../icons/x.svg");
+    pub const CHECK: &[u8] = include_bytes!("../icons/check.svg");
     pub const BACKSPACE: &[u8] = include_bytes!("../icons/backspace.svg");
     pub const ENTER: &[u8] = include_bytes!("../icons/enter.svg");
     /// Show a password as typed, and hide it again.
