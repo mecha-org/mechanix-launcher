@@ -25,6 +25,7 @@ hunspell-rs = { version = "0.4", default-features = false, optional = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 
 [features]
+default = ["hunspell"]
 # Builds the `mechanix-osk` binary: the keyboard as its own process, for
 # shells other than the launcher. `cargo build -p keyboard --features standalone`
 standalone = ["dep:tracing-subscriber"]
