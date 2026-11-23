@@ -220,8 +220,8 @@ pub(crate) fn hold_direction(ctx: &mut Context<'_, Keyboard>, ks: Keysym) {
 
 /// Tap the arrow for `d` `count` times, as a glide's caret steps: with
 /// Shift in the pointing stick's select mode, which is kept, and without
-/// latched modifiers (left for the next key). The caret moved somewhere
-/// unknown, so the word being typed is dropped.
+/// latched modifiers (left for the next key). The caret may have moved
+/// (see [`TypingContext::caret_key`]).
 pub(crate) fn tap_direction(ctx: &mut Context<'_, Keyboard>, d: Direction, count: u32) {
     let shift = if ctx.resource::<PointingStickMode>().select() {
         ctx.resource::<VirtualKeyboardState>().shift_mask
@@ -327,13 +327,13 @@ fn note_text(ctx: &mut Context<'_, Keyboard>, text: &str) {
 
 /// A non-printable keysym was sent (tapped, or the start of a hold): BackSpace
 /// deletes one character, Return and Tab finish the word, anything else (an
-/// arrow, Delete, Home, ...) moves the cursor somewhere unknown, so the word
-/// is dropped.
+/// arrow, Delete, Home, ...) may move the cursor (see
+/// [`TypingContext::caret_key`]).
 fn note_control(ctx: &mut Context<'_, Keyboard>, ks: Keysym) {
     match ks {
         Keysym::BackSpace => ctx.resource_mut::<TypingContext>().backspace(),
         Keysym::Return | Keysym::Tab => end_word(ctx),
-        _ => ctx.resource_mut::<TypingContext>().clear(),
+        _ => ctx.resource_mut::<TypingContext>().caret_key(),
     }
 }
 

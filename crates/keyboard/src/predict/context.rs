@@ -51,6 +51,9 @@ pub(crate) struct TypingContext {
     local_rev: u64,
     /// What made the last change.
     last: Change,
+    /// The client reports its surrounding text in this field, so it says
+    /// where the caret went after a key moved it.
+    reports: bool,
 }
 impl Resource for TypingContext {}
 
@@ -131,6 +134,7 @@ impl TypingContext {
         self.surrounding = surrounding;
         self.after = after;
         self.local.clear();
+        self.reports = true;
         self.before = text.get(..cursor as usize).unwrap_or_default().to_string();
         self.cap_before();
         // The client's report, not a change of ours: `local_rev` stays.
@@ -197,6 +201,19 @@ impl TypingContext {
         self.committed(insert)
     }
 
+    /// A key that may move the caret was sent (an arrow, Home, Delete, ...).
+    /// A client that reports its surrounding text says where the caret went,
+    /// and says nothing when it could not move (an arrow at the field's
+    /// end): until then the word is kept, the change only marked as a move.
+    /// Without reports the caret is somewhere unknown: the word is dropped.
+    pub(crate) fn caret_key(&mut self) {
+        if self.reports {
+            self.changed(Change::Moved);
+        } else {
+            self.clear();
+        }
+    }
+
     /// Drop the word without returning it: the caret went somewhere unknown.
     pub(crate) fn clear(&mut self) {
         self.drop_word();
@@ -220,6 +237,7 @@ impl TypingContext {
     /// Forget everything (a field was activated, deactivated or changed).
     pub(crate) fn reset(&mut self) {
         self.clear();
+        self.reports = false;
     }
 }
 
@@ -371,6 +389,36 @@ mod tests {
         assert_eq!(c.last_change(), Change::Typed);
         c.clear();
         assert_eq!(c.last_change(), Change::Moved);
+    }
+
+    #[test]
+    fn a_caret_key_keeps_the_word_when_the_client_reports() {
+        let mut c = TypingContext::default();
+        c.set_surrounding("docu", 4);
+        let rev = c.rev();
+        // An arrow at the field's end: the caret cannot move, and the
+        // client sends no report.
+        c.caret_key();
+        assert_eq!(c.prefix(), "docu");
+        assert_eq!(c.last_change(), Change::Moved);
+        assert_ne!(c.rev(), rev);
+        // The caret did move: the report says where.
+        c.caret_key();
+        c.set_surrounding("docu", 2);
+        assert_eq!((c.prefix().as_str(), c.word_after()), ("do", "cu"));
+    }
+
+    #[test]
+    fn a_caret_key_drops_the_word_without_reports() {
+        let mut c = TypingContext::default();
+        c.committed("docu");
+        c.caret_key();
+        assert_eq!(c.prefix(), "");
+        c.set_surrounding("docu", 4);
+        c.reset();
+        c.committed("docu");
+        c.caret_key();
+        assert_eq!(c.prefix(), "", "a new field has not reported yet");
     }
 
     #[test]
