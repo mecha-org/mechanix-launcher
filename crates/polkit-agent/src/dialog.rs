@@ -29,8 +29,12 @@ const ALL_SIDES: Anchor = Anchor::from_bits_truncate(
 /// The icons' size in the atlas.
 const ICON: u32 = 24;
 /// The header's icons (✕, ✓), and their tap area.
-const HEADER_ICON: f32 = 32.0;
+const HEADER_ICON: f32 = 20.0;
 const TAP: f32 = 48.0;
+/// The password field's height.
+const FIELD_HEIGHT: f32 = 40.0;
+/// The ✓'s round background, inside its tap area.
+const OK_CIRCLE: f32 = 32.0;
 /// The header's side padding: ✕ (48), the title, ✓ (48), no gaps.
 const HEADER_SIDE: f32 = 8.0;
 /// The ✓ icon's opacity while disabled.
@@ -40,6 +44,9 @@ const AVATAR: f32 = 40.0;
 
 /// The placeholder before the helper asks anything.
 const DEFAULT_PROMPT: &str = "Password";
+
+/// Said under the field while the helper checks an answer.
+const CHECKING: &str = "Authenticating…";
 
 /// Said under the field when the helper failed an answer.
 const WRONG: &str = "Incorrect password. Try again.";
@@ -83,6 +90,9 @@ struct Shown {
     /// The last prompt's text, kept as the placeholder between prompts.
     asked: Option<String>,
     note: Option<Note>,
+    /// An answer was sent: it stays in the field, disabled, until the
+    /// helper says what it made of it.
+    checking: bool,
 }
 
 struct Dialog {
@@ -160,13 +170,18 @@ pub(crate) fn install(app: &mut App) {
             prompt: None,
             asked: None,
             note: None,
+            checking: false,
         });
         set_mapped(app, true);
-        refresh(app, true);
+        refresh(app, Clear::All);
     })
     .system(|app, e: &AuthUser| {
-        update(app, &e.cookie, |s| s.user = Some(e.user.clone()));
+        update(app, &e.cookie, |s| {
+            s.user = Some(e.user.clone());
+            false
+        });
     })
+    // A new question: the answer sent, if any, goes.
     .system(|app, e: &AuthPrompt| {
         update(app, &e.cookie, |s| {
             s.asked = Some(e.text.clone());
@@ -174,6 +189,7 @@ pub(crate) fn install(app: &mut App) {
                 text: e.text.clone(),
                 echo: e.echo,
             });
+            std::mem::take(&mut s.checking)
         });
     })
     .system(|app, e: &AuthMessage| {
@@ -182,22 +198,28 @@ pub(crate) fn install(app: &mut App) {
                 text: e.text.clone(),
                 error: e.error,
             });
+            false
         });
     })
+    // Wrong: the field empties and shows the error until typing starts.
     .system(|app, e: &AuthRetry| {
         update(app, &e.cookie, |s| {
             s.prompt = None;
+            s.checking = false;
             s.note = Some(Note {
                 text: WRONG.into(),
                 error: true,
             });
+            true
         });
     })
-    // Sent: wait for the next prompt; the last note no longer holds.
+    // Sent: it is checked; the last note no longer holds.
     .system(|app, e: &AuthAnswer| {
         update(app, &e.cookie, |s| {
             s.prompt = None;
+            s.checking = true;
             s.note = None;
+            false
         });
     })
     .system(|app, e: &AuthFinished| close(app, &e.cookie))
@@ -205,15 +227,23 @@ pub(crate) fn install(app: &mut App) {
 }
 
 /// Change the shown request, if it is `cookie`'s, and show the change.
-fn update(app: &mut App, cookie: &str, change: impl FnOnce(&mut Shown)) {
-    {
+/// `change` says whether to empty the field.
+fn update(app: &mut App, cookie: &str, change: impl FnOnce(&mut Shown) -> bool) {
+    let empty_field = {
         let mut dialog = app.resource_mut::<Dialog>();
         let Some(shown) = dialog.shown(cookie) else {
             return;
         };
-        change(shown);
-    }
-    refresh(app, false);
+        change(shown)
+    };
+    refresh(
+        app,
+        if empty_field {
+            Clear::Field
+        } else {
+            Clear::Nothing
+        },
+    );
 }
 
 /// Hide the dialog, if it shows `cookie`'s request.
@@ -225,12 +255,12 @@ fn close(app: &mut App, cookie: &str) {
         }
         dialog.shown = None;
     }
-    refresh(app, true);
+    refresh(app, Clear::All);
     set_mapped(app, false);
 }
 
-/// Show the state; `clear` empties the field too.
-fn refresh(app: &mut App, clear: bool) {
+/// Show the state, clearing what `clear` says.
+fn refresh(app: &mut App, clear: Clear) {
     let view = app.resource::<Dialog>().view;
     app.emit(Refresh { clear }, view);
 }
@@ -247,10 +277,18 @@ fn set_mapped(app: &mut App, mapped: bool) {
 
 /// Show [`Dialog::shown`].
 struct Refresh {
-    /// Empty the field.
-    clear: bool,
+    clear: Clear,
 }
 impl Event for Refresh {}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Clear {
+    Nothing,
+    /// Empty the field.
+    Field,
+    /// Empty the field and hide ✓: a new request, or none.
+    All,
+}
 
 /// The dialog's view: the sheet and what is in it.
 pub struct PolkitDialog {
@@ -327,13 +365,32 @@ impl Widget for PolkitDialog {
         }
         {
             let mut style = s.component_mut::<LayoutStyle>(header).unwrap();
-            let edged = style.clone().column_gap(px(0.0)).padding(Insets::new(
-                px(Spacing::Space100.dp()),
-                px(HEADER_SIDE),
-                px(Spacing::Space100.dp()),
-                px(HEADER_SIDE),
-            ));
+            let edged = style
+                .clone()
+                .justify(Justify::Start)
+                .column_gap(px(0.0))
+                .padding(Insets::new(
+                    px(Spacing::Space100.dp()),
+                    px(HEADER_SIDE),
+                    px(Spacing::Space100.dp()),
+                    px(HEADER_SIDE),
+                ));
             *style = edged;
+        }
+        // Less above the user and between the user and the field, so the
+        // field sits higher, clear of the keys.
+        {
+            let mut style = s.component_mut::<LayoutStyle>(body).unwrap();
+            let raised = style
+                .clone()
+                .row_gap(px(Spacing::Space100.dp()))
+                .padding(Insets::new(
+                    px(0.0),
+                    px(Spacing::Space300.dp()),
+                    px(Spacing::Space300.dp()),
+                    px(Spacing::Space300.dp()),
+                ));
+            *style = raised;
         }
         let header_icon = Size::new(HEADER_ICON, HEADER_ICON);
         let cancel = s.spawn(header, div().style(tap_area()));
@@ -354,17 +411,29 @@ impl Widget for PolkitDialog {
                 .vertical_trim(VerticalTrim::CapHeight)
                 .color(ColorRole::OnSurface)
                 .max_lines(1)
-                .overflow(TextOverflow::Ellipsis),
+                .overflow(TextOverflow::Ellipsis)
+                // At the start, after ✕: the auto margin pushes ✓ to the end.
+                .style(LayoutStyle::default().margin(Insets::new(
+                    px(0.0),
+                    auto(),
+                    px(0.0),
+                    px(0.0),
+                ))),
         );
-        let ok = s.spawn(
-            header,
+        let ok = s.spawn(header, div().style(tap_area().hidden()));
+        let ok_circle = s.spawn(
+            ok,
             div()
-                .style(tap_area().hidden())
+                .style(
+                    LayoutStyle::default()
+                        .size(px(OK_CIRCLE), px(OK_CIRCLE))
+                        .center(),
+                )
                 .background(s.color(ColorRole::SurfaceContainerHighest))
-                .radius(TAP / 2.0),
+                .radius(OK_CIRCLE / 2.0),
         );
         let ok_icon = s.spawn(
-            ok,
+            ok_circle,
             icon(icons.confirm)
                 .size(header_icon)
                 .color(s.color(ColorRole::OnSurface).with_alpha(DISABLED_OPACITY)),
@@ -428,18 +497,13 @@ impl Widget for PolkitDialog {
         // The field: the text over a line, the eye over its right end.
         let answer = s.spawn(
             body,
-            div().style(
-                LayoutStyle::default()
-                    .column()
-                    .width(percent(100.0))
-                    .gap(px(Spacing::Space100.dp())),
-            ),
+            div().style(LayoutStyle::default().column().width(percent(100.0))),
         );
         let field = s.spawn(
             answer,
             div().style(LayoutStyle::default().relative().width(percent(100.0))),
         );
-        let inset = px(Spacing::Space300.dp());
+        let inset = px(Spacing::Space200.dp());
         let eye_room = px(TAP);
         let font = s.font(FontWeight::Regular);
         // As the placeholder over it.
@@ -459,7 +523,7 @@ impl Widget for PolkitDialog {
                         .row()
                         .align_items(Align::Center)
                         .width(percent(100.0))
-                        .min_height(eye_room)
+                        .min_height(px(FIELD_HEIGHT))
                         .padding(Insets::new(px(0.0), eye_room, px(0.0), inset)),
                 ),
         );
@@ -523,7 +587,12 @@ impl Widget for PolkitDialog {
             text("")
                 .variant(TextVariant::BodySmall)
                 .color(ColorRole::OnSurfaceVariant)
-                .style(LayoutStyle::default().padding(Insets::new(px(0.0), inset, px(0.0), inset))),
+                .style(LayoutStyle::default().padding(Insets::new(
+                    px(Spacing::Space100.dp()),
+                    inset,
+                    px(0.0),
+                    inset,
+                ))),
         );
 
         s.on::<InputSubmit>(input, |ctx, _| submit(ctx));
@@ -579,7 +648,7 @@ fn cancel_shown(ctx: &mut Context<'_, PolkitDialog>) {
 }
 
 /// Send what the field holds, if a prompt is open and something is
-/// typed, and empty it.
+/// typed. It stays in the field, masked, while it is checked.
 fn submit(ctx: &mut Context<'_, PolkitDialog>) {
     let cookie = ctx
         .resource::<Dialog>()
@@ -591,15 +660,15 @@ fn submit(ctx: &mut Context<'_, PolkitDialog>) {
         return;
     };
     let input = ctx.me().parts.input;
-    let Some(answer) = ctx.at(input).map(|mut i| i.take_text()) else {
+    let Some(answer) = ctx.widget::<Input>(input.id()).map(|i| i.secret()) else {
         return;
     };
-    ctx.me().empty = true;
     ctx.me().revealed = false;
     ctx.signal(AuthAnswer { cookie, answer });
 }
 
-/// Follow whether the field is empty. True if that changed.
+/// Follow whether the field is empty. True if that changed. Typing
+/// again after an error clears it.
 fn typed(ctx: &mut Context<'_, PolkitDialog>) -> bool {
     let input = ctx.me().parts.input;
     let empty = ctx
@@ -610,6 +679,12 @@ fn typed(ctx: &mut Context<'_, PolkitDialog>) -> bool {
     }
     ctx.me().empty = empty;
     ctx.me().started |= !empty;
+    if !empty
+        && let Some(s) = ctx.resource_mut::<Dialog>().shown.as_mut()
+        && s.note.as_ref().is_some_and(|n| n.error)
+    {
+        s.note = None;
+    }
     sync_field(ctx);
     true
 }
@@ -681,7 +756,12 @@ fn sync_field(ctx: &mut Context<'_, PolkitDialog>) {
         });
     }
 
-    let (line, error) = note.map(|n| (n.text, n.error)).unwrap_or_default();
+    let checking = shown.as_ref().is_some_and(|s| s.checking);
+    let (line, error) = match note {
+        Some(n) => (n.text, n.error),
+        None if checking => (CHECKING.into(), false),
+        None => Default::default(),
+    };
     if let Some(mut t) = ctx.at(p.note) {
         t.set_display(display(!line.is_empty()));
         t.set_text(line);
@@ -696,13 +776,15 @@ fn sync_field(ctx: &mut Context<'_, PolkitDialog>) {
 fn show(ctx: &mut Context<'_, PolkitDialog>, e: &Refresh) {
     let shown = ctx.resource::<Dialog>().shown.clone();
     let p = ctx.me().parts;
-    if e.clear {
+    if e.clear != Clear::Nothing {
         if let Some(mut i) = ctx.at(p.input) {
             // Dropped: the text is wiped.
             drop(i.take_text());
         }
         ctx.me().empty = true;
         ctx.me().revealed = false;
+    }
+    if e.clear == Clear::All {
         ctx.me().started = false;
     }
     // Back up, if the user dragged it away last time.

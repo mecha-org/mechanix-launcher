@@ -19,6 +19,7 @@ nav.workspace = true
 mecha-pulseaudio.workspace = true
 lockscreen.workspace = true
 power-menu.workspace = true
+polkit-agent.workspace = true
 services.workspace = true
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -42,6 +43,7 @@ members = [
     "crates/pulseaudio", "crates/control-center",
     "crates/lockscreen",
     "crates/power-menu",
+    "crates/polkit-agent",
 ]
 resolver = "3"
 
@@ -64,6 +66,7 @@ assets = { path = "crates/assets" }
 mecha-pulseaudio = { path = "crates/pulseaudio" }
 lockscreen = { path = "crates/lockscreen" }
 power-menu = { path = "crates/power-menu" }
+polkit-agent = { path = "crates/polkit-agent" }
 
 # Local development override — assumes mecha-wayland is cloned as a sibling
 # directory: ../mecha-wayland
