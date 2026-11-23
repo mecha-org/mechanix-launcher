@@ -1,36 +1,19 @@
-//! The dialog: a bottom sheet over the shell. Its header has Cancel (✕),
-//! the title and Authenticate (✓); its body says as whom and what is
-//! asked, and has the field for the answer with a line under it: how to
-//! answer, or PAM's last word.
+//! The polkit dialog: a bottom sheet asking for the password of the
+//! request's user.
 //!
-//! - [`AuthRequested`] shows it for that request, the field empty and
-//!   disabled until the helper asks something ([`AuthPrompt`]). The
-//!   prompt is the field's placeholder; the field masks what is typed
-//!   unless the prompt echoes, with an eye to show it.
-//! - Return in the field, or ✓ once something is typed, sends the field's
-//!   text as [`AuthAnswer`] and empties it. ✕, or dragging the sheet
-//!   down, sends [`AuthCancel`].
-//! - [`AuthMessage`] shows under the field; [`AuthRetry`] says to try
-//!   again. Typing hides the line.
-//! - [`AuthFinished`] or [`AuthCancelled`] for the request hides it.
+//! Shown on [`AuthRequested`], hidden on [`AuthFinished`] or
+//! [`AuthCancelled`]. Return or ✓ sends [`AuthAnswer`]; ✕ or dragging the
+//! sheet down sends [`AuthCancel`].
 //!
-//! The window is a `prompt` (mx_shell_surface_v1): above every other
-//! shell surface, except the on-screen keyboard while the prompt has the
-//! keyboard focus. So its keyboard interactivity is on demand: a tap on
-//! the field focuses the dialog and raises the keyboard over it. Without
-//! that protocol (sway, say) only the layer orders it: it is on the top
-//! layer, spawned before the keyboard's window, so the keys still show
-//! over it. The window keeps out of the zones other surfaces reserve, so
-//! it starts below the status bar. The sheet fills the window's height,
-//! so its content stays at the top, clear of the keys.
+//! The window is a top-layer `prompt` (mx_shell_surface_v1), spawned
+//! before the keyboard's, so the on-screen keyboard shows over it.
 //!
-//! Not yet: closing for the lock screen, a picker when several users may
-//! authenticate, the requesting program from the request's details.
+//! Not yet: closing for the lock screen, a user picker, the requesting
+//! program.
 
 use mecha_wayland::mechanix_widgets::prelude::{
-    BottomSheet, BottomSheetContextExt, Button, ButtonBuilder, ButtonContextExt, ButtonSize,
-    ButtonVariant, FontContextExt, FontWeight, SheetClosed, Text, TextContextExt, TextOverflow,
-    TextVariant, bottom_sheet, button, text,
+    BottomSheet, BottomSheetContextExt, FontContextExt, FontWeight, SheetClosed, Text,
+    TextContextExt, TextOverflow, TextVariant, VerticalTrim, bottom_sheet, text,
 };
 use mecha_wayland::prelude::*;
 
@@ -45,21 +28,33 @@ const ALL_SIDES: Anchor = Anchor::from_bits_truncate(
 
 /// The icons' size in the atlas.
 const ICON: u32 = 24;
+/// The header's icons (✕, ✓), and their tap area.
+const HEADER_ICON: f32 = 32.0;
+const TAP: f32 = 48.0;
+/// The header's side padding: ✕ (48), the title, ✓ (48), no gaps.
+const HEADER_SIDE: f32 = 8.0;
+/// The ✓ icon's opacity while disabled.
+const DISABLED_OPACITY: f32 = 0.10;
 /// The avatar's diameter.
-const AVATAR: f32 = 56.0;
-/// The header's buttons: square, as tall as a large button.
-const HEADER_BUTTON: ButtonSize = ButtonSize::Large;
+const AVATAR: f32 = 40.0;
 
 /// The placeholder before the helper asks anything.
 const DEFAULT_PROMPT: &str = "Password";
 
-/// The icons, loaded once. The eye's is what a press does.
+/// Said under the field when the helper failed an answer.
+const WRONG: &str = "Incorrect password. Try again.";
+
+/// The underline's width.
+const STROKE: f32 = 1.0;
+
+/// The icons, loaded once.
 #[derive(Clone, Copy)]
 struct Icons {
     close: SpriteId,
     confirm: SpriteId,
     show: SpriteId,
     hide: SpriteId,
+    warning: SpriteId,
 }
 impl Resource for Icons {}
 
@@ -108,25 +103,24 @@ impl Dialog {
     }
 }
 
-/// Spawn the dialog's window, hidden. Needs the window, presentation and
-/// theme modules, the [`Atlas`] and the `FontBook`; install before the
-/// keyboard so its keys show over the dialog.
+/// Spawn the dialog's window, hidden. Install before the keyboard.
 pub(crate) fn install(app: &mut App) {
     if app.has_resource::<Dialog>() {
         return;
     }
     let icons = {
         let mut atlas = app.resource_mut::<Atlas>();
-        let mut load = |svg, what| {
+        let mut load = |svg, size, what| {
             atlas
-                .insert_svg(svg, ICON)
+                .insert_svg(svg, size)
                 .unwrap_or_else(|e| panic!("the {what} icon loads: {e:?}"))
         };
         Icons {
-            close: load(assets::icons::CLEAR, "x"),
-            confirm: load(assets::icons::CHECK, "check"),
-            show: load(assets::icons::EYE, "eye"),
-            hide: load(assets::icons::EYE_SLASH, "eye-slash"),
+            close: load(assets::icons::CLEAR, HEADER_ICON as u32, "x"),
+            confirm: load(assets::icons::CHECK, HEADER_ICON as u32, "check"),
+            show: load(assets::icons::EYE, ICON, "eye"),
+            hide: load(assets::icons::EYE_SLASH, ICON, "eye-slash"),
+            warning: load(assets::icons::WARNING, ICON, "warning"),
         }
     };
     app.insert_resource(icons);
@@ -194,13 +188,18 @@ pub(crate) fn install(app: &mut App) {
         update(app, &e.cookie, |s| {
             s.prompt = None;
             s.note = Some(Note {
-                text: "Sorry, that didn't work. Please try again.".into(),
+                text: WRONG.into(),
                 error: true,
             });
         });
     })
-    // Sent: the field waits for the next question.
-    .system(|app, e: &AuthAnswer| update(app, &e.cookie, |s| s.prompt = None))
+    // Sent: wait for the next prompt; the last note no longer holds.
+    .system(|app, e: &AuthAnswer| {
+        update(app, &e.cookie, |s| {
+            s.prompt = None;
+            s.note = None;
+        });
+    })
     .system(|app, e: &AuthFinished| close(app, &e.cookie))
     .system(|app, e: &AuthCancelled| close(app, &e.cookie));
 }
@@ -260,21 +259,31 @@ pub struct PolkitDialog {
     empty: bool,
     /// A secret answer shows as typed.
     revealed: bool,
+    /// The field has the text focus: the keyboard is up.
+    focused: bool,
+    /// Something was typed for this request: ✓ shows from then on.
+    started: bool,
 }
 
 #[derive(Clone, Copy)]
 struct Parts {
     sheet: Handle<BottomSheet>,
-    ok: Handle<Button>,
+    /// ✓: hidden until typing starts, then dimmed while there is
+    /// nothing to send.
+    ok: Handle<Div>,
+    ok_icon: Handle<Icon>,
     initial: Handle<Text>,
     user: Handle<Text>,
     message: Handle<Text>,
     input: Handle<Input>,
     placeholder: Handle<Text>,
-    /// Shows or hides the text: there while the answer is secret and
-    /// something is typed.
+    /// Shows or hides a secret answer.
     reveal: Handle<Div>,
     eye: Handle<Icon>,
+    /// In the eye's place on an error.
+    alert: Handle<Div>,
+    /// Under the field: primary, or the error colour.
+    line: Handle<Div>,
     note: Handle<Text>,
 }
 
@@ -284,17 +293,12 @@ impl Build for PolkitDialogBuilder {
     type Widget = PolkitDialog;
 }
 
-/// A square, round, icon-only button for the header.
-fn header_button(variant: ButtonVariant, sprite: SpriteId) -> ButtonBuilder {
-    let side = px(HEADER_BUTTON.height());
-    button()
-        .variant(variant)
-        .size(HEADER_BUTTON)
-        .width(side)
-        .height(side)
-        .padding(Insets::all(px(0.0)))
-        .shape(Shape::Full)
-        .icon(sprite)
+/// A header icon's tap area.
+fn tap_area() -> LayoutStyle {
+    LayoutStyle::default()
+        .size(px(TAP), px(TAP))
+        .shrink(0.0)
+        .center()
 }
 
 impl Widget for PolkitDialog {
@@ -307,8 +311,7 @@ impl Widget for PolkitDialog {
             .size(percent(100.0), percent(100.0));
         let icons = *s.resource::<Icons>();
 
-        // As tall as the window: the content stays at the top, clear of
-        // the on-screen keyboard.
+        // As tall as the window: from the status bar down.
         let sheet = s.spawn(me, bottom_sheet().height(percent(100.0)));
         let (header, body, title) = {
             let w = s.widget::<BottomSheet>(sheet).expect("the sheet is built");
@@ -322,36 +325,59 @@ impl Widget for PolkitDialog {
             let hidden = style.clone().hidden();
             *style = hidden;
         }
-        let cancel = s.spawn(
-            header,
-            header_button(ButtonVariant::Text, icons.close).text_color(ColorRole::OnSurface),
+        {
+            let mut style = s.component_mut::<LayoutStyle>(header).unwrap();
+            let edged = style.clone().column_gap(px(0.0)).padding(Insets::new(
+                px(Spacing::Space100.dp()),
+                px(HEADER_SIDE),
+                px(Spacing::Space100.dp()),
+                px(HEADER_SIDE),
+            ));
+            *style = edged;
+        }
+        let header_icon = Size::new(HEADER_ICON, HEADER_ICON);
+        let cancel = s.spawn(header, div().style(tap_area()));
+        s.spawn(
+            cancel,
+            icon(icons.close)
+                .size(header_icon)
+                .color(s.color(ColorRole::OnSurface)),
         );
+        let title_large = s.typography(TextVariant::TitleLarge);
         s.spawn(
             header,
             text("Authentication required")
-                .variant(TextVariant::HeadlineSmall)
+                .variant(TextVariant::TitleLarge)
+                .weight(FontWeight::Regular)
+                .line_height(title_large.line_height)
+                .letter_spacing(title_large.letter_spacing)
+                .vertical_trim(VerticalTrim::CapHeight)
                 .color(ColorRole::OnSurface)
                 .max_lines(1)
-                .overflow(TextOverflow::Ellipsis)
-                .style(
-                    LayoutStyle::default()
-                        .grow(1.0)
-                        .shrink(1.0)
-                        .min_width(px(0.0)),
-                ),
+                .overflow(TextOverflow::Ellipsis),
         );
         let ok = s.spawn(
             header,
-            header_button(ButtonVariant::Tonal, icons.confirm).disabled(true),
+            div()
+                .style(tap_area().hidden())
+                .background(s.color(ColorRole::SurfaceContainerHighest))
+                .radius(TAP / 2.0),
+        );
+        let ok_icon = s.spawn(
+            ok,
+            icon(icons.confirm)
+                .size(header_icon)
+                .color(s.color(ColorRole::OnSurface).with_alpha(DISABLED_OPACITY)),
         );
 
         // As whom, and what for.
+        // The avatar stays beside the name however long the message is.
         let identity = s.spawn(
             body,
             div().style(
                 LayoutStyle::default()
                     .row()
-                    .align_items(Align::Center)
+                    .align_items(Align::Start)
                     .gap(px(Spacing::Space200.dp())),
             ),
         );
@@ -364,7 +390,7 @@ impl Widget for PolkitDialog {
                         .shrink(0.0)
                         .center(),
                 )
-                .background(s.color(ColorRole::SurfaceBright))
+                .background(s.color(ColorRole::SecondaryFixedDim))
                 .radius(AVATAR / 2.0),
         );
         let initial = s.spawn(
@@ -414,7 +440,7 @@ impl Widget for PolkitDialog {
             div().style(LayoutStyle::default().relative().width(percent(100.0))),
         );
         let inset = px(Spacing::Space300.dp());
-        let eye_room = px(HEADER_BUTTON.height());
+        let eye_room = px(TAP);
         let font = s.font(FontWeight::Regular);
         // As the placeholder over it.
         let text_size = s.typography(TextVariant::BodyLarge).font_size.round() as u16;
@@ -425,6 +451,7 @@ impl Widget for PolkitDialog {
                 .color(s.color(ColorRole::OnSurface))
                 .caret(s.color(ColorRole::Primary))
                 .background(Color::TRANSPARENT)
+                .border(0.0, Color::TRANSPARENT)
                 .content_hint(ContentHint::HIDDENTEXT | ContentHint::SENSITIVEDATA)
                 .content_purpose(ContentPurpose::Password)
                 .style(
@@ -457,8 +484,7 @@ impl Widget for PolkitDialog {
                 .max_lines(1)
                 .overflow(TextOverflow::Ellipsis),
         );
-        // Over the field's right end, beside the input: a press on it keeps
-        // the field's focus.
+        // Beside the input, so a press on it keeps the field's focus.
         let reveal = s.spawn(
             field,
             div().style(
@@ -474,10 +500,22 @@ impl Widget for PolkitDialog {
             reveal,
             icon(icons.show).color(s.color(ColorRole::OnSurface)),
         );
-        s.spawn(
+        let alert = s.spawn(
+            field,
+            div().style(
+                LayoutStyle::default()
+                    .absolute()
+                    .inset(Insets::new(px(0.0), px(0.0), px(0.0), auto()))
+                    .width(eye_room)
+                    .center()
+                    .hidden(),
+            ),
+        );
+        s.spawn(alert, icon(icons.warning).color(s.color(ColorRole::Error)));
+        let line = s.spawn(
             answer,
             div()
-                .style(LayoutStyle::default().size(percent(100.0), px(1.0)))
+                .style(LayoutStyle::default().size(percent(100.0), px(STROKE)))
                 .background(s.color(ColorRole::Primary)),
         );
         let note = s.spawn(
@@ -490,8 +528,16 @@ impl Widget for PolkitDialog {
 
         s.on::<InputSubmit>(input, |ctx, _| submit(ctx));
         // After the input's own handlers: what it holds now.
-        s.on::<InputFocus>(input, |ctx, _| typed(ctx));
-        s.on::<InputEdit>(input, |ctx, _| typed(ctx));
+        s.on::<InputFocus>(input, |ctx, e| {
+            let changed = ctx.me().focused != e.focused;
+            ctx.me().focused = e.focused;
+            if !typed(ctx) && changed {
+                sync_field(ctx);
+            }
+        });
+        s.on::<InputEdit>(input, |ctx, _| {
+            typed(ctx);
+        });
         s.on::<Clicked>(ok, |ctx, _| submit(ctx));
         s.on::<Clicked>(reveal, |ctx, _| {
             ctx.me().revealed ^= true;
@@ -505,6 +551,7 @@ impl Widget for PolkitDialog {
             parts: Parts {
                 sheet,
                 ok,
+                ok_icon,
                 initial,
                 user,
                 message,
@@ -512,10 +559,14 @@ impl Widget for PolkitDialog {
                 placeholder,
                 reveal,
                 eye,
+                alert,
+                line,
                 note,
             },
             empty: true,
             revealed: false,
+            focused: false,
+            started: false,
         }
     }
 }
@@ -527,7 +578,8 @@ fn cancel_shown(ctx: &mut Context<'_, PolkitDialog>) {
     }
 }
 
-/// Send what the field holds, if a prompt is open, and empty it.
+/// Send what the field holds, if a prompt is open and something is
+/// typed, and empty it.
 fn submit(ctx: &mut Context<'_, PolkitDialog>) {
     let cookie = ctx
         .resource::<Dialog>()
@@ -535,7 +587,7 @@ fn submit(ctx: &mut Context<'_, PolkitDialog>) {
         .as_ref()
         .filter(|s| s.prompt.is_some())
         .map(|s| s.cookie.clone());
-    let Some(cookie) = cookie else {
+    let Some(cookie) = cookie.filter(|_| !ctx.me().empty) else {
         return;
     };
     let input = ctx.me().parts.input;
@@ -547,18 +599,19 @@ fn submit(ctx: &mut Context<'_, PolkitDialog>) {
     ctx.signal(AuthAnswer { cookie, answer });
 }
 
-/// The field's text changed, or it was focused: follow whether it is
-/// empty.
-fn typed(ctx: &mut Context<'_, PolkitDialog>) {
+/// Follow whether the field is empty. True if that changed.
+fn typed(ctx: &mut Context<'_, PolkitDialog>) -> bool {
     let input = ctx.me().parts.input;
     let empty = ctx
         .widget::<Input>(input.id())
         .is_none_or(|i| i.text().is_empty());
     if ctx.me().empty == empty {
-        return;
+        return false;
     }
     ctx.me().empty = empty;
+    ctx.me().started |= !empty;
     sync_field(ctx);
+    true
 }
 
 /// The prompt as a placeholder: `Password: ` reads `Password`.
@@ -575,22 +628,32 @@ fn display(shown: bool) -> Display {
     }
 }
 
-/// Show the field, its placeholder, eye, the line under it and ✓ from the
-/// shown request and what is typed.
+/// Show the field's state: focused, empty, error.
 fn sync_field(ctx: &mut Context<'_, PolkitDialog>) {
     let shown = ctx.resource::<Dialog>().shown.clone();
-    let (p, empty, revealed) = {
+    let (p, empty, revealed, focused, started) = {
         let me = ctx.me();
-        (me.parts, me.empty, me.revealed)
+        (me.parts, me.empty, me.revealed, me.focused, me.started)
     };
     let icons = *ctx.resource::<Icons>();
     let prompt = shown.as_ref().and_then(|s| s.prompt.clone());
     let open = prompt.is_some();
     let secret = !prompt.as_ref().is_some_and(|q| q.echo);
+    let note = shown.as_ref().and_then(|s| s.note.clone());
+    let error = note.as_ref().is_some_and(|n| n.error);
+    let accent = ctx.color(if error {
+        ColorRole::Error
+    } else {
+        ColorRole::Primary
+    });
 
     if let Some(mut i) = ctx.at(p.input) {
         i.set_hidden(secret && !revealed);
         i.set_disabled(!open);
+        i.set_caret_color(accent);
+    }
+    if let Some(mut l) = ctx.at(p.line) {
+        l.set_background(accent);
     }
     let asked = shown.as_ref().and_then(|s| s.asked.as_deref());
     if let Some(mut t) = ctx.at(p.placeholder) {
@@ -598,23 +661,27 @@ fn sync_field(ctx: &mut Context<'_, PolkitDialog>) {
         t.set_display(display(empty));
     }
     if let Some(mut r) = ctx.at(p.reveal) {
-        r.set_display(display(secret && !empty));
+        r.set_display(display(secret && !empty && focused && !error));
     }
     if let Some(mut e) = ctx.at(p.eye) {
         e.set_sprite(if revealed { icons.hide } else { icons.show });
     }
+    if let Some(mut a) = ctx.at(p.alert) {
+        a.set_display(display(error));
+    }
     if let Some(mut b) = ctx.at(p.ok) {
-        b.set_disabled(!open || empty);
+        b.set_display(display(started));
+    }
+    let on_surface = ctx.color(ColorRole::OnSurface);
+    if let Some(mut i) = ctx.at(p.ok_icon) {
+        i.set_color(if open && !empty {
+            on_surface
+        } else {
+            on_surface.with_alpha(DISABLED_OPACITY)
+        });
     }
 
-    // Typing hides the line; empty, it says what happened or what to do.
-    let note = shown.as_ref().and_then(|s| s.note.clone());
-    let (line, error) = match note {
-        _ if !empty || shown.is_none() => (String::new(), false),
-        Some(n) => (n.text, n.error),
-        None if secret => ("Type your password, then press Enter".into(), false),
-        None => ("Type your answer, then press Enter".into(), false),
-    };
+    let (line, error) = note.map(|n| (n.text, n.error)).unwrap_or_default();
     if let Some(mut t) = ctx.at(p.note) {
         t.set_display(display(!line.is_empty()));
         t.set_text(line);
@@ -636,6 +703,7 @@ fn show(ctx: &mut Context<'_, PolkitDialog>, e: &Refresh) {
         }
         ctx.me().empty = true;
         ctx.me().revealed = false;
+        ctx.me().started = false;
     }
     // Back up, if the user dragged it away last time.
     if shown.is_some()

@@ -296,7 +296,6 @@ fn main() {
     app.add_module(RingModule::default())
         .add_module(TimerModule)
         .add_module(DBusModule::new().system().session())
-        .add_module(PolkitAgentModule)
         .add_module(PulseAudioModule)
         .add_module(VolumeControlModule)
         .add_module(
@@ -324,6 +323,8 @@ fn main() {
     app.add_module(navigation(cfg, AppDrawer::new()))
         .add_module(StatusBarModule)
         .add_module(NotificationsModule)
+        // Before the keyboard, so its keys show over the dialog.
+        .add_module(PolkitAgentModule)
         .add_module(KeyboardModule { bottom_gap })
         .add_module(QuickSettingsModule)
         .add_module(PowerMenuModule)

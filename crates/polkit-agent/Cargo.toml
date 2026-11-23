@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+assets.workspace = true
 mecha-wayland.workspace = true
-libc = "0.2"
+nix = { version = "0.32", default-features = false, features = ["user"] }
 tracing = "0.1"
 zeroize = "1.8"
 

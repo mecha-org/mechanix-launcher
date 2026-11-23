@@ -19,6 +19,7 @@ pub mod icons {
     /// Show a password as typed, and hide it again.
     pub const EYE: &[u8] = include_bytes!("../icons/eye.svg");
     pub const EYE_SLASH: &[u8] = include_bytes!("../icons/eye-slash.svg");
+    pub const WARNING: &[u8] = include_bytes!("../icons/warning-circle.svg");
     pub const POWER: &[u8] = include_bytes!("../icons/power.svg");
     /// Force close: end an app's processes.
     pub const SKULL: &[u8] = include_bytes!("../icons/skull.svg");
