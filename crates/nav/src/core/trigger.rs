@@ -22,6 +22,8 @@ pub enum ExternalEvent {
     /// The compositor stopped showing home by itself: an app came to the
     /// front over it, activated or newly opened.
     HomeLeft,
+    /// The session locked: the lock screen covers everything until unlock.
+    Locked,
     /// A fullscreen app is what shows: the focused window is fullscreen
     /// and no shell view covers it.
     FullscreenEntered,

@@ -4,7 +4,7 @@ use control_center::app_screens::AppScreen;
 use control_center::{ControlCenterScreen, select_screen};
 use home::Home;
 use keyboard::{KeyboardModule, hide_keyboard, show_keyboard, suspend_keyboard_zone};
-use lockscreen::{IdleModule, IdleSettings, LockSettings, LockscreenModule};
+use lockscreen::{IdleModule, IdleSettings, LockChanged, LockSettings, LockscreenModule};
 use mecha_pulseaudio::{PulseAudioModule, VolumeControlModule};
 use mecha_wayland::mechanix_widgets::prelude::{Clock, ClockTick, FontBook};
 use mecha_wayland::prelude::*;
@@ -12,7 +12,7 @@ use nav::core::{
     AreaId, BOTTOM_EDGE, ContainerId, Direction, ExternalEvent, FADE, INSTANT, NavConfig,
     OnExternal, Span, TOP_EDGE, Timing, container, swipe,
 };
-use nav::shell::{ContainerShown, NavModule, nav_window};
+use nav::shell::{ContainerShown, NavExternal, NavModule, nav_window};
 use notifications::NotificationsModule;
 use power_menu::PowerMenuModule;
 use quick_settings::QuickSettingsModule;
@@ -54,6 +54,14 @@ const BUDGET: Budget = Budget {
 /// The [`COVERS`] open now.
 struct OpenCovers(Vec<ContainerId>);
 impl Resource for OpenCovers {}
+
+/// The session locked: nav hears it, and closes what isn't to greet the
+/// unlock.
+fn on_lock(app: &mut App, e: &LockChanged) {
+    if e.0 {
+        app.signal(NavExternal(ExternalEvent::Locked));
+    }
+}
 
 /// Woken from sleep: every clock shows the time now. Their timers are
 /// monotonic, which doesn't count the time asleep.
@@ -166,6 +174,8 @@ fn panel(id: ContainerId, screen: impl screen::Screen, span: Span) -> nav::core:
             INSTANT,
         )
         .close(swipe(PANEL, Direction::Up, Timing::Any), INSTANT)
+        // Not where unlocking leaves you.
+        .close(OnExternal(ExternalEvent::Locked), INSTANT)
 }
 
 fn top_half(span: Span) -> nav::core::Swipe {
@@ -202,7 +212,9 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
         .close(bottom_quick(), INSTANT)
         .close(OnExternal(ExternalEvent::AppLaunched), INSTANT)
         // Closing the last app from here leaves nothing to show but Home.
-        .close(OnExternal(ExternalEvent::LastWindowClosed), INSTANT);
+        .close(OnExternal(ExternalEvent::LastWindowClosed), INSTANT)
+        // Not where unlocking leaves you.
+        .close(OnExternal(ExternalEvent::Locked), INSTANT);
 
     NavModule::new(cfg)
         .action(bottom_corner(Span::LeftCorner), show_keyboard)
@@ -393,7 +405,9 @@ fn main() {
     // Home starts open.
     app.insert_resource(OpenCovers(vec![HOME_ID]));
     suspend_keyboard_zone(&mut app, true);
-    app.system(on_container_shown).system(on_wake);
+    app.system(on_container_shown)
+        .system(on_wake)
+        .system(on_lock);
 
     app.run();
 }

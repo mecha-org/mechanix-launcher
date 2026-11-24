@@ -214,6 +214,7 @@ impl Module for NavModule {
         app.system(on_frame);
         app.insert_resource(SeenToplevels::default());
         app.system(on_app_launched);
+        app.system(on_external);
         app.system(on_showing_home);
         app.system(on_toplevels_changed);
         apply(app);
@@ -225,6 +226,18 @@ fn on_app_launched(app: &mut App, _: &AppLaunched) {
     app.resource_mut::<Nav>()
         .stack
         .handle(Input::External(ExternalEvent::AppLaunched));
+    apply(app);
+}
+
+/// Signalled by the host for an [`ExternalEvent`] only it can see, such as
+/// [`ExternalEvent::Locked`]: the stack opens and closes what opens and
+/// closes on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NavExternal(pub ExternalEvent);
+impl Signal for NavExternal {}
+
+fn on_external(app: &mut App, e: &NavExternal) {
+    app.resource_mut::<Nav>().stack.handle(Input::External(e.0));
     apply(app);
 }
 
@@ -783,6 +796,18 @@ pub(crate) mod tests {
         let mut app = app_with(module_with(home));
         assert_eq!(display(&app, node_of(&app, HOME)), Display::Flex);
         app.signal(AppLaunched);
+        app.flush();
+        assert_eq!(display(&app, node_of(&app, HOME)), Display::Hidden);
+    }
+
+    /// An external event the host feeds, such as the session locking,
+    /// closes what closes on it.
+    #[test]
+    fn a_fed_external_event_closes_what_closes_on_it() {
+        let home = home_spec(true).close(OnExternal(ExternalEvent::Locked), INSTANT);
+        let mut app = app_with(module_with(home));
+        assert_eq!(display(&app, node_of(&app, HOME)), Display::Flex);
+        app.signal(NavExternal(ExternalEvent::Locked));
         app.flush();
         assert_eq!(display(&app, node_of(&app, HOME)), Display::Hidden);
     }
