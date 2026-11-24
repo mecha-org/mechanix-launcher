@@ -28,13 +28,6 @@ fn max_chars(width: f32) -> usize {
 struct Refit(usize);
 impl Event for Refit {}
 
-/// Sent by the drawer for its window; applied when there is a compositor.
-struct SetKeyboard {
-    window: NodeId,
-    ki: KeyboardInteractivity,
-}
-impl Signal for SetKeyboard {}
-
 pub(crate) struct DrawerBuilder {
     pub data_dirs: Vec<PathBuf>,
     pub icon_dirs: Rc<IconDirs>,
@@ -55,18 +48,9 @@ pub(crate) struct Drawer {
     /// `None` until the first layout gives the drawer a width.
     max_chars: Option<usize>,
     focused: bool,
-    keyboard: KeyboardInteractivity,
     bar: SearchBar,
     list: Handle<Scrollable>,
     rows: Vec<NodeId>,
-}
-
-impl Drawer {
-    /// The keyboard interactivity last asked of the drawer's window.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn keyboard(&self) -> KeyboardInteractivity {
-        self.keyboard
-    }
 }
 
 impl Widget for Drawer {
@@ -123,7 +107,6 @@ impl Widget for Drawer {
             hits,
             max_chars: None,
             focused: false,
-            keyboard: KeyboardInteractivity::None,
             bar,
             list,
             rows: Vec::new(),
@@ -150,9 +133,9 @@ impl Resource for Running {}
 struct Activate(ToplevelId);
 impl Signal for Activate {}
 
-/// Sent by a tap on an app that isn't running; the launcher runs with the
-/// app.
-struct Launch(DesktopApp);
+/// Sent by a tap on an app that isn't running, with its icon; the launcher
+/// runs with the app, under its launch placeholder.
+struct Launch(DesktopApp, RowIcon);
 impl Signal for Launch {}
 
 /// Production activator: raise the window for the seat, if the compositor
@@ -195,6 +178,7 @@ pub(crate) fn install(app: &mut App, activator: Activator, launcher: Launcher) {
     });
     sync_running(app);
     crate::launch::install(app);
+    crate::placeholder::install(app);
     app.system(|app: &mut App, _: &RegistryChanged| sync_running(app))
         .system(|app: &mut App, _: &Emitted<Shown>| sync_running(app))
         .system(|app: &mut App, e: &Activate| {
@@ -202,14 +186,15 @@ pub(crate) fn install(app: &mut App, activator: Activator, launcher: Launcher) {
             activator(app, e.0);
         })
         .system(|app: &mut App, e: &Launch| {
+            let launch = crate::placeholder::start(app, &e.0, e.1);
             let launcher = app.resource::<Running>().launcher.clone();
-            launcher(app, &e.0);
+            launcher(app, &e.0, launch);
         });
     if !app.has_resource::<IconCache>() {
         let cache = IconCache::new(&mut app.resource_mut::<Atlas>());
         app.insert_resource(cache);
     }
-    app.system(refit_on_layout).system(apply_keyboard);
+    app.system(refit_on_layout);
 }
 
 fn names(apps: &[DesktopApp]) -> Vec<&str> {
@@ -289,21 +274,7 @@ fn restyle_bar(ctx: &mut Context<'_, Drawer>) {
 
 fn on_focus(ctx: &mut Context<'_, Drawer>, focused: bool) {
     ctx.me().focused = focused;
-    let ki = if focused {
-        KeyboardInteractivity::Exclusive
-    } else {
-        KeyboardInteractivity::None
-    };
-    set_keyboard(ctx, ki);
     restyle_bar(ctx);
-}
-
-/// Remembers `ki` and asks the drawer's window for it.
-fn set_keyboard(ctx: &mut Context<'_, Drawer>, ki: KeyboardInteractivity) {
-    ctx.me().keyboard = ki;
-    if let Some(window) = ctx.component::<InWindow>().and_then(|w| w.0) {
-        ctx.signal(SetKeyboard { window, ki });
-    }
 }
 
 /// Empties the field and shows every app again.
@@ -330,6 +301,7 @@ fn launch(ctx: &mut Context<'_, Drawer>, index: usize) {
         return;
     };
     let entry = app.clone();
+    let icon = d.icons[index];
     let front = ctx
         .resource::<Running>()
         .fronts
@@ -339,19 +311,18 @@ fn launch(ctx: &mut Context<'_, Drawer>, index: usize) {
     match front {
         Some(front) => ctx.signal(Activate(front)),
         // Starting is asynchronous: a failure is only logged.
-        None => ctx.signal(Launch(entry)),
+        None => ctx.signal(Launch(entry, icon)),
     }
     clear_query(ctx);
     ctx.signal(AppLaunched);
 }
 
-/// Hands the keyboard back and clears the search; safe to repeat.
+/// Blurs and clears the search; safe to repeat.
 fn on_hidden(ctx: &mut Context<'_, Drawer>) {
     if ctx.me().focused {
         let input = ctx.me().bar.input;
         ctx.emit(InputFocus { focused: false }, input);
     }
-    set_keyboard(ctx, KeyboardInteractivity::None);
     clear_query(ctx);
 }
 
@@ -391,14 +362,6 @@ fn refit_on_layout(app: &mut App, _: &LayoutDone) {
     }
 }
 
-fn apply_keyboard(app: &mut App, s: &SetKeyboard) {
-    if !app.has_resource::<Surfaces>() || !app.has_resource::<Wayland>() {
-        return;
-    }
-    let (mut surfaces, mut wl) = app.query::<(ResMut<Surfaces>, ResMut<Wayland>)>();
-    surfaces.set_keyboard_interactivity(s.window, s.ki, &mut wl);
-}
-
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -411,8 +374,9 @@ mod tests {
 
     use super::*;
     use crate::AppDrawer;
+    use crate::placeholder::PlaceholderView;
     use crate::row::Row;
-    use apps::{AppKey, IconDirs, RunningApp};
+    use apps::{AppKey, IconDirs, LaunchId, Launches, RunningApp, ShowLaunch, StopLaunch};
 
     const SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" fill="#0a0"/></svg>"##;
 
@@ -503,6 +467,9 @@ mod tests {
             .init_resource::<Launched>()
             .system(count_launch)
             .system(blur_on_focus_moved);
+        // PresentationModule registers Role, for the launch placeholder's
+        // window; it needs a live compositor.
+        app.register_component::<Role>();
         app.insert_resource(Atlas::new());
         let (regular, light) = {
             let mut atlas = app.resource_mut::<Atlas>();
@@ -640,7 +607,7 @@ mod tests {
         let mut ui = ui(drawer(&three("clear")));
         ui.type_in("chr");
         assert_eq!(ui.rows().len(), 1);
-        assert_eq!(ui.me().keyboard(), KeyboardInteractivity::Exclusive);
+        assert!(ui.me().focused);
 
         // A real tap at the button's centre, through hit testing.
         let clear = ui.me().bar.clear.id();
@@ -665,14 +632,14 @@ mod tests {
 
         assert_eq!(ui.names(), ["Camera", "Chromium", "Clock"]);
         assert_eq!(ui.text(), "");
-        assert_eq!(ui.me().keyboard(), KeyboardInteractivity::Exclusive);
+        assert!(ui.me().focused);
     }
 
     #[test]
     fn tap_launches_clears_and_signals() {
         let seen: Rc<RefCell<Vec<Vec<String>>>> = Rc::default();
         let rec = seen.clone();
-        let screen = drawer(&three("tap")).launcher(move |_, entry| {
+        let screen = drawer(&three("tap")).launcher(move |_, entry, _| {
             assert_eq!(entry.id, "chromium.desktop");
             rec.borrow_mut().push(entry.exec.clone());
         });
@@ -720,7 +687,7 @@ mod tests {
         let activated: Rc<RefCell<Vec<ToplevelId>>> = Rc::default();
         let (l, a) = (launched.clone(), activated.clone());
         let screen = drawer(&three("run"))
-            .launcher(move |_, entry| l.borrow_mut().push(entry.exec.clone()))
+            .launcher(move |_, entry, _| l.borrow_mut().push(entry.exec.clone()))
             .activator(move |_, id| a.borrow_mut().push(id));
         let mut ui = ui_with(screen, Some(registry_with(&[("chromium", 7)])));
         ui.type_in("chr");
@@ -739,7 +706,7 @@ mod tests {
         let activated: Rc<RefCell<Vec<ToplevelId>>> = Rc::default();
         let (l, a) = (launched.clone(), activated.clone());
         let screen = drawer(&three("stopped"))
-            .launcher(move |_, entry| l.borrow_mut().push(entry.exec.clone()))
+            .launcher(move |_, entry, _| l.borrow_mut().push(entry.exec.clone()))
             .activator(move |_, id| a.borrow_mut().push(id));
         let mut ui = ui_with(screen, Some(registry_with(&[])));
         ui.type_in("chr");
@@ -751,11 +718,91 @@ mod tests {
         assert_eq!(ui.app.resource::<Launched>().0, 1);
     }
 
+    fn placeholders(ui: &mut Ui) -> usize {
+        ui.app.widgets::<PlaceholderView>().count()
+    }
+
     #[test]
-    fn a_press_on_the_list_gives_the_keyboard_back() {
+    fn a_launch_shows_the_placeholder_until_the_app_runs() {
+        let screen = drawer(&three("placeholder")).launcher(|_, _, _| {});
+        let mut ui = ui_with(screen, Some(registry_with(&[])));
+        ui.type_in("chr");
+        let row = ui.rows()[0];
+        ui.click(row);
+        ui.app.tick();
+        assert_eq!(placeholders(&mut ui), 1);
+
+        // Another app's window doesn't end it.
+        ui.app
+            .insert_resource(Registry::fixture(Vec::new(), Vec::new()));
+        ui.app.signal(RegistryChanged);
+        ui.app.tick();
+        assert_eq!(placeholders(&mut ui), 1);
+
+        ui.app.insert_resource(registry_with(&[("chromium", 7)]));
+        ui.app.signal(RegistryChanged);
+        ui.app.tick();
+        assert_eq!(placeholders(&mut ui), 0);
+    }
+
+    #[test]
+    fn activating_a_running_app_shows_no_placeholder() {
+        let screen = drawer(&three("no-placeholder")).activator(|_, _| {});
+        let mut ui = ui_with(screen, Some(registry_with(&[("chromium", 7)])));
+        ui.type_in("chr");
+        let row = ui.rows()[0];
+        ui.click(row);
+        ui.app.tick();
+        assert_eq!(placeholders(&mut ui), 0);
+    }
+
+    fn launches(ui: &Ui) -> Vec<LaunchId> {
+        ui.app.resource::<Launches>().iter().map(|l| l.id).collect()
+    }
+
+    #[test]
+    fn the_placeholder_can_be_taken_down_early_and_shown_again() {
+        let screen = drawer(&three("placeholder-early")).launcher(|_, _, _| {});
+        let mut ui = ui_with(screen, Some(registry_with(&[])));
+        ui.type_in("chr");
+        let row = ui.rows()[0];
+        ui.click(row);
+        ui.app.tick();
+        assert_eq!(placeholders(&mut ui), 1);
+        let launch = launches(&ui);
+        assert_eq!(launch.len(), 1);
+
+        crate::hide_launch_placeholder(&mut ui.app);
+        ui.app.tick();
+        assert_eq!(placeholders(&mut ui), 0);
+        assert_eq!(launches(&ui), launch, "the launch goes on");
+
+        ui.app.signal(ShowLaunch(launch[0]));
+        ui.app.tick();
+        assert_eq!(placeholders(&mut ui), 1);
+    }
+
+    #[test]
+    fn a_launch_stopped_goes_with_its_placeholder() {
+        let screen = drawer(&three("placeholder-stop")).launcher(|_, _, _| {});
+        let mut ui = ui_with(screen, Some(registry_with(&[])));
+        ui.type_in("chr");
+        let row = ui.rows()[0];
+        ui.click(row);
+        ui.app.tick();
+        let launch = launches(&ui)[0];
+
+        ui.app.signal(StopLaunch(launch));
+        ui.app.tick();
+        assert_eq!(placeholders(&mut ui), 0);
+        assert!(launches(&ui).is_empty());
+    }
+
+    #[test]
+    fn a_press_on_the_list_blurs_the_search() {
         let mut ui = ui(drawer(&three("press-list")));
         ui.type_in("c");
-        assert_eq!(ui.me().keyboard(), KeyboardInteractivity::Exclusive);
+        assert!(ui.me().focused);
 
         // A real press on a row, through hit testing: the start of a
         // scroll or a tap alike.
@@ -774,20 +821,20 @@ mod tests {
             ui.app.flush();
         }
         ui.app.tick();
-        assert_eq!(ui.me().keyboard(), KeyboardInteractivity::None);
+        assert!(!ui.me().focused);
     }
 
     #[test]
-    fn focus_takes_the_keyboard_and_hidden_gives_it_back() {
+    fn hidden_blurs_and_clears_the_search() {
         let mut ui = ui(drawer(&three("focus")));
-        assert_eq!(ui.me().keyboard(), KeyboardInteractivity::None);
+        assert!(!ui.me().focused);
         ui.type_in("chr");
-        assert_eq!(ui.me().keyboard(), KeyboardInteractivity::Exclusive);
+        assert!(ui.me().focused);
 
         let d = ui.drawer;
         ui.app.emit(Hidden, d);
         ui.app.tick();
-        assert_eq!(ui.me().keyboard(), KeyboardInteractivity::None);
+        assert!(!ui.me().focused);
         assert_eq!(ui.text(), "");
         assert_eq!(ui.rows().len(), 3);
     }

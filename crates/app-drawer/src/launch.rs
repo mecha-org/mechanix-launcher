@@ -23,6 +23,7 @@
 //! systemd answers a start once its job is queued; whether the program ran
 //! comes later, as the job's `JobRemoved`, and a failure is logged.
 
+use std::collections::HashMap;
 use std::hash::{BuildHasher, RandomState};
 use std::io;
 use std::os::unix::fs::PermissionsExt;
@@ -31,7 +32,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use apps::DesktopApp;
+use apps::{DesktopApp, LaunchId};
 use mecha_wayland::prelude::*;
 
 const SYSTEMD: &str = "org.freedesktop.systemd1";
@@ -63,6 +64,7 @@ const UNIT_VARIABLES: &[&str] = &[
 /// One app on its way to starting.
 struct AppStart {
     entry: DesktopApp,
+    launch: LaunchId,
     token: Option<String>,
 }
 
@@ -71,7 +73,15 @@ struct Waiting {
     request: TokenRequest,
     /// The ring timeout that starts it without the token.
     timeout: Token,
-    entry: DesktopApp,
+    start: AppStart,
+}
+
+/// What stopping a launch stops.
+enum Unit {
+    /// The unit its app runs in.
+    Known(String),
+    /// Called off before the unit was known: stopped once it is.
+    StopWhenKnown,
 }
 
 /// What a call in flight asked for.
@@ -81,7 +91,7 @@ enum Asked {
     /// The app's own service.
     Service(AppStart),
     /// The process of an app D-Bus activation reached.
-    AppProcess(DesktopApp),
+    AppProcess(AppStart),
     /// The bus's own process.
     BusProcess,
     /// A scope for an app the bus runs among its own services.
@@ -102,8 +112,61 @@ struct Starting {
     jobs_removed: Option<MatchId>,
     /// The unit the bus itself runs in, once known.
     bus_unit: Option<String>,
+    /// What stopping each launch stops, once started.
+    units: HashMap<LaunchId, Unit>,
 }
 impl Resource for Starting {}
+
+/// Call off `launch`: an app still waiting for its token isn't started; one
+/// started has its unit stopped, now or once known. An app spawned from the
+/// launcher, outside any unit, can't be.
+pub(crate) fn stop(app: &mut App, launch: LaunchId) {
+    let unit = {
+        let mut starting = app.resource_mut::<Starting>();
+        if let Some(at) = starting
+            .waiting
+            .iter()
+            .position(|w| w.start.launch == launch)
+        {
+            starting.waiting.swap_remove(at);
+            return;
+        }
+        match starting.units.insert(launch, Unit::StopWhenKnown) {
+            Some(Unit::Known(unit)) => {
+                starting.units.remove(&launch);
+                unit
+            }
+            _ => return,
+        }
+    };
+    stop_unit(app, &unit);
+}
+
+/// Done with `launch`: its window came, or it gave up.
+pub(crate) fn forget(app: &mut App, launch: LaunchId) {
+    app.resource_mut::<Starting>().units.remove(&launch);
+}
+
+/// `launch`'s app runs in `unit`: stopped at once if it was called off.
+fn started_in(app: &mut App, launch: LaunchId, unit: String) {
+    {
+        let mut starting = app.resource_mut::<Starting>();
+        if !matches!(starting.units.remove(&launch), Some(Unit::StopWhenKnown)) {
+            starting.units.insert(launch, Unit::Known(unit));
+            return;
+        }
+    }
+    stop_unit(app, &unit);
+}
+
+/// Ask systemd to stop `unit`.
+fn stop_unit(app: &mut App, unit: &str) {
+    let call = MethodCall::new(SYSTEMD, SYSTEMD_PATH, SYSTEMD_MANAGER, "StopUnit")
+        .body(&(unit, "replace"));
+    if send(app, call).is_none() {
+        tracing::warn!(%unit, "no session bus to stop the app's unit on");
+    }
+}
 
 /// Registers the launcher's systems. Safe to call more than once.
 pub(crate) fn install(app: &mut App) {
@@ -117,9 +180,9 @@ pub(crate) fn install(app: &mut App) {
         .system(on_signal);
 }
 
-/// Start `entry`, asking for its activation token first when the compositor
-/// offers them.
-pub(crate) fn start(app: &mut App, entry: &DesktopApp) {
+/// Start `entry` for `launch`, asking for its activation token first when
+/// the compositor offers them.
+pub(crate) fn start(app: &mut App, entry: &DesktopApp, launch: LaunchId) {
     let can_wait = app.has_resource::<Toplevels>()
         && app.has_resource::<Wayland>()
         && app.has_resource::<Ring>();
@@ -129,14 +192,13 @@ pub(crate) fn start(app: &mut App, entry: &DesktopApp) {
             toplevels.request_activation_token(&mut wl, app_id(&entry.id))
         })
         .flatten();
+    let start = AppStart {
+        entry: entry.clone(),
+        launch,
+        token: None,
+    };
     let Some(request) = request else {
-        return launch(
-            app,
-            AppStart {
-                entry: entry.clone(),
-                token: None,
-            },
-        );
+        return run(app, start);
     };
     let timeout = app.resource_mut::<Ring>().timeout(TOKEN_WAIT);
     let mut starting = app.resource_mut::<Starting>();
@@ -144,26 +206,29 @@ pub(crate) fn start(app: &mut App, entry: &DesktopApp) {
     starting.waiting.push(Waiting {
         request,
         timeout,
-        entry: entry.clone(),
+        start,
     });
 }
 
 /// The token is here: start the app with it.
 fn on_token(app: &mut App, e: &ActivationToken) {
-    let entry = {
+    let mut start = {
         let mut starting = app.resource_mut::<Starting>();
         let Some(at) = starting.waiting.iter().position(|w| w.request == e.request) else {
             return;
         };
-        starting.waiting.swap_remove(at).entry
+        starting.waiting.swap_remove(at).start
     };
-    let token = Some(e.token.clone()).filter(|t| !t.is_empty());
-    launch(app, AppStart { entry, token });
+    if !e.token.is_empty() {
+        crate::placeholder::started_with(app, start.launch, &e.token);
+        start.token = Some(e.token.clone());
+    }
+    run(app, start);
 }
 
 /// The token is late: start the app without it.
 fn on_timeout(app: &mut App, e: &IoEvent) {
-    let entry = {
+    let start = {
         let (mut starting, mut ring) = app.query::<(ResMut<Starting>, ResMut<Ring>)>();
         let Some(at) = starting.timeouts.iter().position(|t| *t == e.token) else {
             return;
@@ -173,14 +238,15 @@ fn on_timeout(app: &mut App, e: &IoEvent) {
         let Some(at) = starting.waiting.iter().position(|w| w.timeout == e.token) else {
             return;
         };
-        starting.waiting.swap_remove(at).entry
+        starting.waiting.swap_remove(at).start
     };
-    tracing::warn!(id = %entry.id, "no activation token came, starting it without one");
-    launch(app, AppStart { entry, token: None });
+    let id = &start.entry.id;
+    tracing::warn!(%id, "no activation token came, starting it without one");
+    run(app, start);
 }
 
 /// Start through D-Bus activation when the app takes it, else as a service.
-fn launch(app: &mut App, start: AppStart) {
+fn run(app: &mut App, start: AppStart) {
     let Some(call) = start
         .entry
         .dbus_activatable
@@ -200,12 +266,16 @@ fn launch(app: &mut App, start: AppStart) {
 
 /// Start `start` as a service, or spawn it when that can't be asked.
 fn start_service(app: &mut App, start: AppStart) {
-    let Some(call) = service_call(&start) else {
+    let unit = service_name(&start.entry.id);
+    let Some(call) = service_call(&start, &unit) else {
         return spawn_logged(&start);
     };
     subscribe_to_jobs(app);
     match send(app, call) {
-        Some(id) => awaiting(app, id, Asked::Service(start)),
+        Some(id) => {
+            started_in(app, start.launch, unit);
+            awaiting(app, id, Asked::Service(start));
+        }
         None => spawn_logged(&start),
     }
 }
@@ -271,7 +341,7 @@ fn on_reply(app: &mut App, e: &MethodReply) {
     match (asked, &e.result) {
         (Asked::Activate(start), Ok(_)) => {
             let name = app_id(&start.entry.id).to_owned();
-            ask_process(app, &name, Asked::AppProcess(start.entry));
+            ask_process(app, &name, Asked::AppProcess(start));
         }
         (Asked::Activate(start), Err(error)) => {
             let id = &start.entry.id;
@@ -281,6 +351,8 @@ fn on_reply(app: &mut App, e: &MethodReply) {
         (Asked::Service(start), Err(error)) => {
             let id = &start.entry.id;
             tracing::warn!(%id, "systemd did not start it, spawning it instead: {error:?}");
+            // In no unit now.
+            forget(app, start.launch);
             spawn_logged(&start);
         }
         (Asked::Service(AppStart { entry, .. }), Ok(reply)) => watch_job(app, reply, entry.id),
@@ -288,9 +360,9 @@ fn on_reply(app: &mut App, e: &MethodReply) {
         (Asked::Scope(id), Err(error)) => {
             tracing::warn!(%id, "systemd made no scope for it: {error:?}");
         }
-        (Asked::AppProcess(entry), Ok(reply)) => {
+        (Asked::AppProcess(start), Ok(reply)) => {
             if let Ok((pid,)) = reply.body::<(u32,)>() {
-                adopt(app, pid, &entry);
+                adopt(app, pid, &start);
             }
         }
         (Asked::BusProcess, Ok(reply)) => {
@@ -300,8 +372,8 @@ fn on_reply(app: &mut App, e: &MethodReply) {
                 .and_then(|(pid,)| apps::unit_of(pid));
             app.resource_mut::<Starting>().bus_unit = unit;
         }
-        (Asked::AppProcess(entry), Err(error)) => {
-            let id = &entry.id;
+        (Asked::AppProcess(start), Err(error)) => {
+            let id = &start.entry.id;
             tracing::warn!(%id, "the bus did not say which process it is: {error:?}");
         }
         (Asked::BusProcess, Err(error)) => {
@@ -321,18 +393,20 @@ fn watch_job(app: &mut App, reply: &Message, id: String) {
 /// The app D-Bus activation reached is process `pid`. When the bus runs it
 /// in the bus's own unit, it is moved into a scope of its own: there it
 /// can be told apart, frozen or ended without the bus. In any other unit,
-/// the bus's own for it or one it was already in, it stays.
-fn adopt(app: &mut App, pid: u32, entry: &DesktopApp) {
-    let shared = {
-        let starting = app.resource::<Starting>();
-        let bus_unit = starting.bus_unit.as_deref();
-        bus_unit.is_some() && apps::unit_of(pid).as_deref() == bus_unit
-    };
-    if !shared {
+/// the bus's own for it or one it was already in, it stays. Either way,
+/// that unit is the app's.
+fn adopt(app: &mut App, pid: u32, start: &AppStart) {
+    let Some(unit) = apps::unit_of(pid) else {
         return;
+    };
+    if app.resource::<Starting>().bus_unit.as_ref() != Some(&unit) {
+        return started_in(app, start.launch, unit);
     }
     subscribe_to_jobs(app);
-    if let Some(id) = send(app, scope_call(entry, pid)) {
+    let entry = &start.entry;
+    let scope = scope_name(&entry.id);
+    if let Some(id) = send(app, scope_call(entry, pid, &scope)) {
+        started_in(app, start.launch, scope);
         awaiting(app, id, Asked::Scope(entry.id.clone()));
     }
 }
@@ -443,19 +517,19 @@ fn transient_unit(
         .body(&(name, "fail", properties, aux))
 }
 
-/// `StartTransientUnit` for a scope holding `pid`, the app `entry` that the
-/// bus runs among its own services.
-fn scope_call(entry: &DesktopApp, pid: u32) -> MethodCall {
+/// `StartTransientUnit` for scope `name` holding `pid`, the app `entry`
+/// that the bus runs among its own services.
+fn scope_call(entry: &DesktopApp, pid: u32, name: &str) -> MethodCall {
     let pids = Value::Array {
         elem: signature("u"),
         items: vec![Value::U32(pid)],
     };
-    transient_unit(&scope_name(&entry.id), entry, vec![("PIDs", pids)])
+    transient_unit(name, entry, vec![("PIDs", pids)])
 }
 
-/// `StartTransientUnit` for the app's service. `None` when its program is
-/// not found on `PATH`.
-fn service_call(start: &AppStart) -> Option<MethodCall> {
+/// `StartTransientUnit` for the app's service `name`. `None` when its
+/// program is not found on `PATH`.
+fn service_call(start: &AppStart, name: &str) -> Option<MethodCall> {
     let entry = &start.entry;
     let program = executable(entry.exec.first()?)?;
     let exec = Value::Array {
@@ -479,7 +553,7 @@ fn service_call(start: &AppStart) -> Option<MethodCall> {
         ("WorkingDirectory", text("~")),
         ("Environment", strings(environment(start.token.as_deref()))),
     ];
-    Some(transient_unit(&service_name(&entry.id), entry, properties))
+    Some(transient_unit(name, entry, properties))
 }
 
 /// `argv` for `ExecStart`: systemd expands `$` in arguments, and `$$` keeps
@@ -638,16 +712,20 @@ mod tests {
     }
 
     fn start(id: &str, token: Option<&str>) -> AppStart {
+        let entry = DesktopApp {
+            id: id.into(),
+            name: "Notes".into(),
+            exec: vec!["sh".into()],
+            icon: None,
+            startup_wm_class: None,
+            path: "/usr/share/applications/notes.desktop".into(),
+            dbus_activatable: true,
+        };
+        let icon = apps::RowIcon::Glyph(SpriteId(0));
+        let launch = apps::Launches::default().add(entry.clone(), icon);
         AppStart {
-            entry: DesktopApp {
-                id: id.into(),
-                name: "Notes".into(),
-                exec: vec!["sh".into()],
-                icon: None,
-                startup_wm_class: None,
-                path: "/usr/share/applications/notes.desktop".into(),
-                dbus_activatable: true,
-            },
+            entry,
+            launch,
             token: token.map(String::from),
         }
     }
@@ -658,8 +736,8 @@ mod tests {
         for token in [None, Some("tok")] {
             let start = start("org.example.Notes.desktop", token);
             assert!(activate_call(&start).is_some());
-            assert!(service_call(&start).is_some());
-            let _ = scope_call(&start.entry, 42);
+            assert!(service_call(&start, &service_name(&start.entry.id)).is_some());
+            let _ = scope_call(&start.entry, 42, &scope_name(&start.entry.id));
         }
         // Not a bus name: no activation, the service instead.
         assert!(activate_call(&start("kde-notes.desktop", None)).is_none());

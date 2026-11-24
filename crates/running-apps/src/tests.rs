@@ -4,7 +4,10 @@ use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use apps::{AppKey, DesktopApp, IconDirs, Registry, RegistryChanged, RowIcon, RunningApp};
+use apps::{
+    AppKey, DesktopApp, IconDirs, LaunchId, Launches, LaunchesChanged, Registry, RegistryChanged,
+    RowIcon, RunningApp, ShowLaunch, StopLaunch,
+};
 use mecha_wayland::mechanix_widgets::prelude::FontBook;
 use mecha_wayland::prelude::*;
 use screen::{AppLaunched, Hidden, Screen, Shown};
@@ -733,7 +736,7 @@ fn shown_creates_thumbnails_and_hidden_destroys_them() {
     for (card, (t, p)) in cards.iter().zip(&s) {
         let hole = ui.card(*card).hole();
         let r = ui.app.component::<Layout>(hole).unwrap().rect;
-        assert_eq!(*t, ui.card(*card).front());
+        assert_eq!(Some(*t), ui.card(*card).front());
         assert_eq!((p.x, p.y), (r.x().round() as i32, r.y().round() as i32));
         assert!((p.scale - r.width() / W).abs() < 1e-4, "{p:?} {r:?}");
         assert!(
@@ -896,6 +899,75 @@ fn window_keyed_card_follows_its_title() {
     assert_eq!(ui.names(), ["Scratch"]);
     ui.set_registry(lone("Renamed"));
     assert_eq!(ui.names(), ["Renamed"]);
+}
+
+/// What the cards of apps starting asked for.
+#[derive(Default)]
+struct LaunchAsks {
+    shown: Vec<LaunchId>,
+    stopped: Vec<LaunchId>,
+}
+impl Resource for LaunchAsks {}
+
+/// `entry` starting, with its asks recorded.
+fn starting(ui: &mut Ui, entry: DesktopApp) -> LaunchId {
+    if !ui.app.has_resource::<LaunchAsks>() {
+        ui.app
+            .init_resource::<LaunchAsks>()
+            .init_resource::<Launches>()
+            .system(|app: &mut App, e: &ShowLaunch| {
+                app.resource_mut::<LaunchAsks>().shown.push(e.0);
+            })
+            .system(|app: &mut App, e: &StopLaunch| {
+                app.resource_mut::<LaunchAsks>().stopped.push(e.0);
+            });
+    }
+    let icon = RowIcon::Glyph(SpriteId(0));
+    let id = ui.app.resource_mut::<Launches>().add(entry, icon);
+    ui.app.signal(LaunchesChanged);
+    ui.app.tick();
+    ui.app.tick();
+    id
+}
+
+#[test]
+fn an_app_starting_has_a_card_first_without_a_preview() {
+    let mut ui = ui("starting", three());
+    let files = entries()[2].clone();
+    let launch = starting(&mut ui, files);
+    assert_eq!(ui.names(), ["Files", "Clock", "Camera", "Files"]);
+    let card = ui.cards()[0];
+    assert_eq!(ui.card(card).front(), None);
+
+    ui.emit(Shown);
+    ui.frame();
+    assert_eq!(ui.sink.live(), [id(1), id(2), id(3)], "no preview for it");
+
+    ui.click(card);
+    assert_eq!(ui.app.resource::<LaunchAsks>().shown, [launch]);
+    assert_eq!(ui.app.resource::<Launched>().0, 1);
+    assert!(ui.activated.borrow().is_empty());
+
+    let close = ui.card(card).close_button();
+    ui.click(close);
+    assert_eq!(ui.app.resource::<LaunchAsks>().stopped, [launch]);
+    assert!(ui.closed.borrow().is_empty());
+
+    ui.app.resource_mut::<Launches>().remove(launch);
+    ui.app.signal(LaunchesChanged);
+    ui.app.tick();
+    assert_eq!(ui.names(), ["Clock", "Camera", "Files"]);
+}
+
+#[test]
+fn swiping_an_app_starting_away_stops_it() {
+    let mut ui = ui("starting-swipe", three());
+    let launch = starting(&mut ui, entries()[0].clone());
+    ui.emit(Shown);
+    let card = ui.cards()[0];
+    ui.drag(card, -200.0);
+    assert_eq!(ui.app.resource::<LaunchAsks>().stopped, [launch]);
+    assert!(ui.closed.borrow().is_empty());
 }
 
 #[test]

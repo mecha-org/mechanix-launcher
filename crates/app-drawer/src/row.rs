@@ -87,22 +87,7 @@ impl Widget for Row {
             );
         }
 
-        let size = LayoutStyle::default().size(px(ICON), px(ICON)).shrink(0.0);
-        match b.icon {
-            RowIcon::Image(sprite) => {
-                s.spawn(me, image(sprite).style(size));
-            }
-            RowIcon::Glyph(sprite) => {
-                let color = s.color(ColorRole::OnSurfaceVariant);
-                s.spawn(
-                    me,
-                    icon(sprite)
-                        .size(Size::new(ICON, ICON))
-                        .color(color)
-                        .style(size),
-                );
-            }
-        }
+        b.icon.spawn(s, me, ICON);
 
         let (drawer, index) = (b.drawer, b.index);
         s.on::<Clicked>(me, move |ctx, _| ctx.emit(Tapped(index), drawer));

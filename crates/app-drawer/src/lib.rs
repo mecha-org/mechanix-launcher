@@ -3,6 +3,7 @@
 
 mod drawer;
 mod launch;
+mod placeholder;
 mod rank;
 mod row;
 mod search_bar;
@@ -13,15 +14,16 @@ use std::rc::Rc;
 use mecha_wayland::prelude::*;
 use screen::Screen;
 
-use apps::{DesktopApp, IconDirs};
+use apps::{DesktopApp, IconDirs, LaunchId};
 use drawer::DrawerBuilder;
 
 /// The drawer's two faces, Regular and Light Geist Mono, for the host's
 /// `FontBook`.
 pub use assets::fonts::{GEIST_MONO, GEIST_MONO_LIGHT};
+pub use placeholder::hide_launch_placeholder;
 
-/// Starts an app.
-type Launcher = Rc<dyn Fn(&mut App, &DesktopApp)>;
+/// Starts an app, for its launch.
+type Launcher = Rc<dyn Fn(&mut App, &DesktopApp, LaunchId)>;
 
 /// Brings a running app's window to the front.
 type Activator = Rc<dyn Fn(&mut App, ToplevelId)>;
@@ -61,7 +63,10 @@ impl AppDrawer {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn launcher(mut self, f: impl Fn(&mut App, &DesktopApp) + 'static) -> AppDrawer {
+    pub(crate) fn launcher(
+        mut self,
+        f: impl Fn(&mut App, &DesktopApp, LaunchId) + 'static,
+    ) -> AppDrawer {
         self.launcher = Rc::new(f);
         self
     }

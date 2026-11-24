@@ -179,6 +179,28 @@ pub enum RowIcon {
     Glyph(SpriteId),
 }
 
+impl RowIcon {
+    /// Draw it under `parent`, `size` logical px square.
+    pub fn spawn<W: Widget>(self, s: &mut Spawner<'_, W>, parent: impl Into<NodeId>, size: f32) {
+        let style = LayoutStyle::default().size(px(size), px(size)).shrink(0.0);
+        match self {
+            RowIcon::Image(sprite) => {
+                s.spawn(parent, image(sprite).style(style));
+            }
+            RowIcon::Glyph(sprite) => {
+                let color = s.color(ColorRole::OnSurfaceVariant);
+                s.spawn(
+                    parent,
+                    icon(sprite)
+                        .size(Size::new(size, size))
+                        .color(color)
+                        .style(style),
+                );
+            }
+        }
+    }
+}
+
 pub struct IconCache {
     glyph: SpriteId,
     /// `None` marks a file that failed once, so it is not retried or re-logged.

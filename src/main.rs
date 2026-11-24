@@ -1,4 +1,4 @@
-use app_drawer::{AppDrawer, GEIST_MONO, GEIST_MONO_LIGHT};
+use app_drawer::{AppDrawer, GEIST_MONO, GEIST_MONO_LIGHT, hide_launch_placeholder};
 use apps::RegistryModule;
 use control_center::app_screens::AppScreen;
 use control_center::{ControlCenterScreen, select_screen};
@@ -78,6 +78,9 @@ fn on_container_shown(app: &mut App, s: &ContainerShown) {
     // under resizes as the screen comes up.
     if s.shown {
         hide_keyboard(app);
+        // Somewhere else to go before the app's window came: its
+        // placeholder would stay over this screen.
+        hide_launch_placeholder(app);
     }
     suspend_keyboard_zone(app, any_open);
 }

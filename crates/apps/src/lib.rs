@@ -3,6 +3,7 @@
 
 mod entries;
 mod icons;
+mod launches;
 mod registry;
 mod units;
 
@@ -10,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 pub use entries::{DesktopApp, data_dirs, exec_argv, scan};
 pub use icons::{IconCache, IconDirs, IconFile, RowIcon, active_theme};
+pub use launches::{Launch, LaunchId, Launches, LaunchesChanged, ShowLaunch, StopLaunch};
 pub use registry::{
     AppKey, Registry, RegistryChanged, RegistryModule, RunningApp, group, match_entry,
 };
