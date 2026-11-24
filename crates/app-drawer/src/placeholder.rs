@@ -7,8 +7,9 @@
 //! Each start is listed in [`Launches`], where the running apps show it
 //! too. A launch ends, by [`end`] alone, when:
 //! - the window the app opened with our activation token is listed; else
-//!   the registry first lists the app running, for an app that ignores the
-//!   token;
+//!   a window of a process in the app's own unit, whatever its app id says;
+//!   else the registry first lists the app running, for an app that ignores
+//!   the token and hands the start to a process elsewhere;
 //! - the app failed: its start failed, or it ended before a window came
 //!   ([`failed`], from the start's own bookkeeping);
 //! - [`TIMEOUT`] passed, for an app that does neither;
@@ -31,7 +32,7 @@ use apps::{
 /// How long it waits for the window of an app that neither shows one nor
 /// fails. Long enough for a slow cold start: the placeholder doesn't keep
 /// the user from going elsewhere meanwhile.
-const TIMEOUT: Duration = Duration::from_secs(30);
+const TIMEOUT: Duration = Duration::from_secs(15);
 const ICON: f32 = 96.0;
 /// Between the icon and the name.
 const GAP: f32 = 24.0;
@@ -180,11 +181,14 @@ fn end(app: &mut App, id: LaunchId, ending: Ending) {
 }
 
 /// Every launch whose app's window is up is over.
-fn end_arrived(app: &mut App) {
+pub(crate) fn end_arrived(app: &mut App) {
+    if !app.has_resource::<Placeholder>() {
+        return;
+    }
     let arrived: Vec<LaunchId> = app
         .resource::<Launches>()
         .iter()
-        .filter(|l| opened_with(app, l.id) || running(app, &l.app.id))
+        .filter(|l| opened_with(app, l.id) || opened_in(app, l.id) || running(app, &l.app.id))
         .map(|l| l.id)
         .collect();
     for id in arrived {
@@ -192,17 +196,29 @@ fn end_arrived(app: &mut App) {
     }
 }
 
+/// The windows listed; none without a compositor.
+fn windows(app: &App) -> impl Iterator<Item = &ToplevelInfo> {
+    app.has_resource::<Toplevels>()
+        .then(|| app.resource::<Toplevels>().iter())
+        .into_iter()
+        .flatten()
+}
+
 /// Whether a window that came with `launch`'s activation token is listed.
 fn opened_with(app: &App, launch: LaunchId) -> bool {
-    let placeholder = app.resource::<Placeholder>();
-    let Some(token) = placeholder.tokens.get(&launch) else {
+    let Some(token) = app.resource::<Placeholder>().tokens.get(&launch) else {
         return false;
     };
-    app.has_resource::<Toplevels>()
-        && app
-            .resource::<Toplevels>()
-            .iter()
-            .any(|w| w.activation_token.as_ref() == Some(token))
+    windows(app).any(|w| w.activation_token.as_ref() == Some(token))
+}
+
+/// Whether a window of a process in `launch`'s own unit is listed: the
+/// app's, or one it started, as everything it starts stays in its unit.
+fn opened_in(app: &App, launch: LaunchId) -> bool {
+    let Some(unit) = crate::launch::unit(app, launch) else {
+        return false;
+    };
+    windows(app).any(|w| w.pid.and_then(apps::unit_of).as_deref() == Some(unit))
 }
 
 /// Whether the registry lists the app of desktop id `id` running.

@@ -179,14 +179,23 @@ pub(crate) fn stop(app: &mut App, launch: LaunchId) {
     }
 }
 
+/// The unit `launch`'s app runs in, its own, once known.
+pub(crate) fn unit(app: &App, launch: LaunchId) -> Option<&str> {
+    match app.resource::<Starting>().units.get(&launch)? {
+        Unit::Known(unit) => Some(unit),
+        Unit::StopWhenKnown => None,
+    }
+}
+
 /// Done with `launch`: its window came, or it ended without one.
 pub(crate) fn forget(app: &mut App, launch: LaunchId) {
     app.resource_mut::<Starting>().units.remove(&launch);
 }
 
 /// `launch`'s app runs in `unit`, its own: stopped at once if it was called
-/// off, else kept to stop while the launch goes on. Once it is over, the
-/// window came or the app is gone, and there is nothing to keep.
+/// off, else kept to stop while the launch goes on, and to know its window
+/// by, which may be up already. Once it is over, the window came or the app
+/// is gone, and there is nothing to keep.
 fn started_in(app: &mut App, launch: LaunchId, unit: String) {
     let going_on =
         app.has_resource::<Launches>() && app.resource::<Launches>().get(launch).is_some();
@@ -195,6 +204,7 @@ fn started_in(app: &mut App, launch: LaunchId, unit: String) {
         Some(Unit::StopWhenKnown) => stop_unit(app, &unit),
         _ if going_on => {
             starting.units.insert(launch, Unit::Known(unit));
+            crate::placeholder::end_arrived(app);
         }
         _ => {}
     }
