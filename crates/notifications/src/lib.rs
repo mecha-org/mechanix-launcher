@@ -14,6 +14,7 @@ pub mod group;
 pub mod hints;
 pub mod image;
 pub mod markup;
+mod media;
 pub mod millis;
 pub mod module;
 pub mod notification_store;

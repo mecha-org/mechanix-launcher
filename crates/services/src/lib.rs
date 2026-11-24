@@ -5,6 +5,7 @@ pub mod display;
 pub mod keep_awake;
 pub mod keys;
 mod logind;
+pub mod mpris;
 pub mod network_manager;
 pub mod power;
 pub mod session;
@@ -20,6 +21,7 @@ pub use display::{
 };
 pub use keep_awake::{AppHold, KeepAwake, KeepAwakeModule, SetKeepAwake};
 pub use keys::{Key, KeyAction, grab_key};
+pub use mpris::MprisModule;
 pub use network_manager::{APUpdate, NetworkManagerModule, SetWifiEnabled, StateUpdate, WifiState};
 pub use power::{LogOut, PowerModule, PowerOff, Restart, Suspend};
 pub use session::{

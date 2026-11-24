@@ -77,6 +77,12 @@ pub mod text {
     /// "Clear all" chip. Figma SemiBold 13, `#B0B0B0`.
     pub const CHIP: TextStyle =
         TextStyle::new(TextVariant::LabelMedium, ColorRole::OnSecondaryContainer);
+    /// Media card song title. Figma ~20, near white.
+    pub const MEDIA_TITLE: TextStyle =
+        TextStyle::new(TextVariant::TitleLarge, ColorRole::OnSurface);
+    /// Media card artist. Figma ~16, grey.
+    pub const MEDIA_ARTIST: TextStyle =
+        TextStyle::new(TextVariant::BodyLarge, ColorRole::OnSurfaceVariant);
     /// Badge digit. Figma SemiBold 14–16.
     pub const BADGE: TextStyle = TextStyle::new(TextVariant::LabelMedium, ColorRole::OnError);
     /// "No new notifications.". Figma same as the date header, 16/20 `#8D8D91`.
@@ -120,6 +126,12 @@ pub mod space {
     pub const MENU_ITEM_X: Spacing = Spacing::Space50;
     /// Padding inside a menu row. Figma 12.
     pub const MENU_ROW_PAD: Spacing = Spacing::Space150;
+    /// Media card padding. Figma ~20.
+    pub const MEDIA_PAD: Spacing = Spacing::Space250;
+    /// Between the media card's art, text and button. Figma ~16.
+    pub const MEDIA_GAP: Spacing = Spacing::Space200;
+    /// Media title to artist. Figma ~4.
+    pub const MEDIA_TITLE_TO_ARTIST: Spacing = Spacing::Space50;
 }
 
 pub mod shape {
