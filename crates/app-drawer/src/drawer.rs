@@ -10,7 +10,9 @@ use crate::rank::{Hit, Ranker, fit};
 use crate::row::{GAP, NAME_PX, RowBuilder, SIDE, Tapped};
 use crate::search_bar::SearchBar;
 use crate::{Activator, Launcher};
-use apps::{DesktopApp, IconCache, IconDirs, Registry, RegistryChanged, RowIcon, scan};
+use apps::{
+    DesktopApp, IconCache, IconDirs, Launches, Registry, RegistryChanged, RowIcon, ShowLaunch, scan,
+};
 
 /// Geist Mono advances 600 of its 1000 units per em for every glyph.
 const ADVANCE_EM: f32 = 0.6;
@@ -133,10 +135,13 @@ impl Resource for Running {}
 struct Activate(ToplevelId);
 impl Signal for Activate {}
 
-/// Sent by a tap on an app that isn't running, with its icon; the launcher
-/// runs with the app, under its launch placeholder.
-struct Launch(DesktopApp, RowIcon);
-impl Signal for Launch {}
+/// Sent by a tap on an app that isn't running or starting, with its icon;
+/// the launcher runs with the app, under its launch placeholder.
+struct StartApp {
+    app: DesktopApp,
+    icon: RowIcon,
+}
+impl Signal for StartApp {}
 
 /// Production activator: raise the window for the seat, if the compositor
 /// offers toplevel management.
@@ -185,10 +190,10 @@ pub(crate) fn install(app: &mut App, activator: Activator, launcher: Launcher) {
             let activator = app.resource::<Running>().activator.clone();
             activator(app, e.0);
         })
-        .system(|app: &mut App, e: &Launch| {
-            let launch = crate::placeholder::start(app, &e.0, e.1);
+        .system(|app: &mut App, e: &StartApp| {
+            let launch = crate::placeholder::start(app, &e.app, e.icon);
             let launcher = app.resource::<Running>().launcher.clone();
-            launcher(app, &e.0, launch);
+            launcher(app, &e.app, launch);
         });
     if !app.has_resource::<IconCache>() {
         let cache = IconCache::new(&mut app.resource_mut::<Atlas>());
@@ -308,10 +313,17 @@ fn launch(ctx: &mut Context<'_, Drawer>, index: usize) {
         .iter()
         .find(|(running, _)| *running == entry.id)
         .map(|&(_, front)| front);
-    match front {
-        Some(front) => ctx.signal(Activate(front)),
-        // Starting is asynchronous: a failure is only logged.
-        None => ctx.signal(Launch(entry, icon)),
+    // Already starting: its placeholder again, not a second start.
+    let starting = ctx
+        .resource::<Launches>()
+        .iter()
+        .find(|l| l.app.id == entry.id)
+        .map(|l| l.id);
+    match (front, starting) {
+        (Some(front), _) => ctx.signal(Activate(front)),
+        (None, Some(launch)) => ctx.signal(ShowLaunch(launch)),
+        // Starting is asynchronous: a failure ends its launch later.
+        (None, None) => ctx.signal(StartApp { app: entry, icon }),
     }
     clear_query(ctx);
     ctx.signal(AppLaunched);
@@ -722,14 +734,26 @@ mod tests {
         ui.app.widgets::<PlaceholderView>().count()
     }
 
-    #[test]
-    fn a_launch_shows_the_placeholder_until_the_app_runs() {
-        let screen = drawer(&three("placeholder")).launcher(|_, _, _| {});
-        let mut ui = ui_with(screen, Some(registry_with(&[])));
-        ui.type_in("chr");
+    /// Search for `query` and tap the first row.
+    fn tap_first(ui: &mut Ui, query: &str) {
+        ui.type_in(query);
         let row = ui.rows()[0];
         ui.click(row);
         ui.app.tick();
+    }
+
+    /// A drawer named `name`, no app running, and Chromium tapped: starting,
+    /// under its placeholder.
+    fn chromium_starting(name: &str) -> Ui {
+        let screen = drawer(&three(name)).launcher(|_, _, _| {});
+        let mut ui = ui_with(screen, Some(registry_with(&[])));
+        tap_first(&mut ui, "chr");
+        ui
+    }
+
+    #[test]
+    fn a_launch_shows_the_placeholder_until_the_app_runs() {
+        let mut ui = chromium_starting("placeholder");
         assert_eq!(placeholders(&mut ui), 1);
 
         // Another app's window doesn't end it.
@@ -749,10 +773,7 @@ mod tests {
     fn activating_a_running_app_shows_no_placeholder() {
         let screen = drawer(&three("no-placeholder")).activator(|_, _| {});
         let mut ui = ui_with(screen, Some(registry_with(&[("chromium", 7)])));
-        ui.type_in("chr");
-        let row = ui.rows()[0];
-        ui.click(row);
-        ui.app.tick();
+        tap_first(&mut ui, "chr");
         assert_eq!(placeholders(&mut ui), 0);
     }
 
@@ -762,12 +783,7 @@ mod tests {
 
     #[test]
     fn the_placeholder_can_be_taken_down_early_and_shown_again() {
-        let screen = drawer(&three("placeholder-early")).launcher(|_, _, _| {});
-        let mut ui = ui_with(screen, Some(registry_with(&[])));
-        ui.type_in("chr");
-        let row = ui.rows()[0];
-        ui.click(row);
-        ui.app.tick();
+        let mut ui = chromium_starting("placeholder-early");
         assert_eq!(placeholders(&mut ui), 1);
         let launch = launches(&ui);
         assert_eq!(launch.len(), 1);
@@ -784,18 +800,47 @@ mod tests {
 
     #[test]
     fn a_launch_stopped_goes_with_its_placeholder() {
-        let screen = drawer(&three("placeholder-stop")).launcher(|_, _, _| {});
-        let mut ui = ui_with(screen, Some(registry_with(&[])));
-        ui.type_in("chr");
-        let row = ui.rows()[0];
-        ui.click(row);
-        ui.app.tick();
+        let mut ui = chromium_starting("placeholder-stop");
         let launch = launches(&ui)[0];
 
         ui.app.signal(StopLaunch(launch));
         ui.app.tick();
         assert_eq!(placeholders(&mut ui), 0);
         assert!(launches(&ui).is_empty());
+    }
+
+    /// A second tap while the app starts brings its placeholder back; it
+    /// doesn't start the app again.
+    #[test]
+    fn tapping_an_app_still_starting_shows_its_placeholder_again() {
+        let started = Rc::new(RefCell::new(0));
+        let s = started.clone();
+        let screen =
+            drawer(&three("placeholder-again")).launcher(move |_, _, _| *s.borrow_mut() += 1);
+        let mut ui = ui_with(screen, Some(registry_with(&[])));
+        tap_first(&mut ui, "chr");
+        crate::hide_launch_placeholder(&mut ui.app);
+        ui.app.tick();
+        assert_eq!(placeholders(&mut ui), 0);
+
+        tap_first(&mut ui, "chr");
+        assert_eq!(*started.borrow(), 1, "started once");
+        assert_eq!(launches(&ui).len(), 1);
+        assert_eq!(placeholders(&mut ui), 1);
+    }
+
+    /// A start that failed ends its launch at once, placeholder and all.
+    #[test]
+    fn a_failed_start_ends_its_launch() {
+        let mut ui = chromium_starting("placeholder-failed");
+        let launch = launches(&ui)[0];
+
+        crate::placeholder::failed(&mut ui.app, launch);
+        ui.app.tick();
+        assert_eq!(placeholders(&mut ui), 0);
+        assert!(launches(&ui).is_empty());
+        // Twice is harmless.
+        crate::placeholder::failed(&mut ui.app, launch);
     }
 
     #[test]

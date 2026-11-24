@@ -5,13 +5,19 @@
 //! the way.
 //!
 //! Each start is listed in [`Launches`], where the running apps show it
-//! too. A launch is done when the window the app opened with our activation
-//! token is listed; else when the registry first lists the app running, for
-//! an app that ignores the token; else after [`TIMEOUT`], for one that never
-//! opens a window; or when stopped ([`StopLaunch`]), which calls the app's
-//! start off. Its placeholder goes with it, or at once by
-//! [`hide_launch_placeholder`], and comes back by [`ShowLaunch`].
+//! too. A launch ends, by [`end`] alone, when:
+//! - the window the app opened with our activation token is listed; else
+//!   the registry first lists the app running, for an app that ignores the
+//!   token;
+//! - the app failed: its start failed, or it ended before a window came
+//!   ([`failed`], from the start's own bookkeeping);
+//! - [`TIMEOUT`] passed, for an app that does neither;
+//! - it is stopped ([`StopLaunch`]), which calls the app's start off.
+//!
+//! Its placeholder goes with it, or at once by [`hide_launch_placeholder`],
+//! and comes back by [`ShowLaunch`].
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use mecha_wayland::mechanix_widgets::{self as mw, TextWrap};
@@ -22,8 +28,10 @@ use apps::{
     ShowLaunch, StopLaunch,
 };
 
-/// How long it waits for an app's window before giving up on it.
-const TIMEOUT: Duration = Duration::from_secs(10);
+/// How long it waits for the window of an app that neither shows one nor
+/// fails. Long enough for a slow cold start: the placeholder doesn't keep
+/// the user from going elsewhere meanwhile.
+const TIMEOUT: Duration = Duration::from_secs(30);
 const ICON: f32 = 96.0;
 /// Between the icon and the name.
 const GAP: f32 = 24.0;
@@ -34,7 +42,7 @@ const NAMESPACE: &str = "launch-placeholder";
 struct Placeholder {
     /// Our activation token each launch's app was started with, once it has
     /// one.
-    tokens: Vec<(LaunchId, String)>,
+    tokens: HashMap<LaunchId, String>,
     /// The launch whose placeholder is up, and its window.
     shown: Option<(LaunchId, NodeId)>,
     /// Every ring timeout not finished yet and its launch, including those
@@ -55,8 +63,18 @@ pub(crate) fn install(app: &mut App) {
         .system(|app: &mut App, _: &ToplevelsChanged| end_arrived(app))
         .system(|app: &mut App, _: &RegistryChanged| end_arrived(app))
         .system(|app: &mut App, e: &ShowLaunch| show(app, e.0))
-        .system(|app: &mut App, e: &StopLaunch| end(app, e.0, true))
+        .system(|app: &mut App, e: &StopLaunch| end(app, e.0, Ending::CalledOff))
         .system(on_timeout);
+}
+
+/// How a launch ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ending {
+    /// Its window came, the app failed, or it was given up on: the app's
+    /// start is only forgotten.
+    Over,
+    /// Called off: the app's start is stopped.
+    CalledOff,
 }
 
 /// `entry` is starting: its launch is listed and its placeholder shown, in
@@ -82,7 +100,7 @@ pub(crate) fn started_with(app: &mut App, launch: LaunchId, token: &str) {
     }
     app.resource_mut::<Placeholder>()
         .tokens
-        .push((launch, token.to_owned()));
+        .insert(launch, token.to_owned());
     end_arrived(app);
 }
 
@@ -131,21 +149,29 @@ pub fn hide_launch_placeholder(app: &mut App) {
     }
 }
 
-/// Launch `id` is done: unlisted, its placeholder down. The app's own start
-/// is forgotten, unless `stop`, which calls it off.
-fn end(app: &mut App, id: LaunchId, stop: bool) {
+/// Launch `id`'s app failed: its start failed, or it ended before a window
+/// came. Its launch is over. A no-op for a launch already over.
+pub(crate) fn failed(app: &mut App, id: LaunchId) {
+    if app.has_resource::<Placeholder>() {
+        end(app, id, Ending::Over);
+    }
+}
+
+/// Launch `id` ends: unlisted, its placeholder down, and the app's own
+/// start forgotten or called off. The one way a launch ends; a no-op for
+/// one already over.
+fn end(app: &mut App, id: LaunchId, ending: Ending) {
     if !app.resource_mut::<Launches>().remove(id) {
         return;
     }
     let shown = {
         let mut placeholder = app.resource_mut::<Placeholder>();
-        placeholder.tokens.retain(|(l, _)| *l != id);
+        placeholder.tokens.remove(&id);
         placeholder.shown.is_some_and(|(s, _)| s == id)
     };
-    if stop {
-        crate::launch::stop(app, id);
-    } else {
-        crate::launch::forget(app, id);
+    match ending {
+        Ending::CalledOff => crate::launch::stop(app, id),
+        Ending::Over => crate::launch::forget(app, id),
     }
     if shown {
         hide_launch_placeholder(app);
@@ -153,7 +179,7 @@ fn end(app: &mut App, id: LaunchId, stop: bool) {
     app.signal(LaunchesChanged);
 }
 
-/// Every launch whose app's window is up is done.
+/// Every launch whose app's window is up is over.
 fn end_arrived(app: &mut App) {
     let arrived: Vec<LaunchId> = app
         .resource::<Launches>()
@@ -162,14 +188,14 @@ fn end_arrived(app: &mut App) {
         .map(|l| l.id)
         .collect();
     for id in arrived {
-        end(app, id, false);
+        end(app, id, Ending::Over);
     }
 }
 
 /// Whether a window that came with `launch`'s activation token is listed.
 fn opened_with(app: &App, launch: LaunchId) -> bool {
     let placeholder = app.resource::<Placeholder>();
-    let Some((_, token)) = placeholder.tokens.iter().find(|(l, _)| *l == launch) else {
+    let Some(token) = placeholder.tokens.get(&launch) else {
         return false;
     };
     app.has_resource::<Toplevels>()
@@ -202,7 +228,7 @@ fn on_timeout(app: &mut App, e: &IoEvent) {
         return;
     };
     tracing::warn!(%entry, "no window came for the app, dropping its launch");
-    end(app, launch, false);
+    end(app, launch, Ending::Over);
 }
 
 pub(crate) struct PlaceholderViewBuilder {
