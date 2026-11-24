@@ -38,8 +38,9 @@ const STATUS: ContainerId = ContainerId("status");
 /// reserves no space, so they and the apps under them keep their full
 /// size. Opening one hides the keyboard, and their windows take the
 /// keyboard focus while shown, so an app's text input beneath can't bring
-/// it back until they close.
-const COVERS: [ContainerId; 3] = [HOME_ID, RUNNING, CONTROL_CENTER];
+/// it back until they close. The control center is not one: it is a panel,
+/// over the keyboard and whatever is shown, and leaves them as they are.
+const COVERS: [ContainerId; 2] = [HOME_ID, RUNNING];
 
 /// GPU atlas pages: the default, plus a colour page for the keyboard's
 /// emoji, which the app icons leave no room for at 2x.
@@ -240,15 +241,14 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
         .window(
             nav_window(
                 PANEL,
-                role(Layer::Overlay, ALL_SIDES, -1, ShellRole::View, "panel"),
+                role(Layer::Overlay, ALL_SIDES, -1, ShellRole::Panel, "panel"),
                 LayoutStyle::default(),
             )
             .container(panel(
                 CONTROL_CENTER,
                 BelowBar(ControlCenterScreen),
                 Span::Whole,
-            ))
-            .takes_keyboard(),
+            )),
         )
         .window(
             nav_window(
