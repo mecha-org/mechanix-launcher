@@ -12,7 +12,7 @@ use super::{KeyboardStyle, Keymap, PredictionConfig};
 
 /// Size used when a button names an outline that isn't defined (and no
 /// `default` outline exists to fall back to). Keeps conversion total.
-const FALLBACK_OUTLINE: Outline = Outline { width: 50.0 };
+const FALLBACK_OUTLINE: Outline = Outline { width: 50.0, height: None };
 
 /// A row after `extends`/`replace` expansion: tokens still unresolved.
 struct RawRow {
@@ -173,6 +173,7 @@ impl View {
 fn resolve_key(layout: &Layout, styles: &HashMap<String, KeyStyle>, token: &str) -> Key {
     let button = layout.buttons.get(token);
     let action = resolve_action(token, button);
+    let outline = resolve_outline(layout, button);
     let look = KeyLook::for_button(
         styles,
         token,
@@ -183,7 +184,11 @@ fn resolve_key(layout: &Layout, styles: &HashMap<String, KeyStyle>, token: &str)
         token: token.to_string(),
         face: resolve_face(token, button),
         action,
-        width: resolve_outline(layout, button).width,
+        width: outline.width,
+        height: outline
+            .height
+            .filter(|h| h.is_finite() && *h > 0.0 && *h < 1.0)
+            .unwrap_or(1.0),
         look,
         hint: None,
         choices: Vec::new(),
@@ -941,7 +946,12 @@ mod tests {
                         Cell::Spacer(w) => *w,
                     })
                     .sum();
-                assert!((sum - 100.0).abs() < 0.01, "{name} row {i} sums to {sum}");
+                // A home row with the stick sums to 96.5 on purpose (see `outlines:`
+                // in layout.yaml): its spacers add gaps, so fewer weight units
+                // keep its letters as wide as the top row's.
+                let has_stick = row.keys().any(|k| k.token == "pointing_stick");
+                let want = if has_stick { 96.5 } else { 100.0 };
+                assert!((sum - want).abs() < 0.01, "{name} row {i} sums to {sum}");
             }
         }
     }

@@ -165,6 +165,8 @@ pub struct Key {
     pub action: KeyAction,
     /// The key's outline width (logical units).
     pub width: f32,
+    /// Fraction of the row height the key occupies (1.0 = fills the row).
+    pub height: f32,
     /// Colours per [`super::style::KeyState`], from the button's `key_style:` (or
     /// `normal`) and the `latched` style.
     pub look: KeyLook,
@@ -192,6 +194,7 @@ impl Key {
             face: KeyFace::Text(token.to_string()),
             action: KeyAction::EmitText(token.to_string()),
             width: 1.0,
+            height: 1.0,
             look: KeyLook::default(),
             hint: None,
             choices: Vec::new(),

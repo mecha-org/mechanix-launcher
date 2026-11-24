@@ -119,7 +119,7 @@ impl Widget for Key {
         let (bg_role, fg_role) = key_roles(look, kind, KeyState::Normal);
         let radius = b.radius;
 
-        *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
+        let mut layout = LayoutStyle::default()
             .center()
             // Outline width is the flex-grow weight; only ratios within a row
             // matter. Kept unscaled so a row's weights never sum below 1, which
@@ -128,6 +128,13 @@ impl Widget for Key {
             // label's width (padding would add to every key's basis).
             .grow(b.key.width)
             .flex_basis(px(0.0));
+        if b.key.height < 1.0 {
+            // A short key: a fraction of the row, centred vertically.
+            layout = layout
+                .height(percent(b.key.height * 100.0))
+                .align_self(Align::Center);
+        }
+        *s.component_mut::<LayoutStyle>(me).unwrap() = layout;
 
         *s.component_mut::<Paint>(me).unwrap() =
             Paint::Quad(Quad::new(s.color(bg_role)).radius(radius));
@@ -339,8 +346,17 @@ mod tests {
     fn key_widths_follow_outline_units_not_labels() {
         let rows = base_row_widths();
         let letter = width(&rows[0], "q");
-        for (token, w) in rows[0].iter().chain(&rows[1]) {
+        for (token, w) in &rows[0] {
             assert!((w - letter).abs() <= 1.0, "{token} is {w}, q is {letter}");
+        }
+        // Home row: letters match the top row's despite the edge spacers (the
+        // layout's weights are tuned for that); the pointing stick is narrower.
+        for (token, w) in &rows[1] {
+            if token == "pointing_stick" {
+                assert!(*w < 0.75 * letter, "stick {w}, q {letter}");
+            } else {
+                assert!((w - letter).abs() <= 1.0, "{token} is {w}, q is {letter}");
+            }
         }
         let bottom = &rows[3];
         let unit = width(bottom, "comma");

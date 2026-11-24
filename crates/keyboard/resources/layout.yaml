@@ -44,6 +44,11 @@ outlines:
     space:       { width: 40 }
     space_short: { width: 30 }
     strip:       { width: 12.5 }
+    # A short key (half the row height, so square), centred in its row. Home row:
+    # 2 * 0.5 (spacers) + 5.5 (this) + 9 * 10 (letters) = 96.5, not 100: the two
+    # spacers add two gaps, so the cells must total 100 * (W - 11g) / (W - 9g)
+    # (= 96.5 at 540 wide, gap 8, padding 8) for letters to match the top row's.
+    pointing_stick: { width: 5.5, height: 0.5 }
 
 # AOSP LatinIME English pages in the Mecha theme (see NOTICE-aosp.txt).
 # Shift is state, not a page: uppercase is derived from the letter keys.
@@ -54,7 +59,7 @@ views:
         more_keys: letters
         rows:
             - "q w e r t y u i o p"
-            - "a s d f pointing_stick g h j k l"
+            - "[0.5] a s d f pointing_stick g h j k l [0.5]"
             - "shift z x c v b n m BackSpace"
             - "to_symbols comma emoji space period Return"
     symbols:
@@ -231,7 +236,7 @@ buttons:
     # slide toward a direction to hold that arrow (Shift+arrow in select mode).
     pointing_stick:
         key_style: strip
-        outline: default
+        outline: pointing_stick
         action: pointing_stick
         icon: pointing-stick-symbolic
     shift:

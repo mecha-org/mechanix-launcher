@@ -80,12 +80,15 @@ pub(crate) struct PredictionSpec {
     pub(crate) popup: Option<bool>,
 }
 
-/// A button's size. Only the width is used — it sets the key's flex-grow weight
-/// within its row. Rows split the keyboard height evenly, so an outline's
-/// `height:` in the YAML is accepted but ignored.
+/// A button's size. `width` is the key's flex-grow weight within its row.
+/// `height` is optional: a fraction (0 < h < 1) of the row height, the key then
+/// being centred vertically in its row; absent or out of range, the key fills
+/// the row.
 #[derive(Debug, Clone, Copy, Deserialize)]
 pub(crate) struct Outline {
     pub(crate) width: f32,
+    #[serde(default)]
+    pub(crate) height: Option<f32>,
 }
 
 /// A squeekboard button's `action:` value — either a bare name (`erase`,
