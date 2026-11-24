@@ -1,5 +1,6 @@
 use crate::card_list::CardListBuilder;
 use crate::empty_notifications_screen::EmptyNotificationsScreenBuilder;
+use crate::media::MediaCardBuilder;
 use crate::notification_store::NotificationStore;
 use crate::notify_signal::NotificationSignal;
 use crate::ongoing::OngoingListBuilder;
@@ -64,6 +65,7 @@ impl Widget for NotificationsCenter {
             ))
             .gap(px(space::HEADER_TO_LIST.dp()));
 
+        s.spawn(me, MediaCardBuilder);
         s.spawn(me, OngoingListBuilder);
         let header = s.spawn(
             me,
@@ -106,7 +108,6 @@ impl Widget for NotificationsCenter {
         s.on::<Clicked>(close_all_notifications, move |ctx, _| {
             ctx.signal(NotificationSignal::CloseAllNotifications)
         });
-        // The list, swapped with the empty view; hidden until the first notification.
         let content = s.spawn(
             me,
             div().style(
