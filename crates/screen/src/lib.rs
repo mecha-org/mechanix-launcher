@@ -28,6 +28,16 @@ impl Event for Hidden {}
 pub struct AppLaunched;
 impl Signal for AppLaunched {}
 
+/// Signalled when an app's launch placeholder is to show: the app was
+/// tapped, or its starting card was.
+pub struct LaunchPlaceholderUp;
+impl Signal for LaunchPlaceholderUp {}
+
+/// Signalled when the launch placeholder is to go: its launch is over, or a
+/// window came up under it.
+pub struct LaunchPlaceholderDown;
+impl Signal for LaunchPlaceholderDown {}
+
 /// Spawns a themed full-size page showing `label` centred. Used by screens
 /// that have no real page yet.
 pub fn placeholder_page(app: &mut App, parent: NodeId, label: &str) -> NodeId {

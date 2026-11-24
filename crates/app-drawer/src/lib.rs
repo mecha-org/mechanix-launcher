@@ -20,7 +20,7 @@ use drawer::DrawerBuilder;
 /// The drawer's two faces, Regular and Light Geist Mono, for the host's
 /// `FontBook`.
 pub use assets::fonts::{GEIST_MONO, GEIST_MONO_LIGHT};
-pub use placeholder::hide_launch_placeholder;
+pub use placeholder::LaunchPlaceholder;
 
 /// Starts an app, for its launch.
 type Launcher = Rc<dyn Fn(&mut App, &DesktopApp, LaunchId)>;

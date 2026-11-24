@@ -1,8 +1,9 @@
 //! Apps starting, and their placeholder: from the tap that starts an app
 //! until its window is up, a full-screen view of the app's icon and name
-//! over the theme's surface. It holds the keyboard focus meanwhile, so the
-//! app under it doesn't get the focus back, and with it the keyboard, on
-//! the way.
+//! over the theme's surface, the [`LaunchPlaceholder`] screen. The host
+//! puts it in a container of its own, which opens on [`LaunchPlaceholderUp`]
+//! and closes on [`LaunchPlaceholderDown`], or as the user leaves it like
+//! any screen.
 //!
 //! Each start is listed in [`Launches`], where the running apps show it
 //! too. A launch ends, by [`end`] alone, when:
@@ -15,15 +16,16 @@
 //! - [`TIMEOUT`] passed, for an app that does neither;
 //! - it is stopped ([`StopLaunch`]), which calls the app's start off.
 //!
-//! Its placeholder goes with it, or at once by [`hide_launch_placeholder`],
-//! and comes back by [`ShowLaunch`]. It also goes once any window is
-//! activated under it, launch ended or not: it never covers an app.
+//! Its placeholder goes with it, and comes back by [`ShowLaunch`]. It also
+//! goes once any window is activated under it, launch ended or not: it
+//! never covers an app.
 
 use std::collections::HashMap;
 use std::time::Duration;
 
 use mecha_wayland::mechanix_widgets::{self as mw, TextWrap};
 use mecha_wayland::prelude::*;
+use screen::{Hidden, LaunchPlaceholderDown, LaunchPlaceholderUp, Screen};
 
 use apps::{
     DesktopApp, LaunchId, Launches, LaunchesChanged, Registry, RegistryChanged, RowIcon,
@@ -38,15 +40,18 @@ const ICON: f32 = 96.0;
 /// Between the icon and the name.
 const GAP: f32 = 24.0;
 const NAME_PX: f32 = 32.0;
-const NAMESPACE: &str = "launch-placeholder";
 
 #[derive(Default)]
 struct Placeholder {
     /// Our activation token each launch's app was started with, once it has
     /// one.
     tokens: HashMap<LaunchId, String>,
-    /// The launch whose placeholder is up, and its window.
-    shown: Option<(LaunchId, NodeId)>,
+    /// The [`LaunchPlaceholder`] screen's root, once built, and the view in
+    /// it with the launch it shows.
+    screen: Option<NodeId>,
+    view: Option<(LaunchId, NodeId)>,
+    /// The launch whose placeholder is up.
+    shown: Option<LaunchId>,
     /// The latest window activation when the placeholder went up: a later
     /// one is of a window it would cover.
     shown_after: u64,
@@ -72,7 +77,33 @@ pub(crate) fn install(app: &mut App) {
         .system(|app: &mut App, _: &RegistryChanged| end_arrived(app))
         .system(|app: &mut App, e: &ShowLaunch| show(app, e.0))
         .system(|app: &mut App, e: &StopLaunch| end(app, e.0, Ending::CalledOff))
+        .system(on_hidden)
         .system(on_timeout);
+}
+
+/// The screen of the launch placeholder: the starting app's icon and name.
+/// Its container opens on [`LaunchPlaceholderUp`] and closes on
+/// [`LaunchPlaceholderDown`]; it takes the keyboard focus while shown, so an app
+/// under it doesn't get it back, and with it the keyboard, on the way.
+pub struct LaunchPlaceholder;
+
+impl Screen for LaunchPlaceholder {
+    fn build(&self, app: &mut App, parent: NodeId) -> NodeId {
+        install(app);
+        let root = app
+            .spawn(parent, div().style(LayoutStyle::default().fill()))
+            .id();
+        app.resource_mut::<Placeholder>().screen = Some(root);
+        root
+    }
+}
+
+/// Its container closed: the user went elsewhere, or it was taken down.
+fn on_hidden(app: &mut App, e: &Emitted<Hidden>) {
+    let mut placeholder = app.resource_mut::<Placeholder>();
+    if placeholder.screen.is_some_and(|s| e.targets.contains(&s)) {
+        placeholder.shown = None;
+    }
 }
 
 /// How a launch ends.
@@ -112,9 +143,9 @@ pub(crate) fn started_with(app: &mut App, launch: LaunchId, token: &str) {
     end_arrived(app);
 }
 
-/// Show launch `id`'s placeholder, in place of any other.
+/// Show launch `id`'s placeholder, in place of any other's. Its view is
+/// built once per launch: shown again, there is nothing to redraw.
 fn show(app: &mut App, id: LaunchId) {
-    hide_launch_placeholder(app);
     let Some((name, icon)) = app
         .resource::<Launches>()
         .get(id)
@@ -122,30 +153,35 @@ fn show(app: &mut App, id: LaunchId) {
     else {
         return;
     };
-    let root = app.root();
-    let role = Role::Layer(LayerRole {
-        layer: Layer::Overlay,
-        anchor: Anchor::all(),
-        exclusive_zone: 0,
-        namespace: NAMESPACE.into(),
-        keyboard_interactivity: KeyboardInteractivity::Exclusive,
-        shell_role: Some(ShellRole::View),
-    });
-    let window = app
-        .spawn_with(
-            root,
-            window()
-                .title(NAMESPACE)
-                .layout(LayoutStyle::default())
-                .clear(Color::TRANSPARENT),
-            (role,),
-        )
-        .id();
-    app.spawn(window, PlaceholderViewBuilder { name, icon });
+    let (screen, view) = {
+        let placeholder = app.resource::<Placeholder>();
+        (placeholder.screen, placeholder.view)
+    };
+    if view.map(|(of, _)| of) != Some(id) {
+        if let Some((_, old)) = view {
+            app.remove(old);
+        }
+        let view = screen.map(|s| (id, app.spawn(s, PlaceholderViewBuilder { name, icon }).id()));
+        app.resource_mut::<Placeholder>().view = view;
+    }
     let after = latest_activation(app);
     let mut placeholder = app.resource_mut::<Placeholder>();
-    placeholder.shown = Some((id, window));
+    placeholder.shown = Some(id);
     placeholder.shown_after = after;
+    app.signal(LaunchPlaceholderUp);
+}
+
+/// Take the placeholder down, if up. Its launch goes on.
+pub(crate) fn take_down(app: &mut App) {
+    if app.resource_mut::<Placeholder>().shown.take().is_some() {
+        app.signal(LaunchPlaceholderDown);
+    }
+}
+
+/// The launch whose placeholder is up.
+#[cfg(test)]
+pub(crate) fn shown(app: &App) -> Option<LaunchId> {
+    app.resource::<Placeholder>().shown
 }
 
 /// A window activated since the placeholder went up takes it down, whatever
@@ -153,25 +189,13 @@ fn show(app: &mut App, id: LaunchId) {
 fn uncover(app: &mut App) {
     let shown_after = app.resource::<Placeholder>().shown_after;
     if latest_activation(app) > shown_after {
-        hide_launch_placeholder(app);
+        take_down(app);
     }
 }
 
 /// The latest window activation; 0 for none.
 fn latest_activation(app: &App) -> u64 {
     windows(app).map(|w| w.last_activated).max().unwrap_or(0)
-}
-
-/// Take the launch placeholder down now, if one is up: e.g. when the user
-/// goes elsewhere before the app's window comes. Its launch goes on.
-pub fn hide_launch_placeholder(app: &mut App) {
-    if !app.has_resource::<Placeholder>() {
-        return;
-    }
-    let shown = app.resource_mut::<Placeholder>().shown.take();
-    if let Some((_, window)) = shown {
-        app.remove(window);
-    }
 }
 
 /// Launch `id`'s app failed: its start failed, or it ended before a window
@@ -192,14 +216,14 @@ fn end(app: &mut App, id: LaunchId, ending: Ending) {
     let shown = {
         let mut placeholder = app.resource_mut::<Placeholder>();
         placeholder.tokens.remove(&id);
-        placeholder.shown.is_some_and(|(s, _)| s == id)
+        placeholder.shown == Some(id)
     };
     match ending {
         Ending::CalledOff => crate::launch::stop(app, id),
         Ending::Over => crate::launch::forget(app, id),
     }
     if shown {
-        hide_launch_placeholder(app);
+        take_down(app);
     }
     app.signal(LaunchesChanged);
 }
@@ -271,7 +295,7 @@ fn on_timeout(app: &mut App, e: &IoEvent) {
     end(app, launch, Ending::Over);
 }
 
-pub(crate) struct PlaceholderViewBuilder {
+struct PlaceholderViewBuilder {
     name: String,
     icon: RowIcon,
 }
@@ -281,7 +305,7 @@ impl Build for PlaceholderViewBuilder {
 }
 
 /// The app's icon over its name, centred on the theme's surface.
-pub(crate) struct PlaceholderView;
+struct PlaceholderView;
 
 impl Widget for PlaceholderView {
     type Builder = PlaceholderViewBuilder;

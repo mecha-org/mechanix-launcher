@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use mecha_wayland::prelude::*;
-use screen::AppLaunched;
+use screen::{AppLaunched, LaunchPlaceholderDown, LaunchPlaceholderUp};
 
 use super::apply::{Action, ContainerNodes, Nav, NavWindow, apply, on_resized};
 use super::input::{on_claimed, on_contact};
@@ -213,20 +213,18 @@ impl Module for NavModule {
         app.system(on_claimed);
         app.system(on_frame);
         app.insert_resource(SeenToplevels::default());
-        app.system(on_app_launched);
-        app.system(on_external);
+        app.system(|app: &mut App, _: &AppLaunched| feed(app, ExternalEvent::AppLaunched));
+        app.system(|app: &mut App, _: &LaunchPlaceholderUp| {
+            feed(app, ExternalEvent::LaunchPlaceholderUp)
+        });
+        app.system(|app: &mut App, _: &LaunchPlaceholderDown| {
+            feed(app, ExternalEvent::LaunchPlaceholderDown)
+        });
+        app.system(|app: &mut App, e: &NavExternal| feed(app, e.0));
         app.system(on_showing_home);
         app.system(on_toplevels_changed);
         apply(app);
     }
-}
-
-/// Feeds a screen's app launch to the stack, which closes what closes on it.
-fn on_app_launched(app: &mut App, _: &AppLaunched) {
-    app.resource_mut::<Nav>()
-        .stack
-        .handle(Input::External(ExternalEvent::AppLaunched));
-    apply(app);
 }
 
 /// Signalled by the host for an [`ExternalEvent`] only it can see, such as
@@ -236,9 +234,17 @@ fn on_app_launched(app: &mut App, _: &AppLaunched) {
 pub struct NavExternal(pub ExternalEvent);
 impl Signal for NavExternal {}
 
-fn on_external(app: &mut App, e: &NavExternal) {
-    app.resource_mut::<Nav>().stack.handle(Input::External(e.0));
+/// Feeds `e`, a screen's (such as its app launch), the compositor's or the
+/// host's, to the stack, which opens and closes what opens and closes on
+/// it, and shows the result.
+fn feed(app: &mut App, e: ExternalEvent) {
+    handle(app, e);
     apply(app);
+}
+
+/// Feeds `e` to the stack, for a caller that applies once after several.
+fn handle(app: &mut App, e: ExternalEvent) {
+    app.resource_mut::<Nav>().stack.handle(Input::External(e));
 }
 
 /// Feeds the compositor's leaving home by itself, at a home window, to the
@@ -253,13 +259,9 @@ fn on_showing_home(app: &mut App, e: &Emitted<ShowingHome>) {
             .iter()
             .any(|w| w.home && e.targets.contains(&w.node))
     };
-    if !at_home {
-        return;
+    if at_home {
+        feed(app, ExternalEvent::HomeLeft);
     }
-    app.resource_mut::<Nav>()
-        .stack
-        .handle(Input::External(ExternalEvent::HomeLeft));
-    apply(app);
 }
 
 #[derive(Default)]
@@ -310,9 +312,7 @@ fn on_toplevels_changed(app: &mut App, _: &ToplevelsChanged) {
         (last_closed, ExternalEvent::LastWindowClosed),
     ] {
         if happened {
-            app.resource_mut::<Nav>()
-                .stack
-                .handle(Input::External(event));
+            handle(app, event);
         }
     }
     if opened || last_closed || fullscreen_changed {
@@ -354,9 +354,7 @@ pub(crate) fn feed_fullscreen(app: &mut App) {
     } else {
         ExternalEvent::FullscreenLeft
     };
-    app.resource_mut::<Nav>()
-        .stack
-        .handle(Input::External(event));
+    handle(app, event);
 }
 
 #[cfg(test)]
@@ -766,12 +764,6 @@ pub(crate) mod tests {
             .no_input(),
         );
         let mut app = app_with(m);
-        let external = |app: &mut App, event| {
-            app.resource_mut::<Nav>()
-                .stack
-                .handle(Input::External(event));
-            apply(app);
-        };
         assert_eq!(display(&app, node_of(&app, BAR)), Display::Flex);
 
         // A fullscreen app takes the focus, nothing over it.
@@ -780,12 +772,12 @@ pub(crate) mod tests {
         assert_eq!(display(&app, node_of(&app, BAR)), Display::Hidden);
 
         // Home over it: the bar is back, though the app keeps the focus.
-        external(&mut app, ExternalEvent::LastWindowClosed);
+        feed(&mut app, ExternalEvent::LastWindowClosed);
         assert_eq!(display(&app, node_of(&app, HOME)), Display::Flex);
         assert_eq!(display(&app, node_of(&app, BAR)), Display::Flex);
 
         // Back to the app: out of the way again.
-        external(&mut app, ExternalEvent::WindowOpened);
+        feed(&mut app, ExternalEvent::WindowOpened);
         assert_eq!(display(&app, node_of(&app, HOME)), Display::Hidden);
         assert_eq!(display(&app, node_of(&app, BAR)), Display::Hidden);
     }
@@ -796,6 +788,23 @@ pub(crate) mod tests {
         let mut app = app_with(module_with(home));
         assert_eq!(display(&app, node_of(&app, HOME)), Display::Flex);
         app.signal(AppLaunched);
+        app.flush();
+        assert_eq!(display(&app, node_of(&app, HOME)), Display::Hidden);
+    }
+
+    /// A screen's launch placeholder signals open and close what opens and
+    /// closes on them.
+    #[test]
+    fn the_launch_placeholder_signals_open_and_close_it() {
+        let home = home_spec(false)
+            .open(OnExternal(ExternalEvent::LaunchPlaceholderUp), INSTANT)
+            .close(OnExternal(ExternalEvent::LaunchPlaceholderDown), INSTANT);
+        let mut app = app_with(module_with(home));
+        assert_eq!(display(&app, node_of(&app, HOME)), Display::Hidden);
+        app.signal(LaunchPlaceholderUp);
+        app.flush();
+        assert_eq!(display(&app, node_of(&app, HOME)), Display::Flex);
+        app.signal(LaunchPlaceholderDown);
         app.flush();
         assert_eq!(display(&app, node_of(&app, HOME)), Display::Hidden);
     }

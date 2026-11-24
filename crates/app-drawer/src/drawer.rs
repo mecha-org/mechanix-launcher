@@ -382,12 +382,11 @@ mod tests {
     use std::rc::Rc;
 
     use mecha_wayland::mechanix_widgets::{self as mw, ColorSource, prelude::FontBook};
-    use screen::Screen;
+    use screen::{LaunchPlaceholderDown, LaunchPlaceholderUp, Screen};
 
     use super::*;
-    use crate::AppDrawer;
-    use crate::placeholder::PlaceholderView;
     use crate::row::Row;
+    use crate::{AppDrawer, LaunchPlaceholder};
     use apps::{AppKey, IconDirs, LaunchId, Launches, RunningApp, ShowLaunch, StopLaunch};
 
     const SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" fill="#0a0"/></svg>"##;
@@ -730,8 +729,9 @@ mod tests {
         assert_eq!(ui.app.resource::<Launched>().0, 1);
     }
 
+    /// Whether a launch's placeholder is up.
     fn placeholders(ui: &mut Ui) -> usize {
-        ui.app.widgets::<PlaceholderView>().count()
+        usize::from(crate::placeholder::shown(&ui.app).is_some())
     }
 
     /// Search for `query` and tap the first row.
@@ -788,7 +788,7 @@ mod tests {
         let launch = launches(&ui);
         assert_eq!(launch.len(), 1);
 
-        crate::hide_launch_placeholder(&mut ui.app);
+        crate::placeholder::take_down(&mut ui.app);
         ui.app.tick();
         assert_eq!(placeholders(&mut ui), 0);
         assert_eq!(launches(&ui), launch, "the launch goes on");
@@ -809,6 +809,57 @@ mod tests {
         assert!(launches(&ui).is_empty());
     }
 
+    /// The container asks the placeholder signals made: `(up, down)`.
+    #[derive(Default)]
+    struct Asked(u32, u32);
+    impl Resource for Asked {}
+
+    /// The placeholder follows its container: a tap asks for it, nav hiding
+    /// it (the user went elsewhere) leaves the launch going, and the launch
+    /// ending gives up only a container still asked for.
+    #[test]
+    fn the_placeholder_follows_its_container() {
+        let screen = drawer(&three("placeholder-container")).launcher(|_, _, _| {});
+        let mut ui = ui_with(screen, Some(registry_with(&[])));
+        let root = ui.app.root();
+        let placeholder = LaunchPlaceholder.build(&mut ui.app, root);
+        ui.app
+            .init_resource::<Asked>()
+            .system(|app: &mut App, _: &LaunchPlaceholderUp| app.resource_mut::<Asked>().0 += 1)
+            .system(|app: &mut App, _: &LaunchPlaceholderDown| app.resource_mut::<Asked>().1 += 1);
+        let asked = |ui: &Ui| {
+            let a = ui.app.resource::<Asked>();
+            (a.0, a.1)
+        };
+
+        tap_first(&mut ui, "chr");
+        assert_eq!(asked(&ui), (1, 0));
+        assert_eq!(placeholders(&mut ui), 1);
+        let launch = launches(&ui)[0];
+
+        ui.app.emit(Hidden, vec![placeholder]);
+        ui.app.tick();
+        assert_eq!(placeholders(&mut ui), 0);
+        assert_eq!(launches(&ui), [launch], "the launch goes on");
+
+        ui.app.signal(ShowLaunch(launch));
+        ui.app.tick();
+        assert_eq!(asked(&ui), (2, 0));
+        ui.app.signal(StopLaunch(launch));
+        ui.app.tick();
+        assert_eq!(asked(&ui), (2, 1));
+        assert_eq!(placeholders(&mut ui), 0);
+
+        // Over with its container already closed: nothing to give up.
+        tap_first(&mut ui, "chr");
+        let launch = launches(&ui)[0];
+        ui.app.emit(Hidden, vec![placeholder]);
+        ui.app.tick();
+        ui.app.signal(StopLaunch(launch));
+        ui.app.tick();
+        assert_eq!(asked(&ui), (3, 1));
+    }
+
     /// A second tap while the app starts brings its placeholder back; it
     /// doesn't start the app again.
     #[test]
@@ -819,7 +870,7 @@ mod tests {
             drawer(&three("placeholder-again")).launcher(move |_, _, _| *s.borrow_mut() += 1);
         let mut ui = ui_with(screen, Some(registry_with(&[])));
         tap_first(&mut ui, "chr");
-        crate::hide_launch_placeholder(&mut ui.app);
+        crate::placeholder::take_down(&mut ui.app);
         ui.app.tick();
         assert_eq!(placeholders(&mut ui), 0);
 

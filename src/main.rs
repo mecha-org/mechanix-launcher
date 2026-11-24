@@ -1,4 +1,4 @@
-use app_drawer::{AppDrawer, GEIST_MONO, GEIST_MONO_LIGHT, hide_launch_placeholder};
+use app_drawer::{AppDrawer, GEIST_MONO, GEIST_MONO_LIGHT, LaunchPlaceholder};
 use apps::RegistryModule;
 use control_center::app_screens::AppScreen;
 use control_center::{ControlCenterScreen, select_screen};
@@ -24,12 +24,14 @@ use status_bar::{
 };
 
 const HOME: AreaId = AreaId("home");
+const LAUNCH: AreaId = AreaId("launch-placeholder");
 const RUNNING_APPS: AreaId = AreaId("running-apps");
 const PANEL: AreaId = AreaId("panel");
 const STATUS_BAR: AreaId = AreaId("status-bar");
 
 const HOME_ID: ContainerId = ContainerId("home");
 const DRAWER: ContainerId = ContainerId("drawer");
+const PLACEHOLDER: ContainerId = ContainerId("placeholder");
 const RUNNING: ContainerId = ContainerId("running");
 const CONTROL_CENTER: ContainerId = ContainerId("control_center");
 const STATUS: ContainerId = ContainerId("status");
@@ -37,12 +39,12 @@ const STATUS: ContainerId = ContainerId("status");
 /// The launcher screens that cover apps. While any is open the keyboard
 /// reserves no space, so they and the apps under them keep their full
 /// size. Opening one hides the keyboard, and the apps lose the keyboard
-/// focus while it shows (the app switcher takes it; for home, the
-/// compositor keeps it off the hidden apps), so an app's text input
-/// beneath can't bring it back until it closes. The control center is not
-/// one: it is a panel, over the keyboard and whatever is shown, and leaves
-/// them as they are.
-const COVERS: [ContainerId; 2] = [HOME_ID, RUNNING];
+/// focus while it shows (the app switcher and the launch placeholder take
+/// it; for home, the compositor keeps it off the hidden apps), so an app's
+/// text input beneath can't bring it back until it closes. The control
+/// center is not one: it is a panel, over the keyboard and whatever is
+/// shown, and leaves them as they are.
+const COVERS: [ContainerId; 3] = [HOME_ID, PLACEHOLDER, RUNNING];
 
 /// GPU atlas pages: the default, plus a colour page for the keyboard's
 /// emoji, which the app icons leave no room for at 2x.
@@ -89,9 +91,6 @@ fn on_container_shown(app: &mut App, s: &ContainerShown) {
     // under resizes as the screen comes up.
     if s.shown {
         hide_keyboard(app);
-        // Somewhere else to go before the app's window came: its
-        // placeholder would stay over this screen.
-        hide_launch_placeholder(app);
     }
     suspend_keyboard_zone(app, any_open);
 }
@@ -197,6 +196,8 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
         .close(OnExternal(ExternalEvent::HomeLeft), INSTANT)
         .close(OnExternal(ExternalEvent::WindowOpened), INSTANT)
         .open(OnExternal(ExternalEvent::LastWindowClosed), FADE)
+        // FIXME: consider giving the drawer a window of its own, stacked
+        // above home's.
         .child(
             container(DRAWER, BelowBar(drawer))
                 .open(swipe(HOME, Direction::Up, Timing::Any), INSTANT)
@@ -204,6 +205,14 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
                 .close(bottom_quick(), INSTANT),
         )
         .initially_open();
+    // An app starting, over home until its window comes; left like any
+    // screen, while the app goes on starting. Recent apps opens over it.
+    let placeholder = container(PLACEHOLDER, LaunchPlaceholder)
+        .open(OnExternal(ExternalEvent::LaunchPlaceholderUp), INSTANT)
+        .close(OnExternal(ExternalEvent::LaunchPlaceholderDown), INSTANT)
+        .close(bottom_quick(), INSTANT)
+        // Not where unlocking leaves you.
+        .close(OnExternal(ExternalEvent::Locked), INSTANT);
     let running = container(RUNNING, BelowBar(RunningApps::new()))
         .open(
             swipe(BOTTOM_EDGE, Direction::Up, Timing::Held).span(Span::Middle),
@@ -230,6 +239,22 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
                 .container(home)
                 .home(),
         )
+        .window(
+            nav_window(
+                LAUNCH,
+                role(
+                    Layer::Overlay,
+                    ALL_SIDES,
+                    -1,
+                    ShellRole::View,
+                    "launch-placeholder",
+                ),
+                LayoutStyle::default(),
+            )
+            .container(placeholder)
+            .takes_keyboard(),
+        )
+        // After the placeholder's: recent apps stacks over it.
         .window(
             nav_window(
                 RUNNING_APPS,

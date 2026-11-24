@@ -13,6 +13,11 @@ use super::{AreaId, EXTERNAL};
 pub enum ExternalEvent {
     /// A screen started an app.
     AppLaunched,
+    /// An app's launch placeholder is to show.
+    LaunchPlaceholderUp,
+    /// The launch placeholder is to go: its launch is over, or a window came
+    /// up under it.
+    LaunchPlaceholderDown,
     /// A new app window, not a dialog, opened with focus, however it was
     /// started.
     WindowOpened,
