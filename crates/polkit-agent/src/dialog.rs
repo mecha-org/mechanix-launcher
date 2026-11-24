@@ -16,9 +16,13 @@ use mecha_wayland::mechanix_widgets::prelude::{
     TextContextExt, TextOverflow, TextVariant, VerticalTrim, bottom_sheet, text,
 };
 use mecha_wayland::prelude::*;
+use std::time::{Duration, Instant};
 
 use crate::agent::{AuthCancelled, AuthFinished, AuthRequested};
-use crate::helper::{AuthAnswer, AuthCancel, AuthMessage, AuthPrompt, AuthRetry, AuthUser};
+use crate::helper::{
+    AuthAnswer, AuthCancel, AuthLocked, AuthMessage, AuthPrompt, AuthRetry, AuthUser, UNSENDABLE,
+    sendable,
+};
 
 const NAMESPACE: &str = "polkit-agent";
 
@@ -26,35 +30,25 @@ const ALL_SIDES: Anchor = Anchor::from_bits_truncate(
     Anchor::TOP.bits() | Anchor::BOTTOM.bits() | Anchor::LEFT.bits() | Anchor::RIGHT.bits(),
 );
 
-/// The icons' size in the atlas.
 const ICON: u32 = 24;
 /// The header's icons (✕, ✓), and their tap area.
 const HEADER_ICON: f32 = 20.0;
 const TAP: f32 = 48.0;
-/// The password field's height.
 const FIELD_HEIGHT: f32 = 40.0;
-/// The ✓'s round background, inside its tap area.
 const OK_CIRCLE: f32 = 32.0;
 /// The header's side padding: ✕ (48), the title, ✓ (48), no gaps.
 const HEADER_SIDE: f32 = 8.0;
-/// The ✓ icon's opacity while disabled.
 const DISABLED_OPACITY: f32 = 0.10;
-/// The avatar's diameter.
 const AVATAR: f32 = 40.0;
 
-/// The placeholder before the helper asks anything.
 const DEFAULT_PROMPT: &str = "Password";
 
-/// Said under the field while the helper checks an answer.
 const CHECKING: &str = "Authenticating…";
 
-/// Said under the field when the helper failed an answer.
 const WRONG: &str = "Incorrect password. Try again.";
 
-/// The underline's width.
 const STROKE: f32 = 1.0;
 
-/// The icons, loaded once.
 #[derive(Clone, Copy)]
 struct Icons {
     close: SpriteId,
@@ -65,27 +59,23 @@ struct Icons {
 }
 impl Resource for Icons {}
 
-/// The question the helper asked, waiting for its answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Prompt {
     text: String,
     echo: bool,
 }
 
-/// Said under the field.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Note {
     text: String,
     error: bool,
 }
 
-/// The request on screen.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Holds the cookie: no `Debug`, so it can't be logged.
 struct Shown {
     cookie: String,
     message: String,
     user: Option<String>,
-    /// Open: the field takes an answer.
     prompt: Option<Prompt>,
     /// The last prompt's text, kept as the placeholder between prompts.
     asked: Option<String>,
@@ -93,6 +83,8 @@ struct Shown {
     /// An answer was sent: it stays in the field, disabled, until the
     /// helper says what it made of it.
     checking: bool,
+    /// Locked out until then, after too many wrong answers.
+    locked: Option<Instant>,
 }
 
 struct Dialog {
@@ -103,7 +95,6 @@ struct Dialog {
 impl Resource for Dialog {}
 
 impl Dialog {
-    /// The shown request, if its cookie is `cookie`.
     fn shown(&mut self, cookie: &str) -> Option<&mut Shown> {
         self.shown.as_mut().filter(|s| s.cookie == cookie)
     }
@@ -171,6 +162,7 @@ pub(crate) fn install(app: &mut App) {
             asked: None,
             note: None,
             checking: false,
+            locked: None,
         });
         set_mapped(app, true);
         refresh(app, Clear::All);
@@ -181,7 +173,6 @@ pub(crate) fn install(app: &mut App) {
             false
         });
     })
-    // A new question: the answer sent, if any, goes.
     .system(|app, e: &AuthPrompt| {
         update(app, &e.cookie, |s| {
             s.asked = Some(e.text.clone());
@@ -189,8 +180,21 @@ pub(crate) fn install(app: &mut App) {
                 text: e.text.clone(),
                 echo: e.echo,
             });
+            s.locked = None;
             std::mem::take(&mut s.checking)
         });
+    })
+    // Too many wrong answers: count down to the next attempt.
+    .system(|app, e: &AuthLocked| {
+        update(app, &e.cookie, |s| {
+            s.prompt = None;
+            s.checking = false;
+            s.note = None;
+            s.locked = Some(Instant::now() + e.wait);
+            true
+        });
+        let view = app.resource::<Dialog>().view;
+        app.emit(Countdown, view);
     })
     .system(|app, e: &AuthMessage| {
         update(app, &e.cookie, |s| {
@@ -201,7 +205,6 @@ pub(crate) fn install(app: &mut App) {
             false
         });
     })
-    // Wrong: the field empties and shows the error until typing starts.
     .system(|app, e: &AuthRetry| {
         update(app, &e.cookie, |s| {
             s.prompt = None;
@@ -213,7 +216,6 @@ pub(crate) fn install(app: &mut App) {
             true
         });
     })
-    // Sent: it is checked; the last note no longer holds.
     .system(|app, e: &AuthAnswer| {
         update(app, &e.cookie, |s| {
             s.prompt = None;
@@ -226,7 +228,6 @@ pub(crate) fn install(app: &mut App) {
     .system(|app, e: &AuthCancelled| close(app, &e.cookie));
 }
 
-/// Change the shown request, if it is `cookie`'s, and show the change.
 /// `change` says whether to empty the field.
 fn update(app: &mut App, cookie: &str, change: impl FnOnce(&mut Shown) -> bool) {
     let empty_field = {
@@ -246,7 +247,6 @@ fn update(app: &mut App, cookie: &str, change: impl FnOnce(&mut Shown) -> bool) 
     );
 }
 
-/// Hide the dialog, if it shows `cookie`'s request.
 fn close(app: &mut App, cookie: &str) {
     {
         let mut dialog = app.resource_mut::<Dialog>();
@@ -259,13 +259,11 @@ fn close(app: &mut App, cookie: &str) {
     set_mapped(app, false);
 }
 
-/// Show the state, clearing what `clear` says.
 fn refresh(app: &mut App, clear: Clear) {
     let view = app.resource::<Dialog>().view;
     app.emit(Refresh { clear }, view);
 }
 
-/// Map or unmap the dialog's window.
 fn set_mapped(app: &mut App, mapped: bool) {
     if !app.has_resource::<Surfaces>() || !app.has_resource::<Wayland>() {
         return;
@@ -275,7 +273,10 @@ fn set_mapped(app: &mut App, mapped: bool) {
     surfaces.set_mapped(window, mapped, &mut wl);
 }
 
-/// Show [`Dialog::shown`].
+/// Start the lockout's countdown.
+struct Countdown;
+impl Event for Countdown {}
+
 struct Refresh {
     clear: Clear,
 }
@@ -284,30 +285,27 @@ impl Event for Refresh {}
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Clear {
     Nothing,
-    /// Empty the field.
     Field,
     /// Empty the field and hide ✓: a new request, or none.
     All,
 }
 
-/// The dialog's view: the sheet and what is in it.
 pub struct PolkitDialog {
     parts: Parts,
-    /// The field holds nothing.
     empty: bool,
-    /// A secret answer shows as typed.
     revealed: bool,
-    /// The field has the text focus: the keyboard is up.
     focused: bool,
     /// Something was typed for this request: ✓ shows from then on.
     started: bool,
+    /// The field's length, to tell an edit from a focus change.
+    len: usize,
+    /// Refreshes the lockout's countdown every second.
+    tick: TimerId,
 }
 
 #[derive(Clone, Copy)]
 struct Parts {
     sheet: Handle<BottomSheet>,
-    /// ✓: hidden until typing starts, then dimmed while there is
-    /// nothing to send.
     ok: Handle<Div>,
     ok_icon: Handle<Icon>,
     initial: Handle<Text>,
@@ -315,12 +313,9 @@ struct Parts {
     message: Handle<Text>,
     input: Handle<Input>,
     placeholder: Handle<Text>,
-    /// Shows or hides a secret answer.
     reveal: Handle<Div>,
     eye: Handle<Icon>,
-    /// In the eye's place on an error.
     alert: Handle<Div>,
-    /// Under the field: primary, or the error colour.
     line: Handle<Div>,
     note: Handle<Text>,
 }
@@ -331,7 +326,6 @@ impl Build for PolkitDialogBuilder {
     type Widget = PolkitDialog;
 }
 
-/// A header icon's tap area.
 fn tap_area() -> LayoutStyle {
     LayoutStyle::default()
         .size(px(TAP), px(TAP))
@@ -349,15 +343,13 @@ impl Widget for PolkitDialog {
             .size(percent(100.0), percent(100.0));
         let icons = *s.resource::<Icons>();
 
-        // As tall as the window: from the status bar down.
         let sheet = s.spawn(me, bottom_sheet().height(percent(100.0)));
         let (header, body, title) = {
             let w = s.widget::<BottomSheet>(sheet).expect("the sheet is built");
             (w.header(), w.body(), w.title())
         };
 
-        // The header: ✕, the title, ✓. The sheet's own title would sit
-        // before the ✕, so ours replaces it.
+        // Our title replaces the sheet's, which would sit before the ✕.
         {
             let mut style = s.component_mut::<LayoutStyle>(title).unwrap();
             let hidden = style.clone().hidden();
@@ -377,8 +369,7 @@ impl Widget for PolkitDialog {
                 ));
             *style = edged;
         }
-        // Less above the user and between the user and the field, so the
-        // field sits higher, clear of the keys.
+        // Tighter above and below the user, so the field clears the keys.
         {
             let mut style = s.component_mut::<LayoutStyle>(body).unwrap();
             let raised = style
@@ -439,7 +430,6 @@ impl Widget for PolkitDialog {
                 .color(s.color(ColorRole::OnSurface).with_alpha(DISABLED_OPACITY)),
         );
 
-        // As whom, and what for.
         // The avatar stays beside the name however long the message is.
         let identity = s.spawn(
             body,
@@ -494,7 +484,6 @@ impl Widget for PolkitDialog {
                 .color(ColorRole::OnSurfaceVariant),
         );
 
-        // The field: the text over a line, the eye over its right end.
         let answer = s.spawn(
             body,
             div().style(LayoutStyle::default().column().width(percent(100.0))),
@@ -615,6 +604,22 @@ impl Widget for PolkitDialog {
         s.on::<Clicked>(cancel, |ctx, _| cancel_shown(ctx));
         s.on::<SheetClosed>(sheet, |ctx, _| cancel_shown(ctx));
         s.on::<Refresh>(me, show);
+        let tick = s.add_interval(Duration::from_secs(1), |ctx, e| {
+            let locked = ctx
+                .resource::<Dialog>()
+                .shown
+                .as_ref()
+                .and_then(|s| s.locked)
+                .is_some_and(|until| until > Instant::now());
+            if !locked {
+                ctx.cancel_timer(e.id);
+            }
+            sync_field(ctx);
+        });
+        s.on::<Countdown>(me, |ctx, _| {
+            let tick = ctx.me().tick;
+            ctx.start_timer(tick);
+        });
 
         PolkitDialog {
             parts: Parts {
@@ -636,19 +641,19 @@ impl Widget for PolkitDialog {
             revealed: false,
             focused: false,
             started: false,
+            len: 0,
+            tick,
         }
     }
 }
 
-/// The user gave up on the shown request.
 fn cancel_shown(ctx: &mut Context<'_, PolkitDialog>) {
     if let Some(cookie) = ctx.resource::<Dialog>().cookie() {
         ctx.signal(AuthCancel { cookie });
     }
 }
 
-/// Send what the field holds, if a prompt is open and something is
-/// typed. It stays in the field, masked, while it is checked.
+/// Send the typed answer; it stays in the field, masked, while checked.
 fn submit(ctx: &mut Context<'_, PolkitDialog>) {
     let cookie = ctx
         .resource::<Dialog>()
@@ -663,30 +668,50 @@ fn submit(ctx: &mut Context<'_, PolkitDialog>) {
     let Some(answer) = ctx.widget::<Input>(input.id()).map(|i| i.secret()) else {
         return;
     };
+    // The helper would refuse it: say why, and leave it to edit.
+    if !sendable(answer.as_bytes()) {
+        if let Some(s) = ctx.resource_mut::<Dialog>().shown.as_mut() {
+            s.note = Some(Note {
+                text: UNSENDABLE.into(),
+                error: true,
+            });
+        }
+        sync_field(ctx);
+        return;
+    }
     ctx.me().revealed = false;
     ctx.signal(AuthAnswer { cookie, answer });
 }
 
-/// Follow whether the field is empty. True if that changed. Typing
-/// again after an error clears it.
+/// Follow whether the field is empty; typing after an error clears it.
 fn typed(ctx: &mut Context<'_, PolkitDialog>) -> bool {
     let input = ctx.me().parts.input;
-    let empty = ctx
+    let len = ctx
         .widget::<Input>(input.id())
-        .is_none_or(|i| i.text().is_empty());
-    if ctx.me().empty == empty {
+        .map_or(0, |i| i.text().len());
+    let empty = len == 0;
+    let edited = len != std::mem::replace(&mut ctx.me().len, len);
+    let cleared = edited
+        && !empty
+        && ctx
+            .resource_mut::<Dialog>()
+            .shown
+            .as_mut()
+            .is_some_and(|s| s.note.take_if(|n| n.error).is_some());
+    if ctx.me().empty == empty && !cleared {
         return false;
     }
     ctx.me().empty = empty;
     ctx.me().started |= !empty;
-    if !empty
-        && let Some(s) = ctx.resource_mut::<Dialog>().shown.as_mut()
-        && s.note.as_ref().is_some_and(|n| n.error)
-    {
-        s.note = None;
-    }
     sync_field(ctx);
     true
+}
+
+/// The lockout's message, `left` to go, in whole seconds rounded up.
+fn locked_text(left: Duration) -> String {
+    let secs = left.as_secs() + u64::from(left.subsec_nanos() > 0);
+    let unit = if secs == 1 { "second" } else { "seconds" };
+    format!("Too many attempts. Try again in {secs} {unit}")
 }
 
 /// The prompt as a placeholder: `Password: ` reads `Password`.
@@ -703,18 +728,35 @@ fn display(shown: bool) -> Display {
     }
 }
 
-/// Show the field's state: focused, empty, error.
 fn sync_field(ctx: &mut Context<'_, PolkitDialog>) {
-    let shown = ctx.resource::<Dialog>().shown.clone();
+    let (open, secret, note, hint, checking) = {
+        let shown = ctx.resource::<Dialog>().shown.as_ref();
+        let prompt = shown.and_then(|s| s.prompt.as_ref());
+        let locked = shown
+            .and_then(|s| s.locked)
+            .map(|until| until.saturating_duration_since(Instant::now()))
+            .filter(|left| !left.is_zero());
+        let note = match locked {
+            Some(left) => Some(Note {
+                text: locked_text(left),
+                error: true,
+            }),
+            None => shown.and_then(|s| s.note.clone()),
+        };
+        let asked = shown.and_then(|s| s.asked.as_deref());
+        (
+            prompt.is_some(),
+            !prompt.is_some_and(|q| q.echo),
+            note,
+            placeholder(asked.unwrap_or(DEFAULT_PROMPT)).to_owned(),
+            shown.is_some_and(|s| s.checking),
+        )
+    };
     let (p, empty, revealed, focused, started) = {
         let me = ctx.me();
         (me.parts, me.empty, me.revealed, me.focused, me.started)
     };
     let icons = *ctx.resource::<Icons>();
-    let prompt = shown.as_ref().and_then(|s| s.prompt.clone());
-    let open = prompt.is_some();
-    let secret = !prompt.as_ref().is_some_and(|q| q.echo);
-    let note = shown.as_ref().and_then(|s| s.note.clone());
     let error = note.as_ref().is_some_and(|n| n.error);
     let accent = ctx.color(if error {
         ColorRole::Error
@@ -730,9 +772,8 @@ fn sync_field(ctx: &mut Context<'_, PolkitDialog>) {
     if let Some(mut l) = ctx.at(p.line) {
         l.set_background(accent);
     }
-    let asked = shown.as_ref().and_then(|s| s.asked.as_deref());
     if let Some(mut t) = ctx.at(p.placeholder) {
-        t.set_text(placeholder(asked.unwrap_or(DEFAULT_PROMPT)));
+        t.set_text(hint);
         t.set_display(display(empty));
     }
     if let Some(mut r) = ctx.at(p.reveal) {
@@ -756,7 +797,6 @@ fn sync_field(ctx: &mut Context<'_, PolkitDialog>) {
         });
     }
 
-    let checking = shown.as_ref().is_some_and(|s| s.checking);
     let (line, error) = match note {
         Some(n) => (n.text, n.error),
         None if checking => (CHECKING.into(), false),
@@ -774,7 +814,10 @@ fn sync_field(ctx: &mut Context<'_, PolkitDialog>) {
 }
 
 fn show(ctx: &mut Context<'_, PolkitDialog>, e: &Refresh) {
-    let shown = ctx.resource::<Dialog>().shown.clone();
+    let (shown, user, message) = match &ctx.resource::<Dialog>().shown {
+        Some(s) => (true, s.user.clone().unwrap_or_default(), s.message.clone()),
+        None => (false, String::new(), String::new()),
+    };
     let p = ctx.me().parts;
     if e.clear != Clear::Nothing {
         if let Some(mut i) = ctx.at(p.input) {
@@ -782,29 +825,20 @@ fn show(ctx: &mut Context<'_, PolkitDialog>, e: &Refresh) {
             drop(i.take_text());
         }
         ctx.me().empty = true;
+        ctx.me().len = 0;
         ctx.me().revealed = false;
     }
     if e.clear == Clear::All {
         ctx.me().started = false;
     }
     // Back up, if the user dragged it away last time.
-    if shown.is_some()
-        && let Some(mut sheet) = ctx.at(p.sheet)
-    {
+    if shown && let Some(mut sheet) = ctx.at(p.sheet) {
         sheet.open();
     }
-    let user = shown
-        .as_ref()
-        .and_then(|s| s.user.clone())
-        .unwrap_or_default();
     let initial = user
         .chars()
         .next()
         .map(|c| c.to_uppercase().collect::<String>())
-        .unwrap_or_default();
-    let message = shown
-        .as_ref()
-        .map(|s| s.message.clone())
         .unwrap_or_default();
     if let Some(mut t) = ctx.at(p.initial) {
         t.set_text(initial);
@@ -817,3 +851,6 @@ fn show(ctx: &mut Context<'_, PolkitDialog>, e: &Refresh) {
     }
     sync_field(ctx);
 }
+
+#[cfg(test)]
+mod tests;

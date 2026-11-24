@@ -45,17 +45,22 @@ fn fake() -> Fake {
     listener.set_nonblocking(true).unwrap();
 
     let mut app = App::new();
-    app.add_module(RingModule::default()).init_resource::<Seen>();
+    app.add_module(RingModule::default())
+        .init_resource::<Seen>();
     install(&mut app, BusId::System, path);
     app.system(|app, e: &AuthUser| note(app, format!("{} user {}", e.cookie, e.user)))
         .system(|app, e: &AuthPrompt| {
-            note(app, format!("{} prompt {:?} echo={}", e.cookie, e.text, e.echo));
+            note(
+                app,
+                format!("{} prompt {:?} echo={}", e.cookie, e.text, e.echo),
+            );
         })
         .system(|app, e: &AuthMessage| {
             let kind = if e.error { "error" } else { "info" };
             note(app, format!("{} {kind} {:?}", e.cookie, e.text));
         })
         .system(|app, e: &AuthRetry| note(app, format!("{} retry", e.cookie)))
+        .system(|app, e: &AuthLocked| note(app, format!("{} locked", e.cookie)))
         .system(|app, e: &AuthFinished| {
             let result = match &e.result {
                 Ok(()) => "ok".to_string(),
@@ -219,8 +224,9 @@ fn a_wrong_answer_is_tried_again() {
 }
 
 #[test]
-fn gives_up_after_too_many_failures() {
+fn locks_out_after_too_many_failures_then_tries_again() {
     let mut f = fake();
+    f.app.resource_mut::<Helper>().lockout = Duration::from_millis(50);
     begin(&mut f, "c1");
     for _ in 0..MAX_FAILURES {
         let mut peer = Peer::accept(&f);
@@ -229,10 +235,63 @@ fn gives_up_after_too_many_failures() {
         let n = said(&f).len() + 1;
         turn_until(&mut f, n);
     }
-    let said = said(&f);
-    assert_eq!(said.last().unwrap(), "c1 finished err \"Authentication failed\"");
-    let retries = said.iter().filter(|s| s.ends_with("retry")).count();
+    let seen = said(&f);
+    assert_eq!(seen.last().unwrap(), "c1 locked");
+    let retries = seen.iter().filter(|s| s.ends_with("retry")).count();
     assert_eq!(retries, MAX_FAILURES as usize - 1);
+    // Not failed: the request waits out the lockout.
+    assert!(!seen.iter().any(|s| s.contains("finished")));
+    assert!(no_connection(&f));
+
+    // Then a new attempt, with the count reset.
+    let deadline = Instant::now() + WAIT;
+    while no_connection(&f) {
+        assert!(Instant::now() < deadline, "no attempt after the lockout");
+        f.app
+            .resource_mut::<Ring>()
+            .timeout(Duration::from_millis(10));
+        Ring::turn(&mut f.app);
+    }
+    assert_eq!(
+        f.app
+            .resource::<Helper>()
+            .session
+            .as_ref()
+            .unwrap()
+            .failures,
+        0
+    );
+}
+
+#[test]
+fn cancelling_during_a_lockout_fails_the_request() {
+    let mut f = fake();
+    f.app.resource_mut::<Helper>().lockout = Duration::from_millis(50);
+    begin(&mut f, "c1");
+    for _ in 0..MAX_FAILURES {
+        let mut peer = Peer::accept(&f);
+        peer.hello();
+        peer.say(b"FAILURE\n");
+        let n = said(&f).len() + 1;
+        turn_until(&mut f, n);
+    }
+    f.app.signal(AuthCancel {
+        cookie: "c1".into(),
+    });
+    f.app.flush();
+    assert_eq!(
+        said(&f).last().unwrap(),
+        "c1 finished err \"Dismissed by the user\""
+    );
+    // The lockout's end starts nothing for a request that is gone.
+    let deadline = Instant::now() + WAIT;
+    while !f.app.resource::<Helper>().locks.is_empty() {
+        assert!(Instant::now() < deadline, "the lockout never ended");
+        f.app
+            .resource_mut::<Ring>()
+            .timeout(Duration::from_millis(10));
+        Ring::turn(&mut f.app);
+    }
     assert!(no_connection(&f));
 }
 
@@ -312,10 +371,7 @@ fn no_user_to_authenticate_as_fails_at_once() {
     let netgroup = Identity::Other("unix-netgroup".into());
     f.app.signal(AuthRequested(request("c1", vec![netgroup])));
     f.app.flush();
-    assert_eq!(
-        said(&f),
-        ["c1 finished err \"No user to authenticate as\""]
-    );
+    assert_eq!(said(&f), ["c1 finished err \"No user to authenticate as\""]);
     assert!(no_connection(&f));
 }
 

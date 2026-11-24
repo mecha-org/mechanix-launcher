@@ -1,90 +1,18 @@
 //! The helper client: authenticates the active request through polkit's
-//! socket-activated helper, the way libpolkit-agent's `PolkitAgentSession`
-//! does.
+//! socket-activated helper. `polkit-agent-helper-1` runs PAM as root; the
+//! agent only relays PAM's questions and the user's answers.
 //!
-//! The agent never checks a password. `polkit-agent-helper-1` runs PAM as
-//! root and tells polkitd itself whether the request's cookie was
-//! authenticated; the agent only carries PAM's questions to the user and
-//! the answers back.
+//! On [`HELPER_SOCKET`] the agent sends the user and the cookie, a line
+//! each. The helper replies with prompts, messages, and last `SUCCESS` or
+//! `FAILURE`. One connection is one attempt.
 //!
-//! # The helper
-//!
-//! systemd's `polkit-agent-helper.socket` listens on [`HELPER_SOCKET`],
-//! one helper per connection (`Accept=yes`), the connection its stdin and
-//! stdout. It takes the agent's uid and process from the socket
-//! (`SO_PEERCRED`, `SO_PEERPIDFD`: Linux 6.5 and later), so the agent
-//! connects itself. On the connection, a line each:
-//!
-//! - The agent sends the user to authenticate as, then the cookie.
-//! - The helper sends `PAM_PROMPT_ECHO_OFF <text>` or
-//!   `PAM_PROMPT_ECHO_ON <text>`, a question answered with one line;
-//!   `PAM_ERROR_MSG <text>` or `PAM_TEXT_INFO <text>`, to show; and last
-//!   `SUCCESS` or `FAILURE`, then hangs up. Its lines are escaped as
-//!   `g_strescape` does (every byte outside printable ASCII as octal), and
-//!   unescaped here.
-//!
-//! One connection is one PAM attempt. Closing it ends the attempt: the
-//! helper reads the end of the stream as no answer, and fails.
-//!
-//! # A request
-//!
-//! - On [`AuthRequested`], the user is chosen from the request's
-//!   identities: the launcher's own user if listed, else root, else the
-//!   first.
-//!   (polkitd has already expanded groups into their users.)
-//!   [`AuthUser`] names it; with none, the request fails at once.
-//! - What the helper says goes out as [`AuthPrompt`] and [`AuthMessage`];
-//!   [`AuthAnswer`] answers the open prompt.
-//! - `SUCCESS` answers the request with [`AuthFinished`]. `FAILURE` is
-//!   [`AuthRetry`] and a new attempt, up to [`MAX_FAILURES`], after which
-//!   the request fails. A helper that hangs up or breaks the protocol
-//!   fails it too.
-//! - [`AuthCancel`], the user's, ends the attempt and fails the request.
-//!   [`AuthCancelled`], polkitd's, ends the attempt and says nothing more:
-//!   the request is gone already.
-//!
-//! The cookie and the answers are never logged; buffers that held them
-//! are wiped once sent.
-//!
-//! # References
-//!
-//! polkit's documentation covers agents and their D-Bus interface, not
-//! the helper's protocol: that is in its source, as of polkit 127 (the
-//! device's Fedora 44 and this code follow it).
-//!
-//! - polkit(8), the architecture: agents, the helper, polkitd:
-//!   <https://www.freedesktop.org/software/polkit/docs/latest/polkit.8.html>
-//! - The `AuthenticationAgent` D-Bus interface:
-//!   <https://www.freedesktop.org/software/polkit/docs/latest/eggdbus-interface-org.freedesktop.PolicyKit1.AuthenticationAgent.html>
-//! - `PolkitAgentSession`, libpolkit-agent's helper client, what this
-//!   module does in its place:
-//!   <https://www.freedesktop.org/software/polkit/docs/latest/PolkitAgentSession.html>
-//! - Its source: connecting to the socket, sending the user and the cookie
-//!   (L609-L676), reading and unescaping lines (L430-L500):
-//!   <https://github.com/polkit-org/polkit/blob/127/src/polkitagent/polkitagentsession.c#L609-L676>
-//! - The helper: socket activation, the user read from the socket and
-//!   the caller from `SO_PEERCRED`/`SO_PEERPIDFD` (L140-L180), escaped
-//!   output (`send_to_helper`, L49-L80), answers read with `fgets` into
-//!   `PAM_MAX_RESP_SIZE` bytes (L316, L341):
-//!   <https://github.com/polkit-org/polkit/blob/127/src/polkitagent/polkitagenthelper-pam.c#L140-L180>
-//! - The systemd units:
-//!   <https://github.com/polkit-org/polkit/blob/127/data/polkit-agent-helper.socket>,
-//!   <https://github.com/polkit-org/polkit/blob/127/data/polkit-agent-helper@.service.in>
-//! - polkitd expanding groups into users before calling the agent
-//!   (L2508-L2523):
-//!   <https://github.com/polkit-org/polkit/blob/127/src/polkitbackend/polkitbackendinteractiveauthority.c#L2508-L2523>
-//! - `PAM_MAX_MSG_SIZE` and `PAM_MAX_RESP_SIZE` (512), Linux-PAM:
-//!   <https://github.com/linux-pam/linux-pam/blob/master/libpam/include/security/_pam_types.h>
-//! - The escaping, GLib's `g_strescape` and its inverse `g_strcompress`:
-//!   <https://docs.gtk.org/glib/func.strescape.html>,
-//!   <https://docs.gtk.org/glib/func.strcompress.html>
-//! - `SO_PEERCRED`, unix(7):
-//!   <https://man7.org/linux/man-pages/man7/unix.7.html>
+//! The cookie and answers are never logged, and their buffers are wiped.
 
 use std::net::Shutdown;
 use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use mecha_wayland::prelude::*;
 use nix::unistd::{Uid, User};
@@ -92,24 +20,34 @@ use zeroize::Zeroize;
 
 use crate::agent::{AuthCancelled, AuthFinished, AuthRequested, Identity};
 
-/// Where polkit's socket-activated helper listens.
 pub(crate) const HELPER_SOCKET: &str = "/run/polkit/agent-helper.socket";
 
-/// Wrong answers in a row before the request fails.
+/// Wrong answers in a row before a lockout.
+///
+/// The lockout only paces the dialog; it is not a defence against
+/// guessing. It is counted per request, in memory: cancelling and asking
+/// again starts over, as do restarting the launcher or using another
+/// agent (`pkttyagent`). Limiting guesses is PAM's job, `pam_faillock`
+/// in polkit's PAM stack, which sees every attempt through the helper.
 pub const MAX_FAILURES: u32 = 3;
 
-/// The longest answer the helper takes whole: it reads one with `fgets`
-/// into `PAM_MAX_RESP_SIZE` (512) bytes, newline and NUL included. A
-/// longer one would be split into two answers. See the helper's
-/// conversation function:
+/// How long a lockout lasts before the next attempt. See [`MAX_FAILURES`].
+pub const LOCKOUT: Duration = Duration::from_secs(30);
+
+/// The longest answer the helper reads whole (512 bytes with newline and NUL).
 const MAX_ANSWER: usize = 510;
 
-/// The longest line taken from the helper, before it is unescaped. PAM's
-/// messages are at most `PAM_MAX_MSG_SIZE` (512) bytes, and `g_strescape`
-/// writes a byte as at most 4 (`\ooo`): 2 KiB, with room to spare.
+/// Said when an answer can't be sent.
+pub(crate) const UNSENDABLE: &str = "That answer is too long, or has a line break in it";
+
+/// Whether the helper can take `answer` as one line.
+pub(crate) fn sendable(answer: &[u8]) -> bool {
+    answer.len() <= MAX_ANSWER && !answer.contains(&b'\n') && !answer.contains(&0)
+}
+
+/// The longest line taken from the helper.
 const MAX_LINE: usize = 16 * 1024;
 
-/// How much one read asks for. Our choice: a line can span reads.
 const READ_SIZE: usize = 4096;
 
 /// The request with this cookie is authenticated as `user`.
@@ -140,16 +78,23 @@ pub struct AuthMessage {
 }
 impl Signal for AuthMessage {}
 
-/// The answer was wrong. A new attempt starts: its prompts follow.
+/// Too many wrong answers: the next attempt starts after `wait`.
+#[derive(Debug, Clone)]
+pub struct AuthLocked {
+    pub cookie: String,
+    pub wait: Duration,
+}
+impl Signal for AuthLocked {}
+
+/// The answer was wrong; a new attempt starts.
 #[derive(Debug, Clone)]
 pub struct AuthRetry {
     pub cookie: String,
 }
 impl Signal for AuthRetry {}
 
-/// Answer the open prompt of the request with this cookie. Nothing when
-/// none is open. One too long to send, or with a line break in it, is
-/// refused with an [`AuthMessage`], and the prompt stays open.
+/// Answer the open prompt. A too long answer, or one with a line break,
+/// is refused with an [`AuthMessage`].
 #[derive(Debug)]
 pub struct AuthAnswer {
     pub cookie: String,
@@ -164,7 +109,6 @@ pub struct AuthCancel {
 }
 impl Signal for AuthCancel {}
 
-/// One line from the helper.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Line {
     Prompt { text: String, echo: bool },
@@ -174,7 +118,6 @@ enum Line {
     Failure,
 }
 
-/// The request being authenticated.
 struct Session {
     cookie: String,
     user: String,
@@ -188,12 +131,9 @@ struct Conn {
     reading: Option<Token>,
     /// Sends in flight: their buffers come back to be wiped.
     sending: Vec<Token>,
-    /// Bytes read after the last line break.
     pending: Vec<u8>,
-    /// A prompt waits for its answer.
     prompt_open: bool,
-    /// Ended: nothing it says counts. It stays only until the ring hands
-    /// back its buffers.
+    /// Ended: kept only until the ring returns its buffers.
     over: bool,
 }
 
@@ -206,8 +146,7 @@ impl Conn {
         self.reading.is_none() && self.sending.is_empty()
     }
 
-    /// End the attempt: the helper reads the end of the stream, and our
-    /// read in flight completes empty.
+    /// End the attempt; the helper sees end of stream.
     fn end(&mut self) {
         self.over = true;
         self.prompt_open = false;
@@ -216,13 +155,15 @@ impl Conn {
 }
 
 pub(crate) struct Helper {
-    /// The agent's bus: losing it drops the request.
     bus: BusId,
     socket: PathBuf,
     session: Option<Session>,
-    /// Every connection not yet gone. At most one is not over: the
-    /// current attempt's.
+    /// Connections not yet gone; at most one is current.
     conns: Vec<Conn>,
+    lockout: Duration,
+    /// Lockouts' ring timeouts, by cookie. One whose session ended is
+    /// ignored when it fires.
+    locks: Vec<(Token, String)>,
 }
 impl Resource for Helper {}
 
@@ -236,8 +177,8 @@ impl Helper {
     }
 }
 
-/// Authenticate the requests of the agent on `bus` through the helper at
-/// `socket`. Installs after `RingModule`.
+/// Authenticate requests through the helper at `socket`. Installs after
+/// `RingModule`.
 pub(crate) fn install(app: &mut App, bus: BusId, socket: PathBuf) {
     if app.has_resource::<Helper>() {
         return;
@@ -247,6 +188,8 @@ pub(crate) fn install(app: &mut App, bus: BusId, socket: PathBuf) {
         socket,
         session: None,
         conns: Vec::new(),
+        lockout: LOCKOUT,
+        locks: Vec::new(),
     });
     app.system(on_requested)
         .system(on_answer)
@@ -269,7 +212,7 @@ pub(crate) fn install(app: &mut App, bus: BusId, socket: PathBuf) {
 }
 
 fn on_requested(app: &mut App, e: &AuthRequested) {
-    // One request at a time: one left over is gone.
+    // One request at a time.
     end_session(app);
     let request = &e.0;
     let user = choose_uid(&request.identities, own_uid()).and_then(user_name);
@@ -294,8 +237,7 @@ fn on_requested(app: &mut App, e: &AuthRequested) {
     connect(app);
 }
 
-/// Start an attempt for the session: connect, and say who and which
-/// request.
+/// Start an attempt: connect and send the user and cookie.
 fn connect(app: &mut App) {
     let (path, mut hello) = {
         let helper = app.resource::<Helper>();
@@ -338,7 +280,7 @@ fn connect(app: &mut App) {
     });
 }
 
-/// Drop the session, ending its attempt. Its cookie, if there was one.
+/// End the session; returns its cookie.
 fn end_session(app: &mut App) -> Option<String> {
     let mut helper = app.resource_mut::<Helper>();
     if let Some(c) = helper.current() {
@@ -366,10 +308,10 @@ fn on_answer(app: &mut App, e: &AuthAnswer) {
         return;
     }
     let answer = e.answer.as_bytes();
-    if answer.len() > MAX_ANSWER || answer.contains(&b'\n') || answer.contains(&0) {
+    if !sendable(answer) {
         app.signal(AuthMessage {
             cookie: e.cookie.clone(),
-            text: "That answer is too long, or has a line break in it".into(),
+            text: UNSENDABLE.into(),
             error: true,
         });
         return;
@@ -388,9 +330,11 @@ fn on_answer(app: &mut App, e: &AuthAnswer) {
 }
 
 fn on_io(app: &mut App, e: &IoEvent) {
+    if unlocked(app, e.token) {
+        return;
+    }
     let mut lines = Vec::new();
-    // The current attempt broke: hung up without a verdict, a send
-    // failed, or a line too long.
+    // Hung up without a verdict, a send failed, or a line too long.
     let mut broke = false;
     {
         let (mut helper, mut ring) = app.query::<(ResMut<Helper>, ResMut<Ring>)>();
@@ -402,7 +346,7 @@ fn on_io(app: &mut App, e: &IoEvent) {
             c.reading = None;
             let mut buf = done.map(|d| d.buf).unwrap_or_default();
             if c.over {
-                // Ended: what it says no longer counts.
+                // Ended: ignore.
             } else if e.result <= 0 {
                 c.end();
                 broke = true;
@@ -444,8 +388,7 @@ fn on_io(app: &mut App, e: &IoEvent) {
     }
 }
 
-/// A line from the current attempt. False once the attempt is over:
-/// what follows it doesn't count.
+/// Handle a line; false once the attempt is over.
 fn on_line(app: &mut App, raw: &[u8]) -> bool {
     let Some(cookie) = app
         .resource::<Helper>()
@@ -490,7 +433,25 @@ fn on_line(app: &mut App, raw: &[u8]) -> bool {
     true
 }
 
-/// The attempt failed: try again, or give up after [`MAX_FAILURES`].
+/// A lockout's timeout fired: start the next attempt, if its session is
+/// still on. True if `token` was a lockout's.
+fn unlocked(app: &mut App, token: Token) -> bool {
+    let cookie = {
+        let (mut helper, mut ring) = app.query::<(ResMut<Helper>, ResMut<Ring>)>();
+        let Some(i) = helper.locks.iter().position(|(t, _)| *t == token) else {
+            return false;
+        };
+        ring.finish(token);
+        helper.locks.remove(i).1
+    };
+    if app.resource::<Helper>().is_session(&cookie) {
+        tracing::info!("polkit: lockout over");
+        connect(app);
+    }
+    true
+}
+
+/// The attempt failed: try again, after a lockout every [`MAX_FAILURES`].
 fn failed(app: &mut App, cookie: String) {
     let failures = {
         let mut helper = app.resource_mut::<Helper>();
@@ -505,7 +466,18 @@ fn failed(app: &mut App, cookie: String) {
     };
     tracing::info!("polkit: authentication failed ({failures} of {MAX_FAILURES})");
     if failures >= MAX_FAILURES {
-        fail(app, "Authentication failed");
+        let wait = {
+            let (mut helper, mut ring) = app.query::<(ResMut<Helper>, ResMut<Ring>)>();
+            let wait = helper.lockout;
+            let token = ring.timeout(wait);
+            helper.locks.push((token, cookie.clone()));
+            if let Some(s) = helper.session.as_mut() {
+                s.failures = 0;
+            }
+            wait
+        };
+        tracing::info!("polkit: locked out for {wait:?}");
+        app.signal(AuthLocked { cookie, wait });
         return;
     }
     app.signal(AuthRetry { cookie });
@@ -540,9 +512,7 @@ fn parse_line(raw: &[u8]) -> Option<Line> {
     }
 }
 
-/// Undo `g_strescape`, as `g_strcompress` does: `\b \f \n \r \t \v`, up
-/// to three octal digits as one byte, and any other escaped byte as
-/// itself. A lone `\` at the end is dropped.
+/// Undo `g_strescape`, as `g_strcompress` does.
 fn unescape(s: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(s.len());
     let mut i = 0;
@@ -585,8 +555,7 @@ fn unescape(s: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Who to authenticate as: `own` if it may, else root, else the first user
-/// listed. GNOME Shell's order, and COSMIC's.
+/// Who to authenticate as: `own`, else root, else the first listed.
 fn choose_uid(identities: &[Identity], own: u32) -> Option<u32> {
     let users: Vec<u32> = identities
         .iter()
@@ -605,7 +574,6 @@ fn own_uid() -> u32 {
     Uid::current().as_raw()
 }
 
-/// The name of the user with `uid`, from the passwd database.
 fn user_name(uid: u32) -> Option<String> {
     User::from_uid(Uid::from_raw(uid))
         .ok()

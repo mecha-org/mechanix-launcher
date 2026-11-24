@@ -1,24 +1,10 @@
-//! Registering the agent with polkitd for the launcher's session.
+//! Registers the agent with polkitd for the launcher's session:
+//! `XDG_SESSION_ID`, else logind's `auto` session.
 //!
-//! polkitd sends a session's authentication requests to the agent
-//! registered for it, so the agent names its session in
-//! `RegisterAuthenticationAgent`'s `unix-session` subject:
-//!
-//! - `XDG_SESSION_ID` when set.
-//! - Otherwise logind's `auto` session, the user's display session: the
-//!   launcher runs as a user service, outside the session's scope, and
-//!   the user manager's environment need not carry the session's id. Its
-//!   `Id` is read from logind.
-//!
-//! polkitd drops the registration by itself when the launcher leaves the
-//! bus, so there is nothing to undo on exit. A failure (polkitd missing,
-//! another agent already registered for the session) is logged, and the
-//! launcher goes on without an agent.
-//!
-//! The unique name that answered the registration is polkitd's: the agent
-//! takes calls only from it. `NameOwnerChanged` for polkitd's name says
-//! when it goes away (its requests are dropped) and when one comes back
-//! (the agent registers again, as a restarted polkitd knows no agents).
+//! A failure is logged and the launcher runs without an agent. polkitd
+//! drops the registration when the launcher leaves the bus. The agent
+//! takes calls only from the polkitd that answered, and registers again
+//! when polkitd restarts.
 
 use std::collections::HashMap;
 
@@ -38,7 +24,6 @@ const PROPERTIES: &str = "org.freedesktop.DBus.Properties";
 
 const DAEMON: &str = "org.freedesktop.DBus";
 
-/// What a call in flight is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Step {
     /// logind's `GetSession("auto")`.
@@ -52,19 +37,15 @@ enum Step {
 #[derive(Debug)]
 struct Registration {
     bus: BusId,
-    /// The call in flight, until it is answered.
     call: Option<(CallId, Step)>,
-    /// The session registered for, once known.
     session: Option<String>,
-    /// polkitd's unique name, while the agent is registered with it.
+    /// polkitd's unique name, while registered.
     polkitd: Option<BusName>,
-    /// `NameOwnerChanged` for polkitd's name.
     owner_changed: Option<MatchId>,
 }
 impl Resource for Registration {}
 
-/// Register the agent, exported on `bus`, with polkitd for `session`, or
-/// for logind's `auto` session if `None`.
+/// Register for `session`, or logind's `auto` session if `None`.
 pub(crate) fn install(app: &mut App, bus: BusId, session: Option<&str>) {
     if app.has_resource::<Registration>() {
         return;
@@ -131,7 +112,7 @@ fn register(app: &mut App, session: &str) {
     );
 }
 
-/// The locale polkitd translates the requests' messages into.
+/// The locale for polkitd's messages.
 fn locale() -> String {
     ["LC_ALL", "LC_MESSAGES", "LANG"]
         .into_iter()
@@ -186,8 +167,7 @@ fn on_reply(app: &mut App, e: &MethodReply) {
     }
 }
 
-/// polkitd's name changed hands: forget the polkitd that went away, and
-/// register with the one that came.
+/// polkitd went away or came back: forget it, or register again.
 fn on_owner_changed(app: &mut App, e: &SignalReceived) {
     let (bus, owner_changed) = {
         let reg = app.resource::<Registration>();
@@ -214,8 +194,7 @@ fn on_owner_changed(app: &mut App, e: &SignalReceived) {
         tracing::warn!("polkit: polkitd went away, its requests are dropped");
         agent::set_polkitd(app, None);
     }
-    // A registration in flight already reaches the new owner: it is what
-    // started polkitd, if polkitd was not running.
+    // A registration in flight already reaches the new polkitd.
     let session = {
         let reg = app.resource::<Registration>();
         let idle = reg.polkitd.is_none() && reg.call.is_none();

@@ -1,22 +1,8 @@
 //! The agent on the bus: exports `org.freedesktop.PolicyKit1.AuthenticationAgent`.
 //!
-//! - `BeginAuthentication` is decoded into a [`Request`] and kept, its call
-//!   unanswered, until the request is finished. polkitd, and the program
-//!   that asked it, wait until then.
-//! - One request is authenticated at a time, the active one;
-//!   [`AuthRequested`] says which. Others wait in a queue, in the order
-//!   they came, and each becomes active when the one before it is done.
-//! - [`AuthFinished`] answers the active request: success, or `Failed`.
-//! - `CancelAuthentication` answers a request, active or queued, with
-//!   `Cancelled`. For the active one, [`AuthCancelled`] says so.
-//! - Only polkitd may call: the unique name the agent registered with (see
-//!   [`crate::register`]). Others are refused with `AccessDenied`, so no
-//!   other program can make the agent ask for a password. When polkitd
-//!   goes away, its requests are dropped, the active one with
-//!   [`AuthCancelled`].
-//!
-//! The cookie is the request's secret for the helper, so it is never
-//! logged.
+//! `BeginAuthentication` calls are kept unanswered until finished, and
+//! handled one at a time in arrival order. Only the registered polkitd
+//! may call; others get `AccessDenied`. The cookie is never logged.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -30,36 +16,27 @@ const FAILED: &str = "org.freedesktop.PolicyKit1.Error.Failed";
 const CANCELLED: &str = "org.freedesktop.PolicyKit1.Error.Cancelled";
 const ACCESS_DENIED: &str = "org.freedesktop.DBus.Error.AccessDenied";
 
-/// Who may authenticate a request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Identity {
-    /// `unix-user`: this uid.
     User(u32),
-    /// `unix-group`: any member of this gid.
     Group(u32),
-    /// A kind this agent doesn't know, or one missing its id.
+    /// Unknown kind, or missing its id.
     Other(String),
 }
 
 /// One `BeginAuthentication`.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Request {
-    /// The action asked for, e.g. `org.freedesktop.policykit.exec`.
     pub action_id: String,
-    /// What to show the user, translated by polkitd.
     pub message: String,
-    /// An icon name; often empty.
     pub icon_name: String,
-    /// Extras about the action, e.g. the `program` pkexec runs.
     pub details: HashMap<String, String>,
-    /// Names the request to polkitd and to the helper.
     pub cookie: String,
-    /// Who may authenticate, in polkitd's order.
     pub identities: Vec<Identity>,
 }
 
 impl std::fmt::Debug for Request {
-    /// Everything but the cookie.
+    /// Leaves out the cookie.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Request")
             .field("action_id", &self.action_id)
@@ -71,7 +48,6 @@ impl std::fmt::Debug for Request {
     }
 }
 
-/// `BeginAuthentication`'s arguments, as on the wire.
 type BeginArgs = (
     String,
     String,
@@ -107,21 +83,19 @@ impl Request {
     }
 }
 
-/// This request is now the active one: authenticate it, then answer with
-/// [`AuthFinished`], unless it is cancelled first.
+/// The active request: answer it with [`AuthFinished`].
 #[derive(Debug, Clone)]
 pub struct AuthRequested(pub Request);
 impl Signal for AuthRequested {}
 
-/// polkitd cancelled the active request with this cookie, and it is gone.
+/// polkitd cancelled the active request.
 #[derive(Debug, Clone)]
 pub struct AuthCancelled {
     pub cookie: String,
 }
 impl Signal for AuthCancelled {}
 
-/// Answer the active request with this cookie: `Ok` once the helper said
-/// it authenticated, `Err` with why not. Another cookie is ignored.
+/// Answer the active request with this cookie.
 #[derive(Debug, Clone)]
 pub struct AuthFinished {
     pub cookie: String,
@@ -129,7 +103,6 @@ pub struct AuthFinished {
 }
 impl Signal for AuthFinished {}
 
-/// A request with its unanswered call.
 struct Kept {
     request: Request,
     call: IncomingCall,
@@ -138,29 +111,34 @@ struct Kept {
 pub(crate) struct Agent {
     bus: BusId,
     export: Option<ExportId>,
-    /// polkitd's unique name, while registered: the only caller taken.
+    /// The only caller taken.
     polkitd: Option<BusName>,
-    /// The request being authenticated.
     active: Option<Kept>,
-    /// Requests waiting their turn, oldest first.
     queued: VecDeque<Kept>,
 }
 impl Resource for Agent {}
 
-/// Export the agent on `bus`. Whether it is exported.
+/// Export the agent on `bus`; false if that failed.
 pub(crate) fn install(app: &mut App, bus: BusId) -> bool {
     if app.has_resource::<Agent>() {
         return app.resource::<Agent>().export.is_some();
     }
     let export = {
         let mut dbus = app.resource_mut::<DBus>();
-        let mut b = dbus.bus(bus).expect("polkit-agent: the bus is connected");
-        let spec = InterfaceSpec::new(AGENT_IFACE)
-            .method("BeginAuthentication", "sssa{ss}sa(sa{sv})", "")
-            .method("CancelAuthentication", "s", "");
-        b.export(AGENT_PATH, spec)
-            .inspect_err(|e| tracing::error!("polkit: exporting the agent: {e:?}"))
-            .ok()
+        match dbus.bus(bus) {
+            Some(mut b) => {
+                let spec = InterfaceSpec::new(AGENT_IFACE)
+                    .method("BeginAuthentication", "sssa{ss}sa(sa{sv})", "")
+                    .method("CancelAuthentication", "s", "");
+                b.export(AGENT_PATH, spec)
+                    .inspect_err(|e| tracing::error!("polkit: exporting the agent: {e:?}"))
+                    .ok()
+            }
+            None => {
+                tracing::error!("polkit: the bus is not connected, no agent for the session");
+                None
+            }
+        }
     };
     let exported = export.is_some();
     app.insert_resource(Agent {
@@ -222,7 +200,6 @@ fn begin(app: &mut App, call: &IncomingCall) {
     next(app);
 }
 
-/// Make the oldest queued request active, if none is.
 fn next(app: &mut App) {
     let request = {
         let mut agent = app.resource_mut::<Agent>();
@@ -292,7 +269,6 @@ fn on_finished(app: &mut App, e: &AuthFinished) {
     next(app);
 }
 
-/// The active request, if its cookie is `cookie`.
 fn take_active(app: &mut App, cookie: &str) -> Option<Kept> {
     let mut agent = app.resource_mut::<Agent>();
     if agent.active.as_ref()?.request.cookie != cookie {
@@ -301,7 +277,6 @@ fn take_active(app: &mut App, cookie: &str) -> Option<Kept> {
     agent.active.take()
 }
 
-/// The queued request with cookie `cookie`, if any.
 fn take_queued(app: &mut App, cookie: &str) -> Option<Kept> {
     let mut agent = app.resource_mut::<Agent>();
     let i = agent
@@ -311,9 +286,7 @@ fn take_queued(app: &mut App, cookie: &str) -> Option<Kept> {
     agent.queued.remove(i)
 }
 
-/// Take calls only from `polkitd`, or from no one. A different polkitd
-/// than before drops every request: the one that sent them can't take
-/// their answers.
+/// Take calls only from `polkitd`. A new polkitd drops every request.
 pub(crate) fn set_polkitd(app: &mut App, polkitd: Option<BusName>) {
     let cancelled = {
         let mut agent = app.resource_mut::<Agent>();
@@ -329,18 +302,25 @@ pub(crate) fn set_polkitd(app: &mut App, polkitd: Option<BusName>) {
     }
 }
 
-/// The polkitd calls are taken from.
 #[cfg(test)]
 pub(crate) fn polkitd(app: &App) -> Option<BusName> {
     app.resource::<Agent>().polkitd.clone()
 }
 
+/// The bus is gone, and polkitd's calls with it: drop them, and close
+/// the active one's dialog.
 fn on_disconnect(app: &mut App, e: &BusDisconnected) {
-    let mut agent = app.resource_mut::<Agent>();
-    if e.bus == agent.bus {
+    let cancelled = {
+        let mut agent = app.resource_mut::<Agent>();
+        if e.bus != agent.bus {
+            return;
+        }
         agent.polkitd = None;
-        agent.active = None;
         agent.queued.clear();
+        agent.active.take().map(|kept| kept.request.cookie)
+    };
+    if let Some(cookie) = cancelled {
+        app.signal(AuthCancelled { cookie });
     }
 }
 
@@ -629,5 +609,34 @@ mod tests {
         assert_eq!(active_cookie(&bus), None);
         assert!(queued_cookies(&bus).is_empty());
         assert_eq!(bus.app.resource::<Cancelled>().0, ["c1"]);
+    }
+
+    #[test]
+    fn without_the_bus_there_is_no_agent() {
+        // The fake connects only the session bus.
+        let mut bus = FakeBus::new();
+        assert!(!install(&mut bus.app, BusId::System));
+        // Installing again says the same.
+        assert!(!install(&mut bus.app, BusId::System));
+    }
+
+    #[test]
+    fn the_bus_going_away_cancels_the_active_request() {
+        let mut bus = agent();
+        begin(&mut bus, "c1");
+        begin(&mut bus, "c2");
+        bus.received();
+
+        bus.app.insert_resource(Cancelled(Vec::new()));
+        bus.app.system(record_cancelled);
+
+        bus.app.signal(BusDisconnected {
+            bus: BusId::Session,
+        });
+        bus.turn();
+        assert_eq!(active_cookie(&bus), None);
+        assert!(queued_cookies(&bus).is_empty());
+        assert_eq!(bus.app.resource::<Cancelled>().0, ["c1"]);
+        assert_eq!(polkitd(&bus.app), None);
     }
 }

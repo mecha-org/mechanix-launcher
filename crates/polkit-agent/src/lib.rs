@@ -16,7 +16,8 @@ use mecha_wayland::prelude::*;
 
 pub use agent::{AGENT_PATH, AuthCancelled, AuthFinished, AuthRequested, Identity, Request};
 pub use helper::{
-    AuthAnswer, AuthCancel, AuthMessage, AuthPrompt, AuthRetry, AuthUser, MAX_FAILURES,
+    AuthAnswer, AuthCancel, AuthLocked, AuthMessage, AuthPrompt, AuthRetry, AuthUser, LOCKOUT,
+    MAX_FAILURES,
 };
 
 /// The polkit agent. Installs after `RingModule`, `DBusModule` with the
