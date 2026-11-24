@@ -6,7 +6,8 @@ mod types;
 #[cfg(test)]
 mod tests;
 
-use bus::{MprisBus, MprisDiscovery, on_reply, on_signal};
+use backend::{on_reply, on_signal};
+use bus::{MprisBus, MprisDiscovery};
 use mecha_wayland::prelude::*;
 pub use types::{MediaPlayer, MprisPlayers, PlayerId};
 
