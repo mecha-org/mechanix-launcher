@@ -15,10 +15,18 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use mecha_wayland::prelude::*;
-use nix::unistd::{Uid, User};
 use zeroize::Zeroize;
 
-use crate::agent::{AuthCancelled, AuthFinished, AuthRequested, Identity};
+use crate::signals::{
+    AuthAnswer, AuthCancel, AuthCancelled, AuthFinished, AuthLocked, AuthMessage, AuthPrompt,
+    AuthRequested, AuthRetry, AuthUser,
+};
+
+mod identity;
+pub(crate) mod protocol;
+
+use identity::{choose_uid, own_uid, user_name};
+use protocol::{Line, UNSENDABLE, parse_line, sendable};
 
 pub(crate) const HELPER_SOCKET: &str = "/run/polkit/agent-helper.socket";
 
@@ -34,89 +42,10 @@ pub const MAX_FAILURES: u32 = 3;
 /// How long a lockout lasts before the next attempt. See [`MAX_FAILURES`].
 pub const LOCKOUT: Duration = Duration::from_secs(30);
 
-/// The longest answer the helper reads whole (512 bytes with newline and NUL).
-const MAX_ANSWER: usize = 510;
-
-/// Said when an answer can't be sent.
-pub(crate) const UNSENDABLE: &str = "That answer is too long, or has a line break in it";
-
-/// Whether the helper can take `answer` as one line.
-pub(crate) fn sendable(answer: &[u8]) -> bool {
-    answer.len() <= MAX_ANSWER && !answer.contains(&b'\n') && !answer.contains(&0)
-}
-
 /// The longest line taken from the helper.
 const MAX_LINE: usize = 16 * 1024;
 
 const READ_SIZE: usize = 4096;
-
-/// The request with this cookie is authenticated as `user`.
-#[derive(Debug, Clone)]
-pub struct AuthUser {
-    pub cookie: String,
-    pub user: String,
-}
-impl Signal for AuthUser {}
-
-/// PAM asks a question: answer it with [`AuthAnswer`].
-#[derive(Debug, Clone)]
-pub struct AuthPrompt {
-    pub cookie: String,
-    /// PAM's words, e.g. `Password: `.
-    pub text: String,
-    /// Show what is typed. Off for a password.
-    pub echo: bool,
-}
-impl Signal for AuthPrompt {}
-
-/// PAM says something to show: an error, or information.
-#[derive(Debug, Clone)]
-pub struct AuthMessage {
-    pub cookie: String,
-    pub text: String,
-    pub error: bool,
-}
-impl Signal for AuthMessage {}
-
-/// Too many wrong answers: the next attempt starts after `wait`.
-#[derive(Debug, Clone)]
-pub struct AuthLocked {
-    pub cookie: String,
-    pub wait: Duration,
-}
-impl Signal for AuthLocked {}
-
-/// The answer was wrong; a new attempt starts.
-#[derive(Debug, Clone)]
-pub struct AuthRetry {
-    pub cookie: String,
-}
-impl Signal for AuthRetry {}
-
-/// Answer the open prompt. A too long answer, or one with a line break,
-/// is refused with an [`AuthMessage`].
-#[derive(Debug)]
-pub struct AuthAnswer {
-    pub cookie: String,
-    pub answer: Secret,
-}
-impl Signal for AuthAnswer {}
-
-/// The user gave up on the request with this cookie.
-#[derive(Debug, Clone)]
-pub struct AuthCancel {
-    pub cookie: String,
-}
-impl Signal for AuthCancel {}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Line {
-    Prompt { text: String, echo: bool },
-    Info(String),
-    Error(String),
-    Success,
-    Failure,
-}
 
 struct Session {
     cookie: String,
@@ -134,7 +63,7 @@ struct Conn {
     pending: Vec<u8>,
     prompt_open: bool,
     /// Ended: kept only until the ring returns its buffers.
-    over: bool,
+    ended: bool,
 }
 
 impl Conn {
@@ -142,13 +71,14 @@ impl Conn {
         self.reading == Some(token) || self.sending.contains(&token)
     }
 
-    fn gone(&self) -> bool {
+    /// Nothing in flight on the ring: safe to drop.
+    fn drained(&self) -> bool {
         self.reading.is_none() && self.sending.is_empty()
     }
 
     /// End the attempt; the helper sees end of stream.
     fn end(&mut self) {
-        self.over = true;
+        self.ended = true;
         self.prompt_open = false;
         let _ = self.stream.shutdown(Shutdown::Both);
     }
@@ -158,7 +88,7 @@ pub(crate) struct Helper {
     bus: BusId,
     socket: PathBuf,
     session: Option<Session>,
-    /// Connections not yet gone; at most one is current.
+    /// Connections not yet drained; at most one is current.
     conns: Vec<Conn>,
     lockout: Duration,
     /// Lockouts' ring timeouts, by cookie. One whose session ended is
@@ -169,7 +99,7 @@ impl Resource for Helper {}
 
 impl Helper {
     fn current(&mut self) -> Option<&mut Conn> {
-        self.conns.iter_mut().find(|c| !c.over)
+        self.conns.iter_mut().find(|c| !c.ended)
     }
 
     fn is_session(&self, cookie: &str) -> bool {
@@ -276,7 +206,7 @@ fn connect(app: &mut App) {
         sending: vec![sending],
         pending: Vec::new(),
         prompt_open: false,
-        over: false,
+        ended: false,
     });
 }
 
@@ -335,7 +265,7 @@ fn on_io(app: &mut App, e: &IoEvent) {
     }
     let mut lines = Vec::new();
     // Hung up without a verdict, a send failed, or a line too long.
-    let mut broke = false;
+    let mut no_verdict = false;
     {
         let (mut helper, mut ring) = app.query::<(ResMut<Helper>, ResMut<Ring>)>();
         let Some(c) = helper.conns.iter_mut().find(|c| c.holds(e.token)) else {
@@ -345,11 +275,11 @@ fn on_io(app: &mut App, e: &IoEvent) {
         if c.reading == Some(e.token) {
             c.reading = None;
             let mut buf = done.map(|d| d.buf).unwrap_or_default();
-            if c.over {
+            if c.ended {
                 // Ended: ignore.
             } else if e.result <= 0 {
                 c.end();
-                broke = true;
+                no_verdict = true;
             } else {
                 c.pending.extend_from_slice(&buf);
                 while let Some(i) = c.pending.iter().position(|b| *b == b'\n') {
@@ -359,7 +289,7 @@ fn on_io(app: &mut App, e: &IoEvent) {
                 }
                 if c.pending.len() > MAX_LINE {
                     c.end();
-                    broke = true;
+                    no_verdict = true;
                 } else {
                     buf.clear();
                     c.reading = Some(ring.recvmsg(c.stream.as_fd(), buf, 0));
@@ -370,19 +300,19 @@ fn on_io(app: &mut App, e: &IoEvent) {
             if let Some(mut d) = done {
                 d.buf.zeroize();
             }
-            if e.result < 0 && !c.over {
+            if e.result < 0 && !c.ended {
                 c.end();
-                broke = true;
+                no_verdict = true;
             }
         }
-        helper.conns.retain(|c| !c.gone());
+        helper.conns.retain(|c| !c.drained());
     }
     for line in lines {
         if !on_line(app, &line) {
             return;
         }
     }
-    if broke {
+    if no_verdict {
         tracing::warn!("polkit: the helper hung up without a verdict");
         fail(app, "The authentication helper failed");
     }
@@ -482,104 +412,6 @@ fn failed(app: &mut App, cookie: String) {
     }
     app.signal(AuthRetry { cookie });
     connect(app);
-}
-
-fn parse_line(raw: &[u8]) -> Option<Line> {
-    let line = unescape(raw);
-    let text = |rest: &[u8]| String::from_utf8_lossy(rest).into_owned();
-    if let Some(rest) = line.strip_prefix(b"PAM_PROMPT_ECHO_OFF ") {
-        return Some(Line::Prompt {
-            text: text(rest),
-            echo: false,
-        });
-    }
-    if let Some(rest) = line.strip_prefix(b"PAM_PROMPT_ECHO_ON ") {
-        return Some(Line::Prompt {
-            text: text(rest),
-            echo: true,
-        });
-    }
-    if let Some(rest) = line.strip_prefix(b"PAM_ERROR_MSG ") {
-        return Some(Line::Error(text(rest)));
-    }
-    if let Some(rest) = line.strip_prefix(b"PAM_TEXT_INFO ") {
-        return Some(Line::Info(text(rest)));
-    }
-    match line.as_slice() {
-        b"SUCCESS" => Some(Line::Success),
-        b"FAILURE" => Some(Line::Failure),
-        _ => None,
-    }
-}
-
-/// Undo `g_strescape`, as `g_strcompress` does.
-fn unescape(s: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(s.len());
-    let mut i = 0;
-    while i < s.len() {
-        let b = s[i];
-        i += 1;
-        if b != b'\\' {
-            out.push(b);
-            continue;
-        }
-        let Some(&c) = s.get(i) else {
-            break;
-        };
-        i += 1;
-        let byte = match c {
-            b'0'..=b'7' => {
-                let mut value = u32::from(c - b'0');
-                for _ in 0..2 {
-                    match s.get(i) {
-                        Some(&d @ b'0'..=b'7') => {
-                            value = value * 8 + u32::from(d - b'0');
-                            i += 1;
-                        }
-                        _ => break,
-                    }
-                }
-                // As g_strcompress: past `\377`, the low byte.
-                (value & 0xff) as u8
-            }
-            b'b' => 0x08,
-            b'f' => 0x0c,
-            b'n' => b'\n',
-            b'r' => b'\r',
-            b't' => b'\t',
-            b'v' => 0x0b,
-            other => other,
-        };
-        out.push(byte);
-    }
-    out
-}
-
-/// Who to authenticate as: `own`, else root, else the first listed.
-fn choose_uid(identities: &[Identity], own: u32) -> Option<u32> {
-    let users: Vec<u32> = identities
-        .iter()
-        .filter_map(|i| match i {
-            Identity::User(uid) => Some(*uid),
-            _ => None,
-        })
-        .collect();
-    [own, 0]
-        .into_iter()
-        .find(|u| users.contains(u))
-        .or_else(|| users.first().copied())
-}
-
-fn own_uid() -> u32 {
-    Uid::current().as_raw()
-}
-
-fn user_name(uid: u32) -> Option<String> {
-    User::from_uid(Uid::from_raw(uid))
-        .ok()
-        .flatten()
-        .map(|u| u.name)
-        .filter(|n| !n.is_empty())
 }
 
 #[cfg(test)]

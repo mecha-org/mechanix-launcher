@@ -5,8 +5,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
+use super::protocol::*;
 use super::*;
-use crate::agent::Request;
+use crate::signals::{Identity, Request};
 
 const WAIT: Duration = Duration::from_secs(5);
 

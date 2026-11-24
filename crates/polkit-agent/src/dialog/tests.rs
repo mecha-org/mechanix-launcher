@@ -1,10 +1,14 @@
 use std::collections::HashMap;
 
 use mecha_wayland::mechanix_widgets::NativeText;
-use mecha_wayland::mechanix_widgets::prelude::FontBook;
+use mecha_wayland::mechanix_widgets::prelude::{BottomSheet, FontBook, Text};
 
+use std::time::Duration;
+
+use super::view::*;
 use super::*;
-use crate::agent::{Identity, Request};
+use crate::helper::protocol::UNSENDABLE;
+use crate::signals::{AuthCancel, Identity, Request};
 
 const COOKIE: &str = "c1";
 
