@@ -17,7 +17,7 @@ use notifications::NotificationsModule;
 use power_menu::PowerMenuModule;
 use quick_settings::QuickSettingsModule;
 use running_apps::{RunningApps, RunningAppsModule};
-use screen::OrientationModule;
+use screen::{OrientationModule, Screen};
 use services::{KeepAwakeModule, PrepareForSleep, SessionModule};
 use status_bar::{
     DEFAULT_BAR_HEIGHT, DEFAULT_ICON_SIZE, StatusBarModule, StatusBarScreen, StatusIcons,
@@ -79,6 +79,26 @@ fn on_container_shown(app: &mut App, s: &ContainerShown) {
     suspend_keyboard_zone(app, any_open);
 }
 
+/// A screen laid out below the status bar, for a window that reserves no
+/// zones and ignores everyone else's (exclusive zone `-1`). Such a window
+/// stays the size of the output whether or not the keyboard reserves its
+/// height, so opening it over an app with the keyboard up draws no frame
+/// at the size the keyboard left it.
+struct BelowBar<S>(S);
+
+impl<S: Screen> Screen for BelowBar<S> {
+    fn build(&self, app: &mut App, parent: NodeId) -> NodeId {
+        let area = LayoutStyle::default().absolute().inset(Insets::new(
+            px(DEFAULT_BAR_HEIGHT),
+            px(0.0),
+            px(0.0),
+            px(0.0),
+        ));
+        let area = app.spawn(parent, div().style(area)).id();
+        self.0.build(app, area)
+    }
+}
+
 const ALL_SIDES: Anchor = Anchor::from_bits_truncate(
     Anchor::TOP.bits() | Anchor::BOTTOM.bits() | Anchor::LEFT.bits() | Anchor::RIGHT.bits(),
 );
@@ -136,19 +156,19 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
     let bar = LayoutStyle::default().height(px(DEFAULT_BAR_HEIGHT));
     let sides = Anchor::LEFT | Anchor::RIGHT;
 
-    let home = container(HOME_ID, Home)
+    let home = container(HOME_ID, BelowBar(Home))
         .open(bottom_quick(), FADE)
         .close(OnExternal(ExternalEvent::AppLaunched), INSTANT)
         .close(OnExternal(ExternalEvent::WindowOpened), INSTANT)
         .open(OnExternal(ExternalEvent::LastWindowClosed), FADE)
         .child(
-            container(DRAWER, drawer)
+            container(DRAWER, BelowBar(drawer))
                 .open(swipe(HOME, Direction::Up, Timing::Any), INSTANT)
                 .close(swipe(HOME, Direction::Down, Timing::Any), INSTANT)
                 .close(bottom_quick(), INSTANT),
         )
         .initially_open();
-    let running = container(RUNNING, RunningApps::new())
+    let running = container(RUNNING, BelowBar(RunningApps::new()))
         .open(
             swipe(BOTTOM_EDGE, Direction::Up, Timing::Held).span(Span::Middle),
             INSTANT,
@@ -170,7 +190,7 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
         .window(
             nav_window(
                 HOME,
-                role(Layer::Top, ALL_SIDES, 0, ShellRole::View, "home"),
+                role(Layer::Overlay, ALL_SIDES, -1, ShellRole::View, "home"),
                 LayoutStyle::default(),
             )
             .container(home),
@@ -178,7 +198,13 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
         .window(
             nav_window(
                 RUNNING_APPS,
-                role(Layer::Top, ALL_SIDES, 0, ShellRole::View, "running-apps"),
+                role(
+                    Layer::Overlay,
+                    ALL_SIDES,
+                    -1,
+                    ShellRole::View,
+                    "running-apps",
+                ),
                 LayoutStyle::default(),
             )
             .container(running),
@@ -206,10 +232,14 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
         .window(
             nav_window(
                 PANEL,
-                role(Layer::Top, ALL_SIDES, 0, ShellRole::View, "panel"),
+                role(Layer::Overlay, ALL_SIDES, -1, ShellRole::View, "panel"),
                 LayoutStyle::default(),
             )
-            .container(panel(CONTROL_CENTER, ControlCenterScreen, Span::Whole)),
+            .container(panel(
+                CONTROL_CENTER,
+                BelowBar(ControlCenterScreen),
+                Span::Whole,
+            )),
         )
         .window(
             nav_window(

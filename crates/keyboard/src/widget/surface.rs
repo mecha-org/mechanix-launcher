@@ -248,7 +248,7 @@ impl Widget for KeyboardUI {
         let headroom =
             height - heights.get(initial).copied().unwrap_or(style.height) - b.bottom_gap;
         let role = Role::Layer(LayerRole {
-            layer: Layer::Top,
+            layer: Layer::Overlay,
             anchor: Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
             // No zone yet: the keyboard starts hidden, and its first commit
             // reaches the compositor even so. A show sets it.

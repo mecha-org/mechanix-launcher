@@ -31,7 +31,7 @@ const EMOJI_SCALE: f32 = 1.2;
 /// and a theme, and to have inserted the [`Atlas`]. The theme is the host's:
 /// the keymap's `mode` is ignored.
 ///
-/// Add this after any other `Layer::Top` windows (such as the `NavModule`'s) so
+/// Add this after any other `Layer::Overlay` windows (such as the `NavModule`'s) so
 /// the keyboard surface stacks above them.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct KeyboardModule {
