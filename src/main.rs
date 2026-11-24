@@ -18,7 +18,7 @@ use power_menu::PowerMenuModule;
 use quick_settings::QuickSettingsModule;
 use running_apps::{RunningApps, RunningAppsModule};
 use screen::OrientationModule;
-use services::{KeepAwakeModule, PrepareForSleep, SessionModule};
+use services::{KeepAwakeModule, MprisModule, PrepareForSleep, SessionModule};
 use status_bar::{
     DEFAULT_BAR_HEIGHT, DEFAULT_ICON_SIZE, StatusBarModule, StatusBarScreen, StatusIcons,
 };
@@ -319,6 +319,7 @@ fn main() {
         .add_module(KeyboardModule { bottom_gap })
         .add_module(QuickSettingsModule)
         .add_module(PowerMenuModule)
+        .add_module(MprisModule)
         .add_module(SessionModule)
         .add_module(KeepAwakeModule)
         // Last, so its lock windows stack above everything else's.
