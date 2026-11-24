@@ -63,9 +63,9 @@ pub(crate) fn send_zone(
 }
 
 /// Hold the keyboard's exclusive zone off (`true`) or let it follow the
-/// toggle again (`false`), for while the host's own screens (home, a panel)
-/// cover the apps, so they keep their full height. A shown keyboard updates
-/// at once.
+/// toggle again (`false`), for while the host's own screens (home, the app
+/// switcher) cover the apps, so they keep their full height. A shown
+/// keyboard updates at once.
 /// Needs the [`KeyboardModule`](crate::KeyboardModule) installed.
 pub fn suspend_keyboard_zone(app: &mut App, suspended: bool) {
     app.resource_mut::<ExclusiveZone>().suspended = suspended;
@@ -85,10 +85,10 @@ pub fn suspend_keyboard_zone(app: &mut App, suspended: bool) {
 /// commit reaches the compositor (which keeps an unmapped layer's zone) and
 /// the apps above grow back. On a show it is sent after it: unmapped, a
 /// surface that has never drawn is not re-sent its stored zone when it maps,
-/// and hidden in place, the zone goes with the frame that shows it. The
-/// input region (taps in the headroom strip go to the app below) is also set
-/// on a show if the window exists yet (returning whether it did); otherwise
-/// `ensure_input_region` sets it once it does.
+/// and hidden in place, the compositor counts it from the frame that shows
+/// it. The input region (taps in the headroom strip go to the app below) is
+/// also set on a show if the window exists yet (returning whether it did);
+/// otherwise `ensure_input_region` sets it once it does.
 pub(crate) fn apply_visibility(
     zone: ExclusiveZone,
     visible: bool,

@@ -31,8 +31,10 @@ const EMOJI_SCALE: f32 = 1.2;
 /// and a theme, and to have inserted the [`Atlas`]. The theme is the host's:
 /// the keymap's `mode` is ignored.
 ///
-/// Add this after any other `Layer::Overlay` windows (such as the `NavModule`'s) so
-/// the keyboard surface stacks above them.
+/// The keyboard surface has the osk shell role, which stacks it by role
+/// among the host's own surfaces; without shell roles, layer shell stacks
+/// it, so add this after any other `Layer::Overlay` windows for it to stack
+/// above them.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct KeyboardModule {
     /// Empty space under the keys, logical px: room for a host's bottom-edge

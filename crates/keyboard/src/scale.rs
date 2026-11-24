@@ -138,39 +138,37 @@ pub(crate) fn fitting_factor(factor: f32, requested: f32, granted: f32, bottom_g
 /// factor at one that fits it: the keyboard is laid out again, and asks,
 /// for no more height than it has.
 pub(crate) fn on_resized(app: &mut App, e: &Emitted<Resized>) {
-    let window = app.resource::<KeyboardSurface>().window;
-    if !e.targets.contains(&window) {
+    let surface = *app.resource::<KeyboardSurface>();
+    if !e.targets.contains(&surface.window) {
         return;
     }
     let visible = app.keyboard_visible();
-    if !app.resource::<KeyboardGeometry>().anchored(visible) {
+    let mut geometry = *app.resource::<KeyboardGeometry>();
+    if !geometry.anchored(visible) {
         tracing::debug!(
             width = e.event.size.width,
             "keyboard: ignoring a configure of the hidden, unanchored surface"
         );
         return;
     }
-    let before = app.resource::<KeyboardGeometry>().factor();
-    let surface = *app.resource::<KeyboardSurface>();
-    {
-        let mut geometry = app.resource_mut::<KeyboardGeometry>();
-        if geometry.output_width != Some(e.event.size.width) {
-            geometry.output_width = Some(e.event.size.width);
-            geometry.height_cap = None;
-        }
-        // Less than asked: the output has no room for the keyboard at its
-        // width. A configure for a smaller ask made since gives more.
-        if e.event.size.height + 0.5 < surface.height {
-            let factor = geometry.factor();
-            geometry.height_cap = Some(fitting_factor(
-                factor,
-                surface.height,
-                e.event.size.height,
-                surface.bottom_gap,
-            ));
-        }
+    let before = geometry.factor();
+    if geometry.output_width != Some(e.event.size.width) {
+        geometry.output_width = Some(e.event.size.width);
+        geometry.height_cap = None;
     }
-    let geometry = *app.resource::<KeyboardGeometry>();
+    // Less than asked: the output has no room for the keyboard at its width.
+    // A configure for a smaller ask made since gives more. The height asked
+    // was laid out at the factor before this configure, a new width's
+    // included, so the fit scales from that one.
+    if e.event.size.height + 0.5 < surface.height {
+        geometry.height_cap = Some(fitting_factor(
+            before,
+            surface.height,
+            e.event.size.height,
+            surface.bottom_gap,
+        ));
+    }
+    *app.resource_mut::<KeyboardGeometry>() = geometry;
     if geometry.factor() != before {
         tracing::info!(
             output_width = e.event.size.width,
@@ -309,6 +307,19 @@ mod tests {
         let g = *app.resource::<KeyboardGeometry>();
         assert_eq!(g.height_cap, None);
         assert_eq!(g.factor(), 600.0 / 540.0);
+    }
+
+    /// A new width and a shorter height in one configure, as on rotation:
+    /// the height asked was laid out at the old width's factor, so the fit
+    /// scales from that one, not the new width's.
+    #[test]
+    fn a_rotation_given_less_height_fits_from_the_factor_asked_at() {
+        let (mut app, window, _) = keyboard_app(true, true);
+        app.resource_mut::<KeyboardGeometry>().output_width = Some(540.0);
+        resized_to(&mut app, window, 800.0, 360.0);
+        let g = *app.resource::<KeyboardGeometry>();
+        assert_eq!(g.height_cap, Some(fitting_factor(1.0, 391.0, 360.0, 20.0)));
+        assert!(g.factor() < 1.0, "fits 360 px, not the new width's");
     }
 
     #[test]
