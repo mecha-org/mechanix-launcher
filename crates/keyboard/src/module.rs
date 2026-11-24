@@ -82,7 +82,10 @@ pub fn spawn_ui(app: &mut App, bottom_gap: f32) {
     app.insert_resource(dictionaries);
     app.insert_resource(ExclusiveZone::default());
     crate::feedbackd::install(app);
-    app.insert_resource(KeyboardGeometry::new(keymap.keyboard));
+    let mut geometry = KeyboardGeometry::new(keymap.keyboard);
+    geometry.hides_in_place =
+        app.has_resource::<Surfaces>() && app.resource::<Surfaces>().hides_in_place();
+    app.insert_resource(geometry);
     // Keyboard surface visibility — starts hidden; IM2 `activate`, a
     // corner swipe and a downward flick flip it through `KeyboardVisibilityExt`.
     crate::visibility::install(app);
@@ -131,9 +134,9 @@ pub fn spawn_ui(app: &mut App, bottom_gap: f32) {
     app.system(ensure_input_region);
     app.system(crate::complete::refresh);
 
-    // Starts hidden: the surface is created unmapped.
+    // Starts hidden, as every hide leaves it.
     if app.has_resource::<Surfaces>() {
         let (mut surfaces, mut wl) = app.query::<(ResMut<Surfaces>, ResMut<Wayland>)>();
-        surfaces.set_mapped(surface.window, false, &mut wl);
+        surfaces.set_hidden(surface.window, true, &mut wl);
     }
 }

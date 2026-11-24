@@ -8,13 +8,16 @@
 //!
 //! The output's width is the keyboard surface's own: anchored left and right
 //! with no width, the compositor configures it to the output's full logical
-//! width ([`on_resized`]). Only while those anchors hold, though: hiding a
-//! drawn surface unmaps it, which resets the compositor's layer state
-//! (anchors included), so a configure that a commit on the hidden surface
-//! draws (a zone change, say) carries some other width. Those are ignored;
-//! the show re-sends the anchors and its configure brings the real width. Until the first configure the keyboard is laid out
-//! at the design width (factor 1); a later or changed width (rotation, a new
-//! output scale) re-lays it out ([`crate::widget::surface::relayout`]).
+//! width ([`on_resized`]). Only while those anchors hold, though: a hide
+//! that unmaps a drawn surface resets the compositor's layer state (anchors
+//! included), so a configure that a commit on the hidden surface draws (a
+//! zone change, say) carries some other width. Those are ignored; the show
+//! re-sends the anchors and its configure brings the real width. Where the
+//! compositor hides surfaces in place instead (`Surfaces::hides_in_place`),
+//! the anchors hold, so every configure counts. Until the first configure the
+//! keyboard is laid out at the design width (factor 1); a later or changed
+//! width (rotation, a new output scale) re-lays it out
+//! ([`crate::widget::surface::relayout`]).
 //!
 //! [`design_width`]: KeyboardGeometry::design_width
 
@@ -60,9 +63,12 @@ pub(crate) struct KeyboardGeometry {
     design: KeyboardStyle,
     /// The output's logical width, once the compositor configured the surface.
     pub(crate) output_width: Option<f32>,
-    /// Whether the keyboard was ever shown. Once it was, a hide resets the
-    /// surface's anchors at the compositor until the next show.
+    /// Whether the keyboard was ever shown. Once it was, a hide that unmaps
+    /// resets the surface's anchors at the compositor until the next show.
     pub(crate) ever_shown: bool,
+    /// The compositor hides the keyboard in place rather than unmapped
+    /// (`Surfaces::hides_in_place`), so it keeps its anchors.
+    pub(crate) hides_in_place: bool,
 }
 impl Resource for KeyboardGeometry {}
 
@@ -72,6 +78,7 @@ impl KeyboardGeometry {
             design,
             output_width: None,
             ever_shown: false,
+            hides_in_place: false,
         }
     }
 
@@ -90,11 +97,12 @@ impl KeyboardGeometry {
     }
 
     /// Whether the compositor holds the surface's bottom|left|right anchors
-    /// now: shown, or never shown (created anchored, not yet reset by a hide).
-    /// Only then does a configure carry the output's width, and only then may
-    /// the surface ask for width 0.
+    /// now: hidden in place rather than unmapped, shown, or never shown
+    /// (created anchored, not yet reset by a hide). Only then does a
+    /// configure carry the output's width, and only then may the surface ask
+    /// for width 0.
     pub(crate) fn anchored(&self, visible: bool) -> bool {
-        visible || !self.ever_shown
+        self.hides_in_place || visible || !self.ever_shown
     }
 
     /// Gap between a pop-up (or choices row) and its key at the current
@@ -261,5 +269,16 @@ mod tests {
         let g = *app.resource::<KeyboardGeometry>();
         assert!(!g.anchored(false));
         assert!(g.anchored(true));
+    }
+
+    /// Hidden in place rather than unmapped, the surface keeps its anchors:
+    /// a configure while hidden after a show counts.
+    #[test]
+    fn a_configure_while_hidden_in_place_counts() {
+        let (mut app, window, _) = keyboard_app(false, true);
+        app.resource_mut::<KeyboardGeometry>().hides_in_place = true;
+        app.resource_mut::<KeyboardGeometry>().output_width = Some(408.0);
+        resized(&mut app, window, 337.5);
+        assert_eq!(app.resource::<KeyboardGeometry>().output_width, Some(337.5));
     }
 }

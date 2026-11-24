@@ -302,6 +302,7 @@ mod tests {
             parent: None,
             pid: None,
             modal: false,
+            activation_token: None,
             last_activated,
         }
     }

@@ -94,28 +94,28 @@ impl Module for PowerMenuModule {
             .id();
         let menu = app.spawn(window, PowerMenuBuilder);
         app.insert_resource(Overlay { window, menu });
-        set_mapped(app, false);
+        set_hidden(app, true);
         app.system(|app: &mut App, _: &ShowPowerMenu| {
-            set_mapped(app, true);
+            set_hidden(app, false);
             let menu = app.resource::<Overlay>().menu;
             app.emit(OpenPowerMenu, menu);
         })
         .system(|app: &mut App, e: &Emitted<PowerMenuClosed>| {
             if e.targets.contains(&app.resource::<Overlay>().menu.id()) {
-                set_mapped(app, false);
+                set_hidden(app, true);
             }
         });
     }
 }
 
-/// Map or unmap the menu's own window.
-fn set_mapped(app: &mut App, mapped: bool) {
+/// Hide or show the menu's own window.
+fn set_hidden(app: &mut App, hidden: bool) {
     if !app.has_resource::<Surfaces>() || !app.has_resource::<Wayland>() {
         return;
     }
     let window = app.resource::<Overlay>().window;
     let (mut surfaces, mut wl) = app.query::<(ResMut<Surfaces>, ResMut<Wayland>)>();
-    surfaces.set_mapped(window, mapped, &mut wl);
+    surfaces.set_hidden(window, hidden, &mut wl);
 }
 
 // ── layout, in percent of the menu ───────────────────────────────────────

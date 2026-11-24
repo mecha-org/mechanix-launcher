@@ -468,8 +468,9 @@ pub(crate) fn relayout(app: &mut App) {
     let zone = *app.resource::<ExclusiveZone>();
     let (mut surfaces, mut wl) = app.query::<(ResMut<Surfaces>, ResMut<Wayland>)>();
     // Width 0: the compositor keeps it the output's. That needs the left and
-    // right anchors, which a hide resets at the compositor; `on_resized`
-    // only re-lays out while they hold, and this never asks without them.
+    // right anchors, which a hide resets at the compositor unless in place;
+    // `on_resized` only re-lays out while they hold, and this never asks
+    // without them.
     if geometry.anchored(visible) {
         surfaces.request_layer_size(surface.window, 0, m.height as u32, &mut wl);
     } else {

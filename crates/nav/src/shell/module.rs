@@ -311,7 +311,7 @@ pub(crate) mod tests {
         AreaId, BOTTOM_EDGE, ContainerId, Direction, ExternalEvent, FADE, INSTANT, Input,
         NavConfig, OnExternal, Timing, container, swipe,
     };
-    use crate::shell::apply::window_layers;
+    use crate::shell::apply::window_hidden;
     use crate::shell::apply::{ContainerShown, Nav, apply};
 
     pub(crate) const HOME_AREA: AreaId = AreaId("home");
@@ -497,23 +497,17 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn hidden_windows_go_to_background_visible_to_their_own_layer() {
+    fn windows_without_a_visible_container_are_hidden() {
         let app = app_with(module(true));
         let nav = app.resource::<Nav>();
         let w = |i: usize| nav.windows[i].node;
         // Home is open; the panel is closed; the strip is never asked.
-        assert_eq!(
-            window_layers(nav),
-            vec![(w(0), Layer::Bottom), (w(2), Layer::Background)]
-        );
+        assert_eq!(window_hidden(nav), vec![(w(0), false), (w(2), true)]);
         let app = app_with(module(false));
         let nav = app.resource::<Nav>();
         assert_eq!(
-            window_layers(nav),
-            vec![
-                (nav.windows[0].node, Layer::Background),
-                (nav.windows[2].node, Layer::Background)
-            ]
+            window_hidden(nav),
+            vec![(nav.windows[0].node, true), (nav.windows[2].node, true)]
         );
     }
 

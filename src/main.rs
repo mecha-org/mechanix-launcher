@@ -241,7 +241,7 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
                 container(STATUS, StatusBarScreen)
                     .initially_open()
                     // Out of the way of a fullscreen app: with nothing
-                    // shown, the window drops below every app.
+                    // shown, the window is hidden.
                     .close(OnExternal(ExternalEvent::FullscreenEntered), INSTANT)
                     .open(OnExternal(ExternalEvent::FullscreenLeft), INSTANT),
             )
