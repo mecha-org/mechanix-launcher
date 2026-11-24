@@ -43,7 +43,7 @@ members = [
     "crates/pulseaudio", "crates/control-center",
     "crates/lockscreen",
     "crates/power-menu",
-    "crates/polkit-agent",
+    "crates/agents/polkit-agent",
 ]
 resolver = "3"
 
@@ -66,7 +66,7 @@ assets = { path = "crates/assets" }
 mecha-pulseaudio = { path = "crates/pulseaudio" }
 lockscreen = { path = "crates/lockscreen" }
 power-menu = { path = "crates/power-menu" }
-polkit-agent = { path = "crates/polkit-agent" }
+polkit-agent = { path = "crates/agents/polkit-agent" }
 
 # Local development override — assumes mecha-wayland is cloned as a sibling
 # directory: ../mecha-wayland
