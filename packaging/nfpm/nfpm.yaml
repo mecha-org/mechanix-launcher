@@ -13,6 +13,10 @@ license: BSD
 depends:
   # The lock screen's PIN method.
   - pam_pwdfile
+  # Keyboard suggestions: libhunspell, plus the en_US dictionary read from
+  # /usr/share/hunspell.
+  - hunspell
+  - hunspell-en-US
 replaces:
   - mechanix-lockscreen
 
