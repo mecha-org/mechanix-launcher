@@ -16,7 +16,8 @@
 //! - it is stopped ([`StopLaunch`]), which calls the app's start off.
 //!
 //! Its placeholder goes with it, or at once by [`hide_launch_placeholder`],
-//! and comes back by [`ShowLaunch`].
+//! and comes back by [`ShowLaunch`]. It also goes once any window is
+//! activated under it, launch ended or not: it never covers an app.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -46,6 +47,9 @@ struct Placeholder {
     tokens: HashMap<LaunchId, String>,
     /// The launch whose placeholder is up, and its window.
     shown: Option<(LaunchId, NodeId)>,
+    /// The latest window activation when the placeholder went up: a later
+    /// one is of a window it would cover.
+    shown_after: u64,
     /// Every ring timeout not finished yet and its launch, including those
     /// of launches already done.
     timeouts: Vec<(Token, LaunchId)>,
@@ -61,7 +65,10 @@ pub(crate) fn install(app: &mut App) {
         app.init_resource::<Launches>();
     }
     app.init_resource::<Placeholder>()
-        .system(|app: &mut App, _: &ToplevelsChanged| end_arrived(app))
+        .system(|app: &mut App, _: &ToplevelsChanged| {
+            uncover(app);
+            end_arrived(app);
+        })
         .system(|app: &mut App, _: &RegistryChanged| end_arrived(app))
         .system(|app: &mut App, e: &ShowLaunch| show(app, e.0))
         .system(|app: &mut App, e: &StopLaunch| end(app, e.0, Ending::CalledOff))
@@ -135,7 +142,24 @@ fn show(app: &mut App, id: LaunchId) {
         )
         .id();
     app.spawn(window, PlaceholderViewBuilder { name, icon });
-    app.resource_mut::<Placeholder>().shown = Some((id, window));
+    let after = latest_activation(app);
+    let mut placeholder = app.resource_mut::<Placeholder>();
+    placeholder.shown = Some((id, window));
+    placeholder.shown_after = after;
+}
+
+/// A window activated since the placeholder went up takes it down, whatever
+/// launch it ends, if any: the placeholder never covers an app.
+fn uncover(app: &mut App) {
+    let shown_after = app.resource::<Placeholder>().shown_after;
+    if latest_activation(app) > shown_after {
+        hide_launch_placeholder(app);
+    }
+}
+
+/// The latest window activation; 0 for none.
+fn latest_activation(app: &App) -> u64 {
+    windows(app).map(|w| w.last_activated).max().unwrap_or(0)
 }
 
 /// Take the launch placeholder down now, if one is up: e.g. when the user
