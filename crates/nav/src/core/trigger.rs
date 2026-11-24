@@ -19,6 +19,9 @@ pub enum ExternalEvent {
     /// The last app window closed, however it went: nothing is left to
     /// show but the shell.
     LastWindowClosed,
+    /// The compositor stopped showing home by itself: an app came to the
+    /// front over it, activated or newly opened.
+    HomeLeft,
     /// A fullscreen app is what shows: the focused window is fullscreen
     /// and no shell view covers it.
     FullscreenEntered,

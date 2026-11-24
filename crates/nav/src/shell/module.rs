@@ -20,6 +20,7 @@ pub struct WindowSpec {
     containers: Vec<ContainerSpec>,
     no_input: bool,
     takes_keyboard: bool,
+    home: bool,
     clear: Color,
 }
 
@@ -31,6 +32,7 @@ pub fn nav_window(area: AreaId, role: Role, layout: LayoutStyle) -> WindowSpec {
         containers: Vec::new(),
         no_input: false,
         takes_keyboard: false,
+        home: false,
         clear: Color::BLACK,
     }
 }
@@ -56,6 +58,15 @@ impl WindowSpec {
     /// again, it gives it back, they enable again and it shows.
     pub fn takes_keyboard(mut self) -> Self {
         self.takes_keyboard = true;
+        self
+    }
+
+    /// Is home: a layer window below the apps (on the bottom layer), which
+    /// shows over them while any of its containers is shown, the compositor
+    /// hiding them ([`Surfaces::set_showing_home`]). When an app comes to
+    /// the front by itself, the stack hears [`ExternalEvent::HomeLeft`].
+    pub fn home(mut self) -> Self {
+        self.home = true;
         self
     }
 
@@ -142,6 +153,7 @@ impl Module for NavModule {
                 area: w.area,
                 containers: Vec::new(),
                 no_input: w.no_input,
+                home: w.home,
             });
         }
 
@@ -202,6 +214,7 @@ impl Module for NavModule {
         app.system(on_frame);
         app.insert_resource(SeenToplevels::default());
         app.system(on_app_launched);
+        app.system(on_showing_home);
         app.system(on_toplevels_changed);
         apply(app);
     }
@@ -212,6 +225,27 @@ fn on_app_launched(app: &mut App, _: &AppLaunched) {
     app.resource_mut::<Nav>()
         .stack
         .handle(Input::External(ExternalEvent::AppLaunched));
+    apply(app);
+}
+
+/// Feeds the compositor's leaving home by itself, at a home window, to the
+/// stack: an app came to the front, and what shows home closes.
+fn on_showing_home(app: &mut App, e: &Emitted<ShowingHome>) {
+    if e.event.showing {
+        return;
+    }
+    let at_home = {
+        let nav = app.resource::<Nav>();
+        nav.windows
+            .iter()
+            .any(|w| w.home && e.targets.contains(&w.node))
+    };
+    if !at_home {
+        return;
+    }
+    app.resource_mut::<Nav>()
+        .stack
+        .handle(Input::External(ExternalEvent::HomeLeft));
     apply(app);
 }
 
@@ -749,6 +783,48 @@ pub(crate) mod tests {
         let mut app = app_with(module_with(home));
         assert_eq!(display(&app, node_of(&app, HOME)), Display::Flex);
         app.signal(AppLaunched);
+        app.flush();
+        assert_eq!(display(&app, node_of(&app, HOME)), Display::Hidden);
+    }
+
+    /// The compositor leaving home by itself closes it, heard at a home
+    /// window only.
+    #[test]
+    fn home_left_closes_home_heard_at_a_home_window() {
+        let home = home_spec(true).close(OnExternal(ExternalEvent::HomeLeft), INSTANT);
+        let m = NavModule::new(NavConfig::default())
+            .window(
+                nav_window(
+                    HOME_AREA,
+                    role(Layer::Bottom, "home"),
+                    LayoutStyle::default(),
+                )
+                .container(home)
+                .home(),
+            )
+            .window(nav_window(
+                BOTTOM_EDGE,
+                role(Layer::Top, "bottom-edge"),
+                LayoutStyle::default(),
+            ));
+        let mut app = app_with(m);
+        let (home_window, edge) = {
+            let nav = app.resource::<Nav>();
+            (nav.windows[0].node, nav.windows[1].node)
+        };
+        app.emit(ShowingHome { showing: false }, edge);
+        app.flush();
+        assert_eq!(
+            display(&app, node_of(&app, HOME)),
+            Display::Flex,
+            "not home"
+        );
+
+        app.emit(ShowingHome { showing: true }, home_window);
+        app.flush();
+        assert_eq!(display(&app, node_of(&app, HOME)), Display::Flex);
+
+        app.emit(ShowingHome { showing: false }, home_window);
         app.flush();
         assert_eq!(display(&app, node_of(&app, HOME)), Display::Hidden);
     }

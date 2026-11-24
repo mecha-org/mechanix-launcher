@@ -36,10 +36,12 @@ const STATUS: ContainerId = ContainerId("status");
 
 /// The launcher screens that cover apps. While any is open the keyboard
 /// reserves no space, so they and the apps under them keep their full
-/// size. Opening one hides the keyboard, and their windows take the
-/// keyboard focus while shown, so an app's text input beneath can't bring
-/// it back until they close. The control center is not one: it is a panel,
-/// over the keyboard and whatever is shown, and leaves them as they are.
+/// size. Opening one hides the keyboard, and the apps lose the keyboard
+/// focus while it shows (the app switcher takes it; for home, the
+/// compositor keeps it off the hidden apps), so an app's text input
+/// beneath can't bring it back until it closes. The control center is not
+/// one: it is a panel, over the keyboard and whatever is shown, and leaves
+/// them as they are.
 const COVERS: [ContainerId; 2] = [HOME_ID, RUNNING];
 
 /// GPU atlas pages: the default, plus a colour page for the keyboard's
@@ -130,6 +132,21 @@ fn role(
     })
 }
 
+/// Home's role: on the bottom layer, below the apps, as layer shell keeps
+/// what a shell shows when nothing covers it; over them only while it
+/// shows home. Its zone ignores everyone's, and the drawer's search takes
+/// the keyboard when tapped.
+fn home_role() -> Role {
+    Role::Layer(LayerRole {
+        layer: Layer::Bottom,
+        anchor: ALL_SIDES,
+        exclusive_zone: -1,
+        namespace: "home".into(),
+        keyboard_interactivity: KeyboardInteractivity::OnDemand,
+        shell_role: None,
+    })
+}
+
 /// A quick swipe up from the middle of the bottom edge; the corners are the
 /// keyboard's.
 fn bottom_quick() -> nav::core::Swipe {
@@ -163,9 +180,11 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
     let bar = LayoutStyle::default().height(px(DEFAULT_BAR_HEIGHT));
     let sides = Anchor::LEFT | Anchor::RIGHT;
 
+    // Home stays open while an app it started starts: what closes it is the
+    // app coming to the front, which the compositor tells (`HomeLeft`).
     let home = container(HOME_ID, BelowBar(Home))
         .open(bottom_quick(), FADE)
-        .close(OnExternal(ExternalEvent::AppLaunched), INSTANT)
+        .close(OnExternal(ExternalEvent::HomeLeft), INSTANT)
         .close(OnExternal(ExternalEvent::WindowOpened), INSTANT)
         .open(OnExternal(ExternalEvent::LastWindowClosed), FADE)
         .child(
@@ -195,13 +214,9 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
             select_screen(app, AppScreen::QuickSettingsScreen)
         })
         .window(
-            nav_window(
-                HOME,
-                role(Layer::Overlay, ALL_SIDES, -1, ShellRole::View, "home"),
-                LayoutStyle::default(),
-            )
-            .container(home)
-            .takes_keyboard(),
+            nav_window(HOME, home_role(), LayoutStyle::default())
+                .container(home)
+                .home(),
         )
         .window(
             nav_window(

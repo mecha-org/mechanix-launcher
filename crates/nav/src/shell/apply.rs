@@ -19,6 +19,9 @@ pub(crate) struct NavWindow {
     pub(crate) containers: Vec<ContainerId>,
     /// Takes no input: gets an empty input region on its first `Resized`.
     pub(crate) no_input: bool,
+    /// Is home: shows over the apps while shown
+    /// ([`WindowSpec::home`](super::WindowSpec::home)).
+    pub(crate) home: bool,
 }
 
 /// Signalled when a container is shown or hidden, as its screen hears
@@ -87,12 +90,13 @@ fn shown(nav: &Nav, w: &NavWindow) -> bool {
 }
 
 /// Whether each layer window with containers is to be hidden: while none
-/// of them is [`shown`]. Windows without containers (the strips) and
-/// toplevels are left out.
+/// of them is [`shown`]. Windows without containers (the strips),
+/// toplevels and home are left out: home stays below the apps, shown, so
+/// showing home over them waits on no frame of it.
 pub(crate) fn window_hidden(nav: &Nav) -> Vec<(NodeId, bool)> {
     nav.windows
         .iter()
-        .filter(|w| !w.containers.is_empty() && w.is_layer)
+        .filter(|w| !w.containers.is_empty() && w.is_layer && !w.home)
         .map(|w| (w.node, !shown(nav, w)))
         .collect()
 }
@@ -102,7 +106,8 @@ pub(crate) fn window_hidden(nav: &Nav) -> Vec<(NodeId, bool)> {
 /// A container whose display changes has `Shown` or `Hidden` emitted at
 /// its screen.
 /// A window with no visible container is hidden, keeping its surface, and
-/// shown again when one is ([`Surfaces::set_hidden`]).
+/// shown again when one is ([`Surfaces::set_hidden`]). A home window shows
+/// home over the apps while shown ([`Surfaces::set_showing_home`]).
 /// Clears the tick clock once nothing animates, however the animation
 /// ended, so the next one starts from a zero tick.
 pub(crate) fn apply(app: &mut App) {
@@ -115,7 +120,7 @@ pub(crate) fn apply(app: &mut App) {
             nav.last_tick = None;
         }
     }
-    let (containers, windows, frames) = {
+    let (containers, windows, homes, frames) = {
         let nav = app.resource::<Nav>();
         let containers: Vec<_> = nav
             .containers
@@ -137,6 +142,12 @@ pub(crate) fn apply(app: &mut App) {
             })
             .collect();
         let windows = window_hidden(nav);
+        let homes: Vec<(NodeId, bool)> = nav
+            .windows
+            .iter()
+            .filter(|w| w.home)
+            .map(|w| (w.node, shown(nav, w)))
+            .collect();
         let mut frames: Vec<NodeId> = Vec::new();
         for id in nav.stack.animating() {
             let window = nav.windows[nav.container(id).window].node;
@@ -144,7 +155,7 @@ pub(crate) fn apply(app: &mut App) {
                 frames.push(window);
             }
         }
-        (containers, windows, frames)
+        (containers, windows, homes, frames)
     };
 
     for (id, node, screen, cover, display, alpha) in containers {
@@ -171,6 +182,11 @@ pub(crate) fn apply(app: &mut App) {
         // shown as asked, with no flash.
         for (window, hidden) in windows {
             surfaces.set_hidden(window, hidden, &mut wl);
+        }
+        // Home shows over the apps while shown; the same state sends
+        // nothing, here too.
+        for (window, showing) in homes {
+            surfaces.set_showing_home(window, showing, &mut wl);
         }
     }
 
