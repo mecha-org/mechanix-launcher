@@ -65,8 +65,7 @@ pub(crate) fn send_zone(
 /// Hold the keyboard's exclusive zone off (`true`) or let it follow the
 /// toggle again (`false`), for while the host's own screens (home, a panel)
 /// cover the apps, so they keep their full height. A shown keyboard updates
-/// at once. While held, an app's text input cannot bring the keyboard up;
-/// only the host's own focused field can.
+/// at once.
 /// Needs the [`KeyboardModule`](crate::KeyboardModule) installed.
 pub fn suspend_keyboard_zone(app: &mut App, suspended: bool) {
     app.resource_mut::<ExclusiveZone>().suspended = suspended;

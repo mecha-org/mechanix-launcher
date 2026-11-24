@@ -19,6 +19,7 @@ pub struct WindowSpec {
     layout: LayoutStyle,
     containers: Vec<ContainerSpec>,
     no_input: bool,
+    takes_keyboard: bool,
     clear: Color,
 }
 
@@ -29,6 +30,7 @@ pub fn nav_window(area: AreaId, role: Role, layout: LayoutStyle) -> WindowSpec {
         layout,
         containers: Vec::new(),
         no_input: false,
+        takes_keyboard: false,
         clear: Color::BLACK,
     }
 }
@@ -44,6 +46,16 @@ impl WindowSpec {
     /// Applied on the window's first `Resized`.
     pub fn no_input(mut self) -> Self {
         self.no_input = true;
+        self
+    }
+
+    /// Takes the keyboard focus while any of its containers is shown: its
+    /// layer surface asks for it exclusively, which a hidden one cannot
+    /// have. A layer window covering the apps takes it from them, so their
+    /// text inputs disable and an input method hides its keyboard; hidden
+    /// again, it gives it back, they enable again and it shows.
+    pub fn takes_keyboard(mut self) -> Self {
+        self.takes_keyboard = true;
         self
     }
 
@@ -110,20 +122,23 @@ impl Module for NavModule {
                 root_window.insert(c.id, i);
                 roots.push(c);
             }
-            let layer = match &w.role {
-                Role::Layer(l) => Some(l.layer),
-                Role::Toplevel | Role::Lock(_) => None,
-            };
+            let mut role = w.role;
+            if w.takes_keyboard
+                && let Role::Layer(l) = &mut role
+            {
+                l.keyboard_interactivity = KeyboardInteractivity::Exclusive;
+            }
+            let is_layer = matches!(role, Role::Layer(_));
             let node = app
                 .spawn_with(
                     root,
                     window().title(w.area.0).layout(w.layout).clear(w.clear),
-                    (w.role,),
+                    (role,),
                 )
                 .id();
             windows.push(NavWindow {
                 node,
-                layer,
+                is_layer,
                 area: w.area,
                 containers: Vec::new(),
                 no_input: w.no_input,
@@ -509,6 +524,30 @@ pub(crate) mod tests {
             window_hidden(nav),
             vec![(nav.windows[0].node, true), (nav.windows[2].node, true)]
         );
+    }
+
+    /// Asked for once: hidden, the window cannot have the focus anyway.
+    #[test]
+    fn only_a_window_that_takes_the_keyboard_asks_for_it() {
+        use KeyboardInteractivity as Ki;
+        let keyboard = |takes: bool, home_open: bool| {
+            let window = nav_window(HOME_AREA, role(Layer::Top, "home"), LayoutStyle::default())
+                .container(home_spec(home_open));
+            let window = if takes {
+                window.takes_keyboard()
+            } else {
+                window
+            };
+            let app = app_with(NavModule::new(NavConfig::default()).window(window));
+            let node = app.resource::<Nav>().windows[0].node;
+            match app.component::<Role>(node) {
+                Some(Role::Layer(role)) => role.keyboard_interactivity,
+                _ => panic!("a layer window"),
+            }
+        };
+        assert_eq!(keyboard(true, true), Ki::Exclusive);
+        assert_eq!(keyboard(true, false), Ki::Exclusive);
+        assert_eq!(keyboard(false, true), Ki::None);
     }
 
     #[test]

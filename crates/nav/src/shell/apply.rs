@@ -13,8 +13,8 @@ pub(crate) struct NavWindow {
     pub(crate) node: NodeId,
     /// The area its touches are tagged with.
     pub(crate) area: AreaId,
-    /// The layer the window was spawned in; `None` for a toplevel.
-    pub(crate) layer: Option<Layer>,
+    /// A layer window, which can be hidden; not a toplevel.
+    pub(crate) is_layer: bool,
     /// Every container in this window, children included, in z order.
     pub(crate) containers: Vec<ContainerId>,
     /// Takes no input: gets an empty input region on its first `Resized`.
@@ -92,7 +92,7 @@ fn shown(nav: &Nav, w: &NavWindow) -> bool {
 pub(crate) fn window_hidden(nav: &Nav) -> Vec<(NodeId, bool)> {
     nav.windows
         .iter()
-        .filter(|w| !w.containers.is_empty() && w.layer.is_some())
+        .filter(|w| !w.containers.is_empty() && w.is_layer)
         .map(|w| (w.node, !shown(nav, w)))
         .collect()
 }

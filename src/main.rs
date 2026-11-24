@@ -36,7 +36,9 @@ const STATUS: ContainerId = ContainerId("status");
 
 /// The launcher screens that cover apps. While any is open the keyboard
 /// reserves no space, so they and the apps under them keep their full
-/// size; opening one hides the keyboard.
+/// size. Opening one hides the keyboard, and their windows take the
+/// keyboard focus while shown, so an app's text input beneath can't bring
+/// it back until they close.
 const COVERS: [ContainerId; 3] = [HOME_ID, RUNNING, CONTROL_CENTER];
 
 /// GPU atlas pages: the default, plus a colour page for the keyboard's
@@ -71,8 +73,9 @@ fn on_container_shown(app: &mut App, s: &ContainerShown) {
         }
         !open.0.is_empty()
     };
-    // Hiding clears the zone first, so the app under resizes as the
-    // screen comes up.
+    // Losing the focus hides a keyboard an app's text input brought up, but
+    // not one shown by hand. Hiding also clears the zone first, so the app
+    // under resizes as the screen comes up.
     if s.shown {
         hide_keyboard(app);
     }
@@ -193,7 +196,8 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
                 role(Layer::Overlay, ALL_SIDES, -1, ShellRole::View, "home"),
                 LayoutStyle::default(),
             )
-            .container(home),
+            .container(home)
+            .takes_keyboard(),
         )
         .window(
             nav_window(
@@ -207,7 +211,8 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
                 ),
                 LayoutStyle::default(),
             )
-            .container(running),
+            .container(running)
+            .takes_keyboard(),
         )
         // FIXME: the compositor never draws the edge strips; give them a
         // single-pixel buffer scaled by wp_viewporter instead of rendering
@@ -239,7 +244,8 @@ fn navigation(cfg: NavConfig, drawer: AppDrawer) -> NavModule {
                 CONTROL_CENTER,
                 BelowBar(ControlCenterScreen),
                 Span::Whole,
-            )),
+            ))
+            .takes_keyboard(),
         )
         .window(
             nav_window(
