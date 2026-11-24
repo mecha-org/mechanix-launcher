@@ -427,14 +427,14 @@ fn sync_thumbs(app: &mut App, view: NodeId) {
     }
 }
 
-/// The preview box keeps the window's aspect: apps on the phone fill the
-/// output, and this screen's window does too. A card takes most of the
-/// width, narrower when header and box would not fit the height. With no
-/// previews to show (a compositor without thumbnail views) there is no
-/// box: the cards are headers only.
+/// The preview box keeps this screen's aspect: apps on the phone fill the
+/// area below the status bar, and this screen does too. A card takes most
+/// of the width, narrower when header and box would not fit the height.
+/// With no previews to show (a compositor without thumbnail views) there is
+/// no box: the cards are headers only.
 fn fit_holes(app: &mut App, _: &LayoutDone) {
     for view in views(app) {
-        let Some(size) = window_size(app, view) else {
+        let Some(size) = view_size(app, view) else {
             continue;
         };
         let aspect = size.height / size.width;
@@ -462,9 +462,10 @@ fn fit_holes(app: &mut App, _: &LayoutDone) {
     }
 }
 
-fn window_size(app: &App, view: NodeId) -> Option<Size> {
-    let window = app.component::<InWindow>(view).and_then(|w| w.0)?;
-    let rect = app.component::<ComputedLayout>(window)?.rect;
+/// The screen's own box: the area an app gets, which its window, laid
+/// over the status bar too, is not.
+fn view_size(app: &App, view: NodeId) -> Option<Size> {
+    let rect = app.component::<ComputedLayout>(view)?.rect;
     (rect.width() > 0.0 && rect.height() > 0.0).then(|| Size::new(rect.width(), rect.height()))
 }
 
@@ -479,7 +480,7 @@ pub(crate) fn place_thumbnails(app: &mut App, f: &Frame) {
         if !v.shown || app.component::<InWindow>(view).and_then(|w| w.0) != Some(f.0) {
             continue;
         }
-        let Some(size) = window_size(app, view) else {
+        let Some(size) = view_size(app, view) else {
             continue;
         };
         let sink = v.thumbs.clone();
