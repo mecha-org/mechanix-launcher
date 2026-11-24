@@ -8,10 +8,11 @@ use mecha_wayland::prelude::*;
 use xkbcommon::xkb::Keysym;
 
 use super::resolve::{KeyGeom, ResolveParams, SIGMA_RATIO, resolve};
+use crate::dictionaries::Dictionary;
 use crate::layout::{
     Cell, DEFAULT_STRENGTH, KeyAction, KeyboardStyle, Keymap, Row, View, load_keymap,
 };
-use crate::predict::{Dictionary, Predictor};
+use crate::predict::{DictionaryPredictor, Predictor};
 use crate::protocol::virtual_keyboard::keysym_text;
 use crate::widget::surface::{row_weight, view_height};
 
@@ -144,7 +145,9 @@ fn error_rate_cfg<S: AsRef<str>>(words: &[S], cfg: Cfg, noise: f32, seed: u64) -
     let median = params.sigma / SIGMA_RATIO;
     params.core = cfg.core;
     params.sigma = cfg.sigma_ratio * median;
-    let dict = Dictionary::bundled("en").expect("bundled en");
+    let dict = DictionaryPredictor::new(std::sync::Arc::new(
+        Dictionary::bundled("en").expect("bundled en"),
+    ));
     let mut rng = Rng::new(seed);
     let (mut wrong, mut total) = (0usize, 0usize);
     for word in words {

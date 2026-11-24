@@ -22,6 +22,7 @@ use crate::widget::pointing_stick::PointingStickOverlay;
 #[cfg(test)]
 use crate::widget::popup::GAP;
 use crate::widget::popup::{HEIGHT_SCALE, KeyPopup};
+use crate::widget::suggestion_bar::{BAR_ROW_SCALE, SuggestionBar};
 use crate::zone::{ExclusiveZone, apply_visibility, send_zone};
 
 /// The keyboard's window and size, for the controls that change its surface
@@ -87,12 +88,12 @@ pub(crate) fn ensure_input_region(app: &mut App, _: &PostTick) {
     }
 }
 
-/// The shown view changed: the surface's headroom (and so the input region
-/// and the exclusive zone) now follow the new view's height. While the
-/// surface is mapped (keyboard shown, keys at home) both are re-sent at once.
+/// The shown view changed, or the suggestion bar showed or hid: the
+/// surface's headroom (and so the input region and the exclusive zone) now
+/// follow the keyboard's new height. While the surface is mapped (keyboard
+/// shown, keys at home) both are re-sent at once.
 pub(crate) fn view_shown(ctx: &mut Context<'_, Keyboard>) {
-    let me = ctx.me();
-    let height = me.views[me.current_view].height;
+    let height = ctx.me().shown_height();
     let surface = ctx.resource::<KeyboardSurface>().showing(height);
     *ctx.resource_mut::<KeyboardSurface>() = surface;
     // This widget is the keys node: away from the window, it is lent.
@@ -129,6 +130,15 @@ pub(crate) fn row_weight(height: f32) -> f32 {
     }
 }
 
+/// Height of the suggestion bar for `style`, or 0 without one.
+pub(crate) fn bar_height(style: &KeyboardStyle, enabled: bool) -> f32 {
+    if enabled {
+        (BAR_ROW_SCALE * key_row(style)).round()
+    } else {
+        0.0
+    }
+}
+
 /// Height of one key row (weight `1.0`) at the style's base height.
 fn key_row(style: &KeyboardStyle) -> f32 {
     (style.height - 2.0 * style.padding - 3.0 * style.row_gap) / 4.0
@@ -159,7 +169,8 @@ pub(crate) fn view_height_of(style: &KeyboardStyle, weights: &[f32]) -> f32 {
 
 /// The surface's height for a keyboard `style` (at the current output
 /// width) whose views are `heights` tall: room for the pop-up on top, the
-/// tallest view and the `bottom_gap`. The compositor sizes a layer surface in
+/// suggestion bar (`bar` tall), the tallest view and the `bottom_gap`. A
+/// hidden bar leaves its room in the headroom. The compositor sizes a layer surface in
 /// whole logical px, so the height is rounded up; its fraction joins the
 /// transparent strip above the keys. The width is always the output's.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -173,13 +184,14 @@ pub(crate) fn metrics(
     style: &KeyboardStyle,
     popup_gap: f32,
     heights: &[f32],
+    bar: f32,
     bottom_gap: f32,
 ) -> Metrics {
     let popup_room = popup_headroom(style, popup_gap);
     let tallest = heights.iter().copied().fold(style.height, f32::max);
     Metrics {
         popup_room,
-        height: (popup_room + tallest + bottom_gap).ceil(),
+        height: (popup_room + bar + tallest + bottom_gap).ceil(),
     }
 }
 
@@ -203,6 +215,8 @@ pub(crate) struct KeyboardUIBuilder {
     pub(crate) fonts: Fonts,
     pub(crate) keymap: Keymap,
     pub(crate) bottom_gap: f32,
+    /// Whether the keyboard has a suggestion bar.
+    pub(crate) suggestions: bool,
 }
 
 impl Build for KeyboardUIBuilder {
@@ -222,7 +236,8 @@ impl Widget for KeyboardUI {
             .iter()
             .map(|v| view_height_of(&style, &row_weights(v)))
             .collect();
-        let m = metrics(&style, geometry.popup_gap(), &heights, b.bottom_gap);
+        let bar = bar_height(&style, b.suggestions);
+        let m = metrics(&style, geometry.popup_gap(), &heights, bar, b.bottom_gap);
         let (popup_room, height) = (m.popup_room, m.height);
         let initial = b
             .keymap
@@ -273,6 +288,7 @@ impl Widget for KeyboardUI {
             KeyboardBuilder {
                 fonts: b.fonts,
                 keymap: b.keymap,
+                bar_height: bar,
             },
         );
         let keys = Keys {
@@ -348,6 +364,7 @@ pub(crate) fn relayout(app: &mut App) {
     };
     let (views, current, popup, choices_row, pointing_stick, old_radius) = {
         let me = app.widget_mut::<Keyboard>(kb).unwrap();
+        me.bar_height = bar_height(&style, me.bar_height > 0.0);
         me.headroom = headroom;
         me.popup_gap = popup_gap;
         let old_radius = std::mem::replace(&mut me.radius, style.radius);
@@ -369,9 +386,21 @@ pub(crate) fn relayout(app: &mut App) {
         )
     };
 
-    restyle(app, kb, |s| {
-        s.gap(px(style.row_gap)).padding_all(px(style.padding))
-    });
+    let (bar, bar_h, bar_shown, padding) = {
+        let me = app.widget::<Keyboard>(kb).unwrap();
+        (
+            me.bar,
+            me.bar_height,
+            me.bar_shown,
+            me.padding(style.padding),
+        )
+    };
+    restyle(app, kb, |s| s.gap(px(style.row_gap)).padding(padding));
+    // The bar keeps whether it shows; only its size follows the scale.
+    restyle(app, bar, |s| SuggestionBar::style(bar_h).display(s.display));
+    if let Some(b) = app.widget_mut::<SuggestionBar>(bar) {
+        b.padding = style.padding * 2.0;
+    }
     for (node, height, rows) in &views {
         restyle(app, *node, |s| {
             s.height(px(height - 2.0 * style.padding))
@@ -413,12 +442,13 @@ pub(crate) fn relayout(app: &mut App) {
     // The surface.
     let heights: Vec<f32> = views.iter().map(|v| v.1).collect();
     let old = *app.resource::<KeyboardSurface>();
-    let m = metrics(&style, popup_gap, &heights, old.bottom_gap);
+    let m = metrics(&style, popup_gap, &heights, bar_h, old.bottom_gap);
+    let shown_bar = if bar_shown { bar_h } else { 0.0 };
     let surface = KeyboardSurface {
         height: m.height,
         ..old
     }
-    .showing(heights.get(current).copied().unwrap_or(style.height));
+    .showing(heights.get(current).copied().unwrap_or(style.height) + shown_bar);
     *app.resource_mut::<KeyboardSurface>() = surface;
     restyle(app, surface.window, |s| {
         s.height(px(m.height)).padding(Insets::new(
@@ -565,7 +595,7 @@ mod tests {
         assert_eq!(view_height_of(&style, &LETTERS), 252.0);
         assert_eq!(view_height_of(&style, &TERMINAL), 301.5);
         assert_eq!(popup_headroom(&style, g.popup_gap()), 69.0);
-        let m = metrics(&style, g.popup_gap(), &[252.0, 301.5], 20.0);
+        let m = metrics(&style, g.popup_gap(), &[252.0, 301.5], 0.0, 20.0);
         assert_eq!(
             m,
             Metrics {
@@ -592,7 +622,7 @@ mod tests {
         assert!((terminal * 3.2 - 603.0).abs() < 1e-3, "{terminal}");
         // 1.3 rows of 31.25 plus a 2.5 gap, rounded up.
         assert_eq!(popup_headroom(&style, g.popup_gap()), 44.0);
-        let m = metrics(&style, g.popup_gap(), &[letters, terminal], 20.0);
+        let m = metrics(&style, g.popup_gap(), &[letters, terminal], 0.0, 20.0);
         assert_eq!(m.popup_room, 44.0);
         assert_eq!(m.height, (44.0f32 + terminal + 20.0).ceil());
         let s = KeyboardSurface {
@@ -616,6 +646,33 @@ mod tests {
     }
 
     #[test]
+    fn the_bar_grows_the_zone_only_while_it_shows() {
+        let g = at_scale(2.0);
+        let style = g.style();
+        let bar = bar_height(&style, true);
+        assert_eq!(bar, 40.0, "0.8 of a 50 px key row");
+        assert_eq!(bar_height(&style, false), 0.0);
+        let without = metrics(&style, g.popup_gap(), &[252.0, 301.5], 0.0, 20.0);
+        let with = metrics(&style, g.popup_gap(), &[252.0, 301.5], bar, 20.0);
+        assert_eq!(with.height, without.height + bar);
+        let s = KeyboardSurface {
+            window: App::new().root(),
+            height: with.height,
+            headroom: 0.0,
+            bottom_gap: 20.0,
+        };
+        let zone = ExclusiveZone::default();
+        let reserved =
+            |shown: KeyboardSurface| zone.zone(reserved_height(shown.height, shown.headroom));
+        // Hidden bar: the letters view reserves what it does without one.
+        assert_eq!(reserved(s.showing(252.0)), 272);
+        // Shown: the bar's height on top.
+        assert_eq!(reserved(s.showing(252.0 + bar)), 312);
+        // The terminal view never shows the bar and still fits.
+        assert_eq!(reserved(s.showing(301.5)), 321);
+    }
+
+    #[test]
     fn non_design_width_keeps_the_design_aspect_ratio() {
         // An output 408 logical px wide (e.g. 1224 px at scale 3).
         let mut g = KeyboardGeometry::new(crate::layout::load_keymap().keyboard);
@@ -629,7 +686,7 @@ mod tests {
             (terminal - 301.5 * 408.0 / 540.0).abs() < 1e-3,
             "{terminal}"
         );
-        let m = metrics(&style, g.popup_gap(), &[letters, terminal], 20.0);
+        let m = metrics(&style, g.popup_gap(), &[letters, terminal], 0.0, 20.0);
         assert_eq!(m.popup_room, popup_headroom(&style, g.popup_gap()));
         assert_eq!(m.height, (m.popup_room + terminal + 20.0).ceil());
     }

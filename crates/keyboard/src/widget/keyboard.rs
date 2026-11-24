@@ -5,12 +5,14 @@
 
 use mecha_wayland::prelude::*;
 
+use crate::complete::{self, CARET_SETTLE, CaretMoved, Completion, SuggestionsChanged};
 use crate::layout::style::KeyState;
 use crate::layout::tokens::{Font, Fonts};
 use crate::layout::{Cell, Family, KeyAction, Keymap, Modifier, Page};
 use crate::modifiers::pointing_stick;
 use crate::modifiers::shift::{self, HOLD_LOCK, Shift};
 use crate::predict::TypingContext;
+use crate::protocol::input_method::InputMethodState;
 use crate::scale::KeyboardGeometry;
 use crate::touch::long_press::LONG_PRESS;
 use crate::touch::{self, KeyEntry, TouchState, TouchTracker, letter_views};
@@ -20,6 +22,7 @@ use crate::widget::key::{Key, KeyBuilder};
 use crate::widget::more_keys::{MoreKeys, MoreKeysBuilder};
 use crate::widget::pointing_stick::{PointingStickOverlay, PointingStickOverlayBuilder};
 use crate::widget::popup::{KeyPopup, KeyPopupBuilder};
+use crate::widget::suggestion_bar::{BarFeedback, SuggestionBar, SuggestionBarBuilder};
 use crate::widget::surface::{popup_headroom, row_weights, view_height_of};
 
 /// One spawned view: its keymap name and the node toggled
@@ -80,6 +83,12 @@ pub(crate) struct Keyboard {
     pub(crate) headroom: f32,
     /// Gap between the choices row and its key, at the current scale.
     pub(crate) popup_gap: f32,
+    /// The suggestion bar over the top of the keys.
+    pub(crate) bar: Handle<SuggestionBar>,
+    /// The bar's height at the current scale; 0 when completion is off.
+    pub(crate) bar_height: f32,
+    /// Whether the bar shows (and so takes its height above the view).
+    pub(crate) bar_shown: bool,
 }
 
 impl Keyboard {
@@ -88,11 +97,31 @@ impl Keyboard {
     pub(crate) fn index_of(&self, name: &str) -> Option<usize> {
         self.views.iter().position(|v| v.name == name)
     }
+
+    /// The height the keyboard takes now: the shown view, and the bar if it
+    /// shows.
+    pub(crate) fn shown_height(&self) -> f32 {
+        let bar = if self.bar_shown { self.bar_height } else { 0.0 };
+        self.views[self.current_view].height + bar
+    }
+
+    /// The container's padding: the style's all round, with the bar's
+    /// height added on top while it shows.
+    pub(crate) fn padding(&self, padding: f32) -> Insets<Val> {
+        let top = if self.bar_shown {
+            padding + self.bar_height
+        } else {
+            padding
+        };
+        Insets::new(px(top), px(padding), px(padding), px(padding))
+    }
 }
 
 pub(crate) struct KeyboardBuilder {
     pub(crate) fonts: Fonts,
     pub(crate) keymap: Keymap,
+    /// The suggestion bar's height; 0 when completion is off.
+    pub(crate) bar_height: f32,
 }
 
 impl Build for KeyboardBuilder {
@@ -129,6 +158,18 @@ impl Widget for Keyboard {
             .iter()
             .position(|v| v.name == BASE_VIEW)
             .unwrap_or(0);
+
+        // Hidden until a field that gets suggestions is focused; absolute,
+        // over the container's top padding, which grows to make room.
+        let bar = s.spawn(
+            me,
+            SuggestionBarBuilder {
+                font: b.fonts.id(style.font),
+                font_size: style.font_size,
+                height: b.bar_height,
+                padding: style.padding * 2.0,
+            },
+        );
 
         // ── spawn all views ─────────────────────────────────────────────
         let mut views = Vec::with_capacity(b.keymap.views.len());
@@ -257,13 +298,13 @@ impl Widget for Keyboard {
 
         touch::attach(s, me);
         // A field was focused: cancel any touch first (even on the same
-        // view, nothing it holds belongs in the new field), then drop the
-        // word typed for the previous field rather than finish (and record)
-        // it, drop Shift and the pointing stick's select mode, and show the
-        // field's view.
+        // view, nothing it holds belongs in the new field), drop Shift and
+        // the pointing stick's select mode, and show the field's view. The
+        // word was already reset by the input method's activate, which then
+        // took the word under the caret from the client: clearing it here
+        // would lose that (a tap inside a word re-activates the field).
         s.on::<SwitchView>(me, |ctx, event| {
             touch::abort(ctx);
-            ctx.resource_mut::<TypingContext>().clear();
             ctx.resource_mut::<Shift>().reset();
             shift::refresh(ctx);
             pointing_stick::reset(ctx);
@@ -273,6 +314,29 @@ impl Widget for Keyboard {
                 let name = me.views[idx].name.clone();
                 switch_view(ctx, &name);
             }
+        });
+
+        // The suggestions changed: fill the bar, and show or hide it.
+        s.on::<SuggestionsChanged>(me, show_suggestions);
+
+        // The caret moved: the bar keeps what it shows until the caret has
+        // rested for `CARET_SETTLE` (each move restarts the wait), then
+        // follows it.
+        let settle_timer = s.add_timeout(CARET_SETTLE, |ctx, _| {
+            let e = {
+                let (mut completion, typing, st) = ctx.fetch::<(
+                    ResMut<Completion>,
+                    Res<TypingContext>,
+                    Res<InputMethodState>,
+                )>();
+                complete::settle(&mut completion, typing, st)
+            };
+            if let Some(e) = e {
+                show_suggestions(ctx, &e);
+            }
+        });
+        s.on::<CaretMoved>(me, move |ctx, _| {
+            ctx.start_timer(settle_timer);
         });
 
         // Every hide (flick, input-method deactivate, `hide_keyboard`) ends
@@ -308,6 +372,39 @@ impl Widget for Keyboard {
             long_press_timer,
             headroom: popup_headroom(&style, popup_gap),
             popup_gap,
+            bar,
+            bar_height: b.bar_height,
+            bar_shown: false,
         }
     }
+}
+
+/// Fill the suggestion bar, showing or hiding it (which changes the
+/// keyboard's height) as `e` says.
+fn show_suggestions(ctx: &mut Context<'_, Keyboard>, e: &SuggestionsChanged) {
+    if e.shown != ctx.me().bar_shown && ctx.me().bar_height > 0.0 {
+        set_bar_shown(ctx, e.shown);
+    }
+    let bar = ctx.me().bar.id();
+    ctx.emit(BarFeedback::Show(e.labels.clone()), [bar]);
+}
+
+/// Show or hide the suggestion bar: the container's top padding makes or
+/// gives back its room, and the surface's zone and input region follow the
+/// new height. A contact on the bar is dropped first.
+fn set_bar_shown(ctx: &mut Context<'_, Keyboard>, shown: bool) {
+    touch::abort(ctx);
+    ctx.me().bar_shown = shown;
+    let bar = ctx.me().bar;
+    ctx.at(bar).unwrap().set_display(if shown {
+        Display::Flex
+    } else {
+        Display::Hidden
+    });
+    let padding = ctx.resource::<KeyboardGeometry>().style().padding;
+    let insets = ctx.me().padding(padding);
+    if let Some(style) = ctx.component::<LayoutStyle>().cloned() {
+        ctx.set_style(style.padding(insets));
+    }
+    crate::widget::surface::view_shown(ctx);
 }

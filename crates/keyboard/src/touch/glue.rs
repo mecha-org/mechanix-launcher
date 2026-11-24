@@ -26,7 +26,8 @@ use super::tracker::{TouchOut, TouchTracker};
 use crate::feedbackd;
 use crate::field::Field;
 use crate::input::{
-    dispatch, dispatch_choice, hold, hold_direction, release, repeats, tap_direction,
+    accept_suggestion, dispatch, dispatch_choice, hold, hold_direction, release, repeats,
+    tap_direction,
 };
 use crate::layout::KeyAction;
 use crate::modifiers::shift::{self, Shift};
@@ -35,6 +36,7 @@ use crate::visibility::KeyboardVisibilityExt;
 use crate::widget::keyboard::Keyboard;
 use crate::widget::more_keys::ChoicesFeedback;
 use crate::widget::pointing_stick::PointingStickFeedback;
+use crate::widget::suggestion_bar::{BarFeedback, SuggestionBar};
 
 /// Bookkeeping the input layer keeps besides the tracker.
 #[derive(Default)]
@@ -47,6 +49,9 @@ pub(crate) struct TouchState {
     popup: bool,
     /// Deferral and per-contact prior.
     flow: Flow,
+    /// The contact that went down on the suggestion bar, and the
+    /// suggestion it is over. It never reaches the keys.
+    bar: Option<(ContactId, Option<usize>)>,
 }
 
 /// The keyboard as the [`flow`] sees it.
@@ -122,6 +127,10 @@ impl Board for Kb<'_, '_> {
 /// gets no handler, so taps there stay dead.
 pub(crate) fn attach(s: &mut Spawner<'_, Keyboard>, me: Handle<Keyboard>) {
     s.on::<Press>(me, |ctx, e| {
+        if let Some(cell) = bar_hit(ctx, e.position) {
+            bar_press(ctx, e.contact, cell);
+            return;
+        }
         ctx.me().touch.last_time.insert(e.contact, e.time);
         let p = PendingPress {
             contact: e.contact,
@@ -132,11 +141,22 @@ pub(crate) fn attach(s: &mut Spawner<'_, Keyboard>, me: Handle<Keyboard>) {
     });
 
     s.on::<PressMoved>(me, |ctx, e| {
+        if is_bar_contact(ctx, e.contact) {
+            let cell = bar_hit(ctx, e.position).flatten();
+            bar_press(ctx, e.contact, cell);
+            return;
+        }
         ctx.me().touch.last_time.insert(e.contact, e.time);
         flow::moved(&mut Kb(ctx), e.contact, e.position, e.time);
     });
 
     s.on::<Release>(me, |ctx, e| {
+        if is_bar_contact(ctx, e.contact) {
+            if let Some(i) = bar_end(ctx) {
+                accept_suggestion(ctx, i);
+            }
+            return;
+        }
         ctx.me().touch.last_time.remove(&e.contact);
         // Commits the last resolved (highlighted) key, not a fresh resolve
         // at the release position: by design.
@@ -144,6 +164,10 @@ pub(crate) fn attach(s: &mut Spawner<'_, Keyboard>, me: Handle<Keyboard>) {
     });
 
     s.on::<PressCancelled>(me, |ctx, e| {
+        if is_bar_contact(ctx, e.contact) {
+            bar_end(ctx);
+            return;
+        }
         let time = ctx.me().touch.last_time.remove(&e.contact).unwrap_or(0);
         flow::cancel(&mut Kb(ctx), e.contact, time);
     });
@@ -153,6 +177,7 @@ pub(crate) fn attach(s: &mut Spawner<'_, Keyboard>, me: Handle<Keyboard>) {
 /// against the current view (nothing is typed, its row closes, its hold and
 /// timers end). Call before switching the view.
 pub(crate) fn abort(ctx: &mut Context<'_, Keyboard>) {
+    bar_end(ctx);
     let me = ctx.me();
     let time = me
         .tracker
@@ -160,6 +185,58 @@ pub(crate) fn abort(ctx: &mut Context<'_, Keyboard>) {
         .and_then(|c| me.touch.last_time.get(&c).copied())
         .unwrap_or(0);
     flow::abort(&mut Kb(ctx), time);
+}
+
+/// Where `p` (window coordinates) falls on the suggestion bar: `None` off
+/// it (or while it is hidden), else the suggestion under `p`, if any.
+fn bar_hit(ctx: &mut Context<'_, Keyboard>, p: Point) -> Option<Option<usize>> {
+    if !ctx.me().bar_shown {
+        return None;
+    }
+    let bar = ctx.me().bar;
+    let rect = ctx.at(bar)?.component::<ComputedLayout>()?.rect;
+    if !rect.contains(p) {
+        return None;
+    }
+    let cells = ctx.widget::<SuggestionBar>(bar)?.cells().to_vec();
+    let rects: Vec<Rect> = cells
+        .into_iter()
+        .map(|c| {
+            ctx.at(c)
+                .and_then(|c| c.component::<ComputedLayout>().map(|l| l.rect))
+                .unwrap_or_default()
+        })
+        .collect();
+    Some(SuggestionBar::cell_at(&rects, p))
+}
+
+/// Whether `contact` went down on the suggestion bar.
+fn is_bar_contact(ctx: &mut Context<'_, Keyboard>, contact: ContactId) -> bool {
+    ctx.me().touch.bar.is_some_and(|(c, _)| c == contact)
+}
+
+/// `contact` is on the bar, over suggestion `cell`: light it, with a tick
+/// of feedback when it lands on a new one.
+fn bar_press(ctx: &mut Context<'_, Keyboard>, contact: ContactId, cell: Option<usize>) {
+    let before = ctx.me().touch.bar.replace((contact, cell));
+    let changed = before.map(|(_, c)| c) != Some(cell);
+    if !changed {
+        return;
+    }
+    if cell.is_some() {
+        feedbackd::key_pressed(ctx);
+    }
+    let bar = ctx.me().bar.id();
+    ctx.emit(BarFeedback::Press(cell), [bar]);
+}
+
+/// The bar contact, if any, ended: unlight the bar and return the
+/// suggestion it ended over.
+fn bar_end(ctx: &mut Context<'_, Keyboard>) -> Option<usize> {
+    let (_, cell) = ctx.me().touch.bar.take()?;
+    let bar = ctx.me().bar.id();
+    ctx.emit(BarFeedback::Press(None), [bar]);
+    cell
 }
 
 /// The long-press timer fired: open the held key's choices row.
@@ -279,9 +356,12 @@ fn apply(ctx: &mut Context<'_, Keyboard>, view: usize, out: Vec<TouchOut>, time:
                 }
             }
             TouchOut::Hold(i) => {
-                if let Some(KeyAction::EmitKeysym(ks)) = entry_action(ctx, view, i) {
+                // A backspace that undid a suggestion holds nothing, so
+                // its release neither repeats nor drops the word.
+                if let Some(KeyAction::EmitKeysym(ks)) = entry_action(ctx, view, i)
+                    && hold(ctx, ks)
+                {
                     ctx.me().touch.held = Some(ks);
-                    hold(ctx, ks);
                 }
             }
             TouchOut::StopHold { held_ms } => {

@@ -5,7 +5,8 @@ use std::collections::HashMap;
 
 use mecha_wayland::prelude::*;
 
-use super::{Dictionary, FLAT, LetterPrior, Predictor};
+use super::{DictionaryPredictor, FLAT, LetterPrior, Predictor};
+use crate::dictionaries::Dictionaries;
 use crate::field::Field;
 use crate::layout::{Family, PredictionConfig};
 
@@ -114,10 +115,11 @@ pub(crate) struct Prediction {
 impl Resource for Prediction {}
 
 impl Prediction {
-    /// Build from the layout's prediction block: loads each dictionary a
-    /// profile with strength above 0 refers to, once, under its spec string.
-    /// With prediction off nothing is loaded and the flat predictor stands in.
-    pub(crate) fn from_config(cfg: &PredictionConfig) -> Prediction {
+    /// Build from the layout's prediction block: takes each dictionary a
+    /// profile with strength above 0 refers to from `dicts`, once, under its
+    /// spec string. With prediction off nothing is loaded and the flat
+    /// predictor stands in.
+    pub(crate) fn from_config(cfg: &PredictionConfig, dicts: &mut Dictionaries) -> Prediction {
         let profiles = Profiles::from_config(cfg);
         let mut predictors: HashMap<String, Box<dyn Predictor>> = HashMap::new();
         for profile in profiles.all() {
@@ -126,7 +128,7 @@ impl Prediction {
             {
                 predictors
                     .entry(key.clone())
-                    .or_insert_with(|| Box::new(Dictionary::load(key)));
+                    .or_insert_with(|| Box::new(DictionaryPredictor::new(dicts.get(key))));
             }
         }
         Prediction {
@@ -237,7 +239,7 @@ mod tests {
 
     #[test]
     fn disabled_config_loads_no_dictionary() {
-        let prediction = Prediction::from_config(&cfg(false));
+        let prediction = Prediction::from_config(&cfg(false), &mut Dictionaries::default());
         assert!(prediction.predictors.is_empty());
         let (_, predictor) = prediction.active(field(Family::Text, false));
         assert_eq!(predictor.prior("th"), FLAT);
@@ -245,7 +247,7 @@ mod tests {
 
     #[test]
     fn enabled_config_loads_both_dictionaries() {
-        let prediction = Prediction::from_config(&cfg(true));
+        let prediction = Prediction::from_config(&cfg(true), &mut Dictionaries::default());
         assert_eq!(prediction.predictors.len(), 2);
         let (_, terminal) = prediction.active(field(Family::Terminal, false));
         assert_ne!(terminal.prior("sys"), FLAT);
@@ -253,7 +255,7 @@ mod tests {
 
     #[test]
     fn missing_predictor_is_flat() {
-        let mut prediction = Prediction::from_config(&cfg(true));
+        let mut prediction = Prediction::from_config(&cfg(true), &mut Dictionaries::default());
         prediction.predictors.clear();
         let (_, predictor) = prediction.active(field(Family::Text, false));
         assert_eq!(predictor.prior("th"), FLAT);

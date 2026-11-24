@@ -12,6 +12,7 @@
 use mecha_wayland::prelude::*;
 use xkbcommon::xkb::Keysym;
 
+use crate::complete::Completion;
 use crate::field::Field;
 use crate::layout::{KeyAction, Modifier};
 use crate::modifiers::latch::{LatchedState, consume_latch, toggle_latch};
@@ -193,10 +194,16 @@ pub(crate) fn repeats(action: &KeyAction) -> bool {
 /// Press a [`repeats`] key's keysym through the virtual keyboard and leave it
 /// down until [`release`], consuming any latched modifier. The latch is
 /// cleared now but its mask stays applied until the key is released. Like
-/// any other key used, it ends the pointing stick's select mode.
-pub(crate) fn hold(ctx: &mut Context<'_, Keyboard>, ks: Keysym) {
+/// any other key used, it ends the pointing stick's select mode. A
+/// BackSpace right after a suggestion was accepted undoes that instead and
+/// presses nothing. Returns whether the key was pressed.
+pub(crate) fn hold(ctx: &mut Context<'_, Keyboard>, ks: Keysym) -> bool {
     pointing_stick::reset(ctx);
+    if ks == Keysym::BackSpace && undo_suggestion(ctx) {
+        return false;
+    }
     press_and_hold(ctx, ks, 0);
+    true
 }
 
 /// Press the arrow `ks` for the pointing stick's held direction and leave it
@@ -213,8 +220,8 @@ pub(crate) fn hold_direction(ctx: &mut Context<'_, Keyboard>, ks: Keysym) {
 
 /// Tap the arrow for `d` `count` times, as a glide's caret steps: with
 /// Shift in the pointing stick's select mode, which is kept, and without
-/// latched modifiers (left for the next key). The caret moved somewhere
-/// unknown, so the word being typed is dropped.
+/// latched modifiers (left for the next key). The caret may have moved
+/// (see [`TypingContext::caret_key`]).
 pub(crate) fn tap_direction(ctx: &mut Context<'_, Keyboard>, d: Direction, count: u32) {
     let shift = if ctx.resource::<PointingStickMode>().select() {
         ctx.resource::<VirtualKeyboardState>().shift_mask
@@ -248,6 +255,64 @@ pub(crate) fn release(ctx: &mut Context<'_, Keyboard>) {
     virtual_keyboard::release_held(&mut vk, &mut wl);
 }
 
+/// Accept suggestion `index` of the bar: replace the word around the cursor
+/// with it in one input-method commit. The bar only shows while the input
+/// method is active, so there is no virtual-keyboard fallback; if it went
+/// inactive meanwhile, nothing is typed. Like any key, it ends the pointing
+/// stick's select mode and spends a one-shot shift.
+pub(crate) fn accept_suggestion(ctx: &mut Context<'_, Keyboard>, index: usize) {
+    pointing_stick::reset(ctx);
+    // While the caret settles the bar shows the last word's suggestions,
+    // whose edits no longer fit: a tap then does nothing.
+    let Some(suggestion) = ctx.resource::<Completion>().get(index).cloned() else {
+        return;
+    };
+    let sent = {
+        let (st, mut wl) = ctx.fetch::<(Res<InputMethodState>, ResMut<Wayland>)>();
+        input_method::apply_edit(st, &mut wl, &suggestion.edit)
+    };
+    if !sent {
+        tracing::warn!("suggestion tapped with no active input method; ignored");
+        return;
+    }
+    // No haptic here: the touch gave one when it landed on the suggestion,
+    // as a key's press does.
+    tracing::info!(word = %suggestion.label, kind = ?suggestion.kind, "accepted suggestion");
+    let (words, original, rev) = {
+        let mut typing = ctx.resource_mut::<TypingContext>();
+        let original = format!("{}{}", typing.prefix(), typing.word_after());
+        let words = typing.replaced_word(&suggestion.edit.insert);
+        (words, original, typing.local_rev())
+    };
+    ctx.resource_mut::<Completion>()
+        .remember_undo(original, suggestion.edit.insert.clone(), rev);
+    record(ctx, words);
+    shift::typed_letter(ctx);
+}
+
+/// Take back the last accepted suggestion, if a backspace now may (see
+/// [`Completion::take_undo`]): the suggestion's text is replaced by the word
+/// as it was typed, the caret after it. Returns whether it did.
+fn undo_suggestion(ctx: &mut Context<'_, Keyboard>) -> bool {
+    let Some(undo) = ({
+        let (mut completion, typing) = ctx.fetch::<(ResMut<Completion>, Res<TypingContext>)>();
+        completion.take_undo(typing, std::time::Instant::now())
+    }) else {
+        return false;
+    };
+    let sent = {
+        let (st, mut wl) = ctx.fetch::<(Res<InputMethodState>, ResMut<Wayland>)>();
+        input_method::apply_edit(st, &mut wl, &undo.edit())
+    };
+    if !sent {
+        return false;
+    }
+    tracing::info!(word = %undo.original, "undid suggestion");
+    ctx.resource_mut::<TypingContext>()
+        .replaced_word(&undo.original);
+    true
+}
+
 /// Finish the word being typed, handing it to the recorder.
 pub(crate) fn end_word(ctx: &mut Context<'_, Keyboard>) {
     let word = ctx.resource_mut::<TypingContext>().end_word();
@@ -262,25 +327,27 @@ fn note_text(ctx: &mut Context<'_, Keyboard>, text: &str) {
 
 /// A non-printable keysym was sent (tapped, or the start of a hold): BackSpace
 /// deletes one character, Return and Tab finish the word, anything else (an
-/// arrow, Delete, Home, ...) moves the cursor somewhere unknown, so the word
-/// is dropped.
+/// arrow, Delete, Home, ...) may move the cursor (see
+/// [`TypingContext::caret_key`]).
 fn note_control(ctx: &mut Context<'_, Keyboard>, ks: Keysym) {
     match ks {
         Keysym::BackSpace => ctx.resource_mut::<TypingContext>().backspace(),
         Keysym::Return | Keysym::Tab => end_word(ctx),
-        _ => ctx.resource_mut::<TypingContext>().clear(),
+        _ => ctx.resource_mut::<TypingContext>().caret_key(),
     }
 }
 
-/// Hand finished words to the recorder, if the focused field's profile allows.
+/// Hand finished words to the recorder and the completion source, if the
+/// focused field's profile allows.
 fn record(ctx: &mut Context<'_, Keyboard>, words: impl IntoIterator<Item = String>) {
     let field = Field::current(ctx);
-    let mut prediction = ctx.resource_mut::<Prediction>();
+    let (mut prediction, mut completion) = ctx.fetch::<(ResMut<Prediction>, ResMut<Completion>)>();
     if !prediction.active(field).0.may_record {
         return;
     }
     for word in words {
         prediction.recorder.record(&word);
+        completion.learn(&word);
     }
 }
 
