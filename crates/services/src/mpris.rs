@@ -1,6 +1,8 @@
 mod backend;
 mod bus;
+mod convert;
 mod interface;
+mod media_signal;
 mod types;
 
 #[cfg(test)]
@@ -9,6 +11,7 @@ mod tests;
 use backend::{on_reply, on_signal};
 use bus::{MprisBus, MprisDiscovery};
 use mecha_wayland::prelude::*;
+pub use media_signal::MediaSignals;
 pub use types::{MediaPlayer, MprisPlayers, PlayerId};
 
 pub struct MprisModule;
