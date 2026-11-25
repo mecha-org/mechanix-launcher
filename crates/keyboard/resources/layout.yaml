@@ -70,7 +70,7 @@ views:
         more_keys: letters
         rows:
             - "q w e r t y u i o p"
-            - "a s d f pointing_stick g h j k l"
+            - "a s d f g pointing_stick h j k l"
             - "shift z x c v b n m BackSpace"
             - "to_symbols comma emoji space period Return"
     symbols:
