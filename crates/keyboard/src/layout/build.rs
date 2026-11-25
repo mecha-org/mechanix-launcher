@@ -212,6 +212,15 @@ impl Keymap {
             keyboard,
             prediction,
             choices_look: KeyLook::for_button(&styles, "", None, false),
+            pointing_stick_look: KeyLook::for_button(
+                &styles,
+                "pointing_stick",
+                layout
+                    .buttons
+                    .get("pointing_stick")
+                    .and_then(|b| b.key_style.as_deref()),
+                false,
+            ),
         }
     }
 }

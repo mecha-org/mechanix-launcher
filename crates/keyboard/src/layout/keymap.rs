@@ -14,6 +14,9 @@ pub struct Keymap {
     /// The long-press choices row's look: the `normal` style for its cells
     /// and the `latched` style for the highlighted one.
     pub choices_look: KeyLook,
+    /// The look of the `pointing_stick` key, which its direction pad's cells
+    /// share.
+    pub pointing_stick_look: KeyLook,
 }
 
 /// One selectable arrangement of keys (e.g. `base`, `symbols`).

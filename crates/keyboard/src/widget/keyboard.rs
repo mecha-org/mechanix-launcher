@@ -329,7 +329,7 @@ impl Widget for Keyboard {
             me,
             PointingStickOverlayBuilder {
                 radius: style.radius,
-                look: b.keymap.choices_look,
+                look: b.keymap.pointing_stick_look,
             },
         );
 
