@@ -82,7 +82,7 @@ jobs:
             clang cmake pkgconf-pkg-config gcc gcc-c++ \
             wayland-devel libxkbcommon-devel mesa-libEGL-devel mesa-libGLES-devel \
             dbus-devel mesa-libgbm-devel libdrm-devel pulseaudio-libs-devel systemd-devel \
-            clang-devel hunspell-devel
+            clang-devel hunspell-devel pam-devel
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -198,7 +198,7 @@ jobs:
             libwayland-dev libwayland-cursor0 libwayland-egl1 \
             libwayland-egl-backend-dev libegl1-mesa-dev libgles2-mesa-dev libxkbcommon-dev \
             libdbus-1-dev libgbm-dev libdrm-dev libpulse-dev libudev-dev libsystemd-dev \
-            libclang-dev libhunspell-dev build-essential jq python3-venv
+            libclang-dev libhunspell-dev libpam0g-dev build-essential jq python3-venv
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
