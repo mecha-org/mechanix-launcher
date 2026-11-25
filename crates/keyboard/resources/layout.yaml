@@ -30,6 +30,8 @@ key_styles:
     strip:    { background: surface-container-highest, foreground: on-surface,           font: geist-mono, font-size: 13 }
     bottom:   { background: surface-container-high,    foreground: on-surface,           font-size: 16 }
     done:     { background: on-secondary-container,    foreground: on-primary-container, font-size: 18 }
+    # The long-press more-keys popup's cells (`latched` is the highlighted one).
+    more_keys: { background: surface-container-highest, foreground: on-surface }
     latched:  { background: primary,                   foreground: on-primary }
     emoji:    { background: surface-container-highest, foreground: primary }
     emoji_tab: { background: surface-container-highest, foreground: on-surface }

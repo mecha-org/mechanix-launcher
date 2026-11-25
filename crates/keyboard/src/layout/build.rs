@@ -211,7 +211,7 @@ impl Keymap {
             views,
             keyboard,
             prediction,
-            choices_look: KeyLook::for_button(&styles, "", None, false),
+            choices_look: KeyLook::for_button(&styles, "", Some(style::MORE_KEYS), false),
             pointing_stick_look: KeyLook::for_button(
                 &styles,
                 "pointing_stick",

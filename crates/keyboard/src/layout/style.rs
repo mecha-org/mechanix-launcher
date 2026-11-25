@@ -13,6 +13,7 @@ use tracing::warn;
 pub const NORMAL: &str = "normal";
 pub const NUMBER: &str = "number";
 pub const LATCHED: &str = "latched";
+pub const MORE_KEYS: &str = "more_keys";
 /// A key that switches to the view it's on (the shown tab).
 pub const CURRENT: &str = "current";
 
