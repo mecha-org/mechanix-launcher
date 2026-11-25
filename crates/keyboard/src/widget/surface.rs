@@ -16,7 +16,7 @@ use crate::scale::KeyboardGeometry;
 use crate::view::BASE_VIEW;
 use crate::visibility::{ApplyKeyboardVisibility, KeyboardVisibilityExt};
 use crate::widget::key::Key;
-use crate::widget::keyboard::{Keyboard, KeyboardBuilder};
+use crate::widget::keyboard::{Keyboard, KeyboardBuilder, cell_padding};
 use crate::widget::more_keys::MoreKeys;
 use crate::widget::pointing_stick::PointingStickOverlay;
 #[cfg(test)]
@@ -374,7 +374,7 @@ pub(crate) fn relayout(app: &mut App) {
         let views: Vec<_> = me
             .views
             .iter()
-            .map(|v| (v.node.id(), v.height, v.rows.clone()))
+            .map(|v| (v.node.id(), v.height, v.cells.clone()))
             .collect();
         (
             views,
@@ -392,7 +392,7 @@ pub(crate) fn relayout(app: &mut App) {
             me.bar,
             me.bar_height,
             me.bar_shown,
-            me.padding(style.padding),
+            me.padding(&style),
         )
     };
     restyle(app, kb, |s| s.gap(px(style.row_gap)).padding(padding));
@@ -401,13 +401,13 @@ pub(crate) fn relayout(app: &mut App) {
     if let Some(b) = app.widget_mut::<SuggestionBar>(bar) {
         b.padding = style.padding * 2.0;
     }
-    for (node, height, rows) in &views {
+    for (node, height, cells) in &views {
         restyle(app, *node, |s| {
             s.height(px(height - 2.0 * style.padding))
                 .gap(px(style.row_gap))
         });
-        for row in rows {
-            restyle(app, *row, |s| s.gap(px(style.gap)));
+        for cell in cells {
+            restyle(app, *cell, |s| s.padding(cell_padding(style.gap)));
         }
     }
 

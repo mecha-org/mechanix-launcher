@@ -937,21 +937,29 @@ mod tests {
             "terminal_symbols",
             "terminal_more_symbols",
         ] {
-            for (i, row) in km.view(name).unwrap().rows.iter().enumerate() {
-                let sum: f32 = row
-                    .cells
-                    .iter()
-                    .map(|c| match c {
-                        Cell::Key(k) => k.width,
-                        Cell::Spacer(w) => *w,
-                    })
-                    .sum();
-                // A home row with the stick sums to 96.5 on purpose (see `outlines:`
-                // in layout.yaml): its spacers add gaps, so fewer weight units
-                // keep its letters as wide as the top row's.
-                let has_stick = row.keys().any(|k| k.token == "pointing_stick");
-                let want = if has_stick { 96.5 } else { 100.0 };
-                assert!((sum - want).abs() < 0.01, "{name} row {i} sums to {sum}");
+            // Widths are percentages of the row: the widest row spans it,
+            // and a shorter one (the home row, with the narrow pointing
+            // stick) is centred.
+            let rows = &km.view(name).unwrap().rows;
+            for (i, row) in rows.iter().enumerate() {
+                let sum: f32 = row.cells.iter().map(Cell::width).sum();
+                assert!(sum <= 100.01, "{name} row {i} sums to {sum}");
+            }
+            let widest = rows
+                .iter()
+                .map(|r| r.cells.iter().map(Cell::width).sum::<f32>())
+                .fold(0.0, f32::max);
+            assert!((widest - 100.0).abs() < 0.01, "{name} is {widest} wide");
+        }
+    }
+
+    /// No view has a row wider than 100, which would shrink every key in it.
+    #[test]
+    fn no_row_is_wider_than_the_keyboard() {
+        for view in &bundled().views {
+            for (i, row) in view.rows.iter().enumerate() {
+                let sum: f32 = row.cells.iter().map(Cell::width).sum();
+                assert!(sum <= 100.01, "{} row {i} sums to {sum}", view.name);
             }
         }
     }

@@ -100,6 +100,16 @@ pub enum Cell {
     Spacer(f32),
 }
 
+impl Cell {
+    /// The cell's width, in outline units.
+    pub fn width(&self) -> f32 {
+        match self {
+            Cell::Key(k) => k.width,
+            Cell::Spacer(w) => *w,
+        }
+    }
+}
+
 /// What a key draws in its cell: a text label, a symbolic icon or a colour
 /// emoji, only one. The icon is its name (an SVG's file stem under
 /// `resources/icons`); the `Key` widget looks up the rasterized sprite in the

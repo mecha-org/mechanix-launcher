@@ -14,6 +14,7 @@ use crate::layout::{
 };
 use crate::predict::{DictionaryPredictor, Predictor};
 use crate::protocol::virtual_keyboard::keysym_text;
+use crate::widget::keyboard::{row_span, view_span};
 use crate::widget::surface::{row_weight, view_height};
 
 /// Tap noise as a fraction of the median letter key width.
@@ -25,46 +26,39 @@ fn base_geometry(keymap: &Keymap) -> Vec<KeyGeom> {
     view_geometry(&keymap.keyboard, keymap.view("base").expect("base view"))
 }
 
-/// Approximate flex layout of a view: rows share the height by weight, cells
-/// (keys and spacers) share the width by width, minus gaps. Only keys get a
-/// rectangle; spacers take width and are never hit.
+/// Approximate flex layout of a view: rows share the height by weight; each
+/// cell (key or spacer) takes its width's share of the view's span of the
+/// row, its key inset half a gap at each side; a row narrower than the span
+/// is centred. Only keys get a rectangle; spacers take width and are never hit.
 fn view_geometry(kb: &KeyboardStyle, view: &View) -> Vec<KeyGeom> {
     let weights: Vec<f32> = view.rows.iter().map(|r| row_weight(r.height)).collect();
     let rows = weights.len() as f32;
     let avail_h = view_height(kb, view) - 2.0 * kb.padding - (rows - 1.0) * kb.row_gap;
-    let row_w = kb.width.unwrap_or(540.0) - 2.0 * kb.padding;
+    let side = (kb.padding - kb.gap / 2.0).max(0.0);
+    let row_w = kb.width.unwrap_or(540.0) - 2.0 * side;
+    let span = view_span(view);
     let mut out = Vec::new();
     let mut y = kb.padding;
     for (row, weight) in view.rows.iter().zip(&weights) {
         let row_h = avail_h * weight / weights.iter().sum::<f32>();
-        let n = row.cells.len() as f32;
-        let total: f32 = row.cells.iter().map(cell_width).sum();
-        let avail = row_w - (n - 1.0) * kb.gap;
-        let mut x = kb.padding;
+        let mut x = side + (span - row_span(row)) / span * row_w / 2.0;
         for cell in &row.cells {
-            let w = cell_width(cell) / total * avail;
+            let w = cell.width() / span * row_w;
             if let Cell::Key(key) = cell {
                 let letter = match &key.action {
                     KeyAction::EmitKeysym(ks) => letter_of(*ks),
                     _ => None,
                 };
                 out.push(KeyGeom {
-                    rect: Rect::new(x, y, w, row_h),
+                    rect: Rect::new(x + kb.gap / 2.0, y, w - kb.gap, row_h),
                     letter,
                 });
             }
-            x += w + kb.gap;
+            x += w;
         }
         y += row_h + kb.row_gap;
     }
     out
-}
-
-fn cell_width(cell: &Cell) -> f32 {
-    match cell {
-        Cell::Key(k) => k.width,
-        Cell::Spacer(w) => *w,
-    }
 }
 
 fn letter_of(ks: Keysym) -> Option<char> {

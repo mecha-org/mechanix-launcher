@@ -8,7 +8,7 @@ use mecha_wayland::prelude::*;
 use crate::complete::{self, CARET_SETTLE, CaretMoved, Completion, SuggestionsChanged};
 use crate::layout::style::KeyState;
 use crate::layout::tokens::{Font, Fonts};
-use crate::layout::{Cell, Family, KeyAction, Keymap, Modifier, Page};
+use crate::layout::{Cell, Family, KeyAction, KeyboardStyle, Keymap, Modifier, Page, Row, View};
 use crate::modifiers::pointing_stick;
 use crate::modifiers::shift::{self, HOLD_LOCK, Shift};
 use crate::predict::TypingContext;
@@ -36,8 +36,9 @@ pub(crate) struct ViewNode {
     pub(crate) height: f32,
     /// Each row's height weight, for re-laying the view out.
     pub(crate) weights: Vec<f32>,
-    /// Each row's node, whose gap follows the output scale.
-    pub(crate) rows: Vec<Handle<Div>>,
+    /// Every cell (key or spacer) node, whose half-gap inset follows the
+    /// output scale.
+    pub(crate) cells: Vec<Handle<Div>>,
 }
 
 /// The on-screen keyboard: every view, the index of the one currently shown,
@@ -105,16 +106,61 @@ impl Keyboard {
         self.views[self.current_view].height + bar
     }
 
-    /// The container's padding: the style's all round, with the bar's
-    /// height added on top while it shows.
-    pub(crate) fn padding(&self, padding: f32) -> Insets<Val> {
-        let top = if self.bar_shown {
-            padding + self.bar_height
-        } else {
-            padding
-        };
-        Insets::new(px(top), px(padding), px(padding), px(padding))
+    /// The container's padding: [`container_padding`], with the bar's height
+    /// added on top while it shows.
+    pub(crate) fn padding(&self, style: &KeyboardStyle) -> Insets<Val> {
+        let bar = if self.bar_shown { self.bar_height } else { 0.0 };
+        container_padding(style, bar)
     }
+}
+
+/// The keyboard container's padding, `extra_top` added on top. Each cell
+/// insets its key by half a gap, so the sides take half a gap less: the
+/// outermost keys then sit `padding` from the edges, as the top and bottom
+/// rows do.
+pub(crate) fn container_padding(style: &KeyboardStyle, extra_top: f32) -> Insets<Val> {
+    let side = (style.padding - style.gap / 2.0).max(0.0);
+    Insets::new(
+        px(style.padding + extra_top),
+        px(side),
+        px(style.padding),
+        px(side),
+    )
+}
+
+/// A row of cells, centred: a row adding up to less than its view's widest
+/// leaves the same room at both ends.
+pub(crate) fn row_style() -> LayoutStyle {
+    LayoutStyle::default().row().justify(Justify::Center)
+}
+
+/// What a view's rows are measured against: 100, or its widest row if that
+/// is wider or every row is narrower (a 40-wide pad fills the keyboard).
+pub(crate) fn view_span(view: &View) -> f32 {
+    let widest = view.rows.iter().map(row_span).fold(0.0, f32::max);
+    if widest > 0.0 { widest } else { 100.0 }
+}
+
+/// What a row's cells add up to.
+pub(crate) fn row_span(row: &Row) -> f32 {
+    row.cells.iter().map(Cell::width).sum()
+}
+
+/// A cell (key or spacer) `width` of `span` of the row, its key inset by half
+/// a `gap` on each side. The gap is inside the cell, so a cell's share of the
+/// row never depends on how many others the row has: equal widths are equal
+/// sizes in every row.
+pub(crate) fn cell_style(width: f32, span: f32, gap: f32) -> LayoutStyle {
+    LayoutStyle::default()
+        .row()
+        .width(percent(width / span * 100.0))
+        .shrink(0.0)
+        .padding(cell_padding(gap))
+}
+
+/// A cell's inset: half a gap at each side.
+pub(crate) fn cell_padding(gap: f32) -> Insets<Val> {
+    Insets::new(px(0.0), px(gap / 2.0), px(0.0), px(gap / 2.0))
 }
 
 pub(crate) struct KeyboardBuilder {
@@ -143,7 +189,7 @@ impl Widget for Keyboard {
             .width(percent(100.0))
             .shrink(0.0)
             .gap(px(style.row_gap))
-            .padding_all(px(style.padding));
+            .padding(container_padding(&style, 0.0));
         let bg_role = b.keymap.keyboard.background_color;
         *s.component_mut::<Paint>(me).unwrap() = Paint::Quad(Quad::new(s.color(bg_role)));
 
@@ -198,8 +244,9 @@ impl Widget for Keyboard {
                 node: view_div,
                 height,
                 weights: weights.clone(),
-                rows: Vec::with_capacity(view.rows.len()),
+                cells: Vec::new(),
             });
+            let span = view_span(view);
             let mut view_keys = Vec::new();
 
             for (row, &weight) in view.rows.iter().zip(&weights) {
@@ -207,33 +254,26 @@ impl Widget for Keyboard {
                 let row_div = s.spawn(
                     view_div,
                     div().style(
-                        LayoutStyle::default()
-                            .row()
+                        row_style()
                             .width(percent(100.0))
                             .flex_basis(px(0.0))
-                            .grow(weight)
-                            .gap(px(style.gap)),
+                            .grow(weight),
                     ),
                 );
-                views.last_mut().unwrap().rows.push(row_div);
 
                 for cell in &row.cells {
-                    // A spacer is blank width; it spawns no key, so it is
+                    let cell_div = s.spawn(
+                        row_div,
+                        div().style(cell_style(cell.width(), span, style.gap)),
+                    );
+                    views.last_mut().unwrap().cells.push(cell_div);
+                    // A spacer is a blank cell; it spawns no key, so it is
                     // never in `view_keys` and never hit.
-                    let key = match cell {
-                        Cell::Spacer(w) => {
-                            s.spawn(
-                                row_div,
-                                div().style(LayoutStyle::default().grow(*w).flex_basis(px(0.0))),
-                            );
-                            continue;
-                        }
-                        Cell::Key(key) => key,
-                    };
+                    let Cell::Key(key) = cell else { continue };
                     // The label keeps its normal font while latched.
                     let label_style = key.look.style(KeyState::Normal);
                     let key_handle = s.spawn(
-                        row_div,
+                        cell_div,
                         KeyBuilder {
                             font: b.fonts.id(label_style.font.unwrap_or(style.font)),
                             font_size: label_style.font_size.unwrap_or(style.font_size),
@@ -401,8 +441,8 @@ fn set_bar_shown(ctx: &mut Context<'_, Keyboard>, shown: bool) {
     } else {
         Display::Hidden
     });
-    let padding = ctx.resource::<KeyboardGeometry>().style().padding;
-    let insets = ctx.me().padding(padding);
+    let style = ctx.resource::<KeyboardGeometry>().style();
+    let insets = ctx.me().padding(&style);
     if let Some(style) = ctx.component::<LayoutStyle>().cloned() {
         ctx.set_style(style.padding(insets));
     }
