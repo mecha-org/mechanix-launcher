@@ -70,7 +70,8 @@ impl Module for VolumeControlModule {
             .system(on_tick)
             .system(on_set_muted)
             .system(on_set_volume)
-            .system(on_volume_state_changed);
+            .system(on_volume_state_changed)
+            .pending_check(|app| !app.resource::<VolumeBackend>().updates.borrow().is_empty());
         // The service owns the typed queue; PulseAudio retains a generic
         // reference until its context has disconnected all callbacks.
         let updates = Rc::clone(&app.resource::<VolumeBackend>().updates);
