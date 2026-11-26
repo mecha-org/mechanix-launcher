@@ -23,6 +23,17 @@ pub(crate) struct Layout {
     /// Long-press keyboard switching on the view-switching keys.
     #[serde(default)]
     pub(crate) switcher: SwitcherSpec,
+    /// Corner mark on keys whose hold opens a longer list.
+    #[serde(default, rename = "more-hint")]
+    pub(crate) more_hint: MoreHintSpec,
+}
+
+/// The `more-hint:` block; absent fields keep their defaults.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct MoreHintSpec {
+    pub(crate) label: Option<String>,
+    #[serde(rename = "min-choices")]
+    pub(crate) min_choices: Option<usize>,
 }
 
 /// The `switcher:` block: holding one of `keys` offers every target but the

@@ -170,6 +170,7 @@ impl View {
             }
         }
         attach_switcher(layout, &mut view);
+        attach_more_hint(layout, &mut view);
         view
     }
 }
@@ -229,6 +230,43 @@ fn attach_switcher(layout: &Layout, view: &mut View) {
             (key.choices, key.choice_actions) = targets.iter().cloned().unzip();
         }
     }
+}
+
+/// The default `more-hint` mark and the fewest choices that earn it.
+const MORE_HINT: &str = "…";
+const MORE_HINT_MIN_CHOICES: usize = 4;
+
+/// Mark keys whose hold opens a longer list with the `more-hint` label in
+/// the hint corner: every key whose choices switch keyboards, and every
+/// other key with at least `min-choices` choices. Letter keys (their
+/// accents are expected) and keys already showing a hint are left alone.
+fn attach_more_hint(layout: &Layout, view: &mut View) {
+    let spec = &layout.more_hint;
+    let label = spec.label.as_deref().unwrap_or(MORE_HINT);
+    if label.is_empty() {
+        return;
+    }
+    let min = spec.min_choices.unwrap_or(MORE_HINT_MIN_CHOICES);
+    for key in view.rows.iter_mut().flat_map(Row::keys_mut) {
+        let marked = !key.choice_actions.is_empty()
+            || (min > 0 && key.choices.len() >= min && !types_letter(&key.action));
+        if marked && key.hint.is_none() && matches!(key.face, KeyFace::Text(_)) {
+            key.hint = Some(label.to_string());
+        }
+    }
+}
+
+/// Whether `action` types a single letter (one that has a case).
+fn types_letter(action: &KeyAction) -> bool {
+    let c = match action {
+        KeyAction::EmitKeysym(ks) => char::from_u32(xkb::keysym_to_utf32(*ks)),
+        KeyAction::EmitText(text) => {
+            let mut chars = text.chars();
+            chars.next().filter(|_| chars.next().is_none())
+        }
+        _ => None,
+    };
+    c.is_some_and(char::is_alphabetic)
 }
 
 impl Keymap {
@@ -1102,6 +1140,42 @@ mod tests {
             .find(|k| k.token == "period")
             .unwrap();
         assert!(period.choice_actions.is_empty() && period.choices.len() == 16);
+    }
+
+    /// Page keys and keys with a long hold list show `…` in the corner;
+    /// letters (accents) and keys with a hint of their own do not.
+    #[test]
+    fn long_lists_are_marked_with_an_ellipsis() {
+        let km = bundled();
+        let hint = |view: &str, token: &str| {
+            km.view(view)
+                .unwrap()
+                .keys()
+                .find(|k| k.token == token)
+                .unwrap_or_else(|| panic!("{view} has no {token}"))
+                .hint
+                .clone()
+        };
+        let dots = Some("…".to_string());
+        for (view, token) in [
+            ("base", "to_symbols"),
+            ("base", "period"),
+            ("symbols", "to_letters"),
+            ("symbols", "to_more_symbols"),
+            ("symbols", "$"),
+            ("emoji", "to_letters"),
+            ("terminal", "to_symbols"),
+            ("number", "period_pad"),
+            ("phone", "to_phone_symbols"),
+            ("url", "dot_com"),
+        ] {
+            assert_eq!(hint(view, token), dots, "{view}/{token}");
+        }
+        assert_eq!(hint("base", "a"), None, "accents are not marked");
+        assert_eq!(hint("base", "e").as_deref(), Some("3"));
+        assert_eq!(hint("base", "comma"), None);
+        assert_eq!(hint("number", "minus"), None, "one choice is not a list");
+        assert_eq!(hint("terminal", "k").as_deref(), Some("("));
     }
 
     #[test]
