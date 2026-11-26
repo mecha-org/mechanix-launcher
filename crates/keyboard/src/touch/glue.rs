@@ -385,8 +385,13 @@ fn apply(ctx: &mut Context<'_, Keyboard>, view: usize, out: Vec<TouchOut>, time:
             TouchOut::CommitChoice { key, choice } => {
                 show_choices(ctx, ChoicesFeedback::Close);
                 let entry = ctx.me().keys[view].get(key);
+                // A choice with its own action (a keyboard switch) runs it;
+                // any other types its text.
+                let action = entry.and_then(|k| k.choice_actions.get(choice).cloned());
                 let picked = entry.and_then(|k| Some((k.choices.get(choice)?.clone(), k.letter)));
-                if let Some((text, letter)) = picked {
+                if let Some(action) = action {
+                    dispatch(ctx, &action, time);
+                } else if let Some((text, letter)) = picked {
                     dispatch_choice(ctx, &text, letter, time);
                 }
             }

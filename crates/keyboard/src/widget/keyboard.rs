@@ -290,11 +290,10 @@ impl Widget for Keyboard {
                         _ => {}
                     }
 
-                    view_keys.push(KeyEntry::new(
-                        key_handle,
-                        key.action.clone(),
-                        key.choices.clone(),
-                    ));
+                    view_keys.push(
+                        KeyEntry::new(key_handle, key.action.clone(), key.choices.clone())
+                            .with_choice_actions(key.choice_actions.clone()),
+                    );
                 }
             }
             keys.push(view_keys);

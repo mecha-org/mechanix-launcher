@@ -45,6 +45,9 @@ pub(crate) struct KeyEntry {
     pub letter: Option<char>,
     /// The key's long-press choices (lowercase), if any.
     pub choices: Vec<String>,
+    /// What each choice does, in step with `choices`; empty when the choices
+    /// type their own text.
+    pub choice_actions: Vec<KeyAction>,
 }
 
 impl KeyEntry {
@@ -56,7 +59,14 @@ impl KeyEntry {
             action,
             letter,
             choices,
+            choice_actions: Vec::new(),
         }
+    }
+
+    /// The same entry, its choices running `actions` instead of typing.
+    pub(crate) fn with_choice_actions(mut self, actions: Vec<KeyAction>) -> Self {
+        self.choice_actions = actions;
+        self
     }
 }
 

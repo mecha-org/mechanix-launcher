@@ -199,7 +199,7 @@ views:
             - "1 2 3 minus"
             - "4 5 6 comma"
             - "7 8 9 BackSpace_pad"
-            - "period 0 space_pad Return_pad"
+            - "period_pad 0 space_pad Return_pad"
     phone:
         family: phone
         more_keys: phone
@@ -241,6 +241,17 @@ views:
         replace: { comma: "/", ".": minus }
         rows:
             - { height: 0.75, keys: "Esc Tab Ctrl Alt ← ↓ ↑ →" }
+
+# Holding a key listed in `keys` offers the `targets` other than the shown
+# view's own family; sliding to one and releasing shows that keyboard's
+# letters page (until the next field is focused). A tap still does the key's
+# own action. A view with no page key gets its bottom-left key listed.
+switcher:
+    keys: [to_symbols, to_more_symbols, to_letters, to_phone_symbols, to_phone, period_pad]
+    targets:
+        - { label: Base, family: text }
+        - { label: Term., family: terminal }
+        - { label: Num., family: number }
 
 buttons:
     # Tap: toggle caret / select mode. Hold: a direction pad around the key;
@@ -361,6 +372,10 @@ buttons:
     comma:
         label: ","
     period:
+        label: "."
+    # The number pad's `.`: its own token so holding it switches keyboards
+    # (the pad has no page key) without touching the letters' `.` choices.
+    period_pad:
         label: "."
     at:
         label: "@"

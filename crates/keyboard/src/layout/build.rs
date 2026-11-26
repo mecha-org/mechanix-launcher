@@ -169,6 +169,7 @@ impl View {
                 None => warn!("view {name:?}: more_keys set {set_name:?} is not defined"),
             }
         }
+        attach_switcher(layout, &mut view);
         view
     }
 }
@@ -195,6 +196,38 @@ fn resolve_key(layout: &Layout, styles: &HashMap<String, KeyStyle>, token: &str)
         look,
         hint: None,
         choices: Vec::new(),
+        choice_actions: Vec::new(),
+    }
+}
+
+/// Give every switcher key of `view` the targets other than the view's own
+/// family as long-press choices that switch to them. Unknown families warn
+/// and are skipped.
+fn attach_switcher(layout: &Layout, view: &mut View) {
+    let sw = &layout.switcher;
+    let targets: Vec<(String, KeyAction)> = sw
+        .targets
+        .iter()
+        .filter_map(|t| match Family::from_name(&t.family) {
+            Some(f) => Some((t.label.clone(), KeyAction::Family(f))),
+            None => {
+                warn!(
+                    "switcher target {:?}: unknown family {:?}",
+                    t.label, t.family
+                );
+                None
+            }
+        })
+        .filter(|(_, a)| !matches!(a, KeyAction::Family(f) if *f == view.family))
+        .collect();
+    if targets.is_empty() {
+        return;
+    }
+    for key in view.rows.iter_mut().flat_map(Row::keys_mut) {
+        if sw.keys.contains(&key.token) {
+            key.hint = None;
+            (key.choices, key.choice_actions) = targets.iter().cloned().unzip();
+        }
     }
 }
 
@@ -263,6 +296,7 @@ fn types_digit(action: &KeyAction) -> bool {
         KeyAction::SetView(_)
         | KeyAction::LatchModifier(_)
         | KeyAction::Page(_)
+        | KeyAction::Family(_)
         | KeyAction::Shift
         | KeyAction::PointingStick
         | KeyAction::Unhandled(_) => None,
@@ -1005,6 +1039,69 @@ mod tests {
         assert_eq!(find("symbols", ".").choices, ["…"]);
         assert_eq!(find("number", "minus").choices, ["+"]);
         assert!(find("phone", "2").choices.is_empty());
+    }
+
+    /// Holding a page key (or the number pad's `.`) offers the other
+    /// keyboards, each choice switching to its family.
+    #[test]
+    fn page_keys_offer_the_other_keyboards() {
+        let km = bundled();
+        let offers = |view: &str, token: &str| {
+            let key = km
+                .view(view)
+                .unwrap()
+                .keys()
+                .find(|k| k.token == token)
+                .unwrap_or_else(|| panic!("{view} has no {token}"));
+            let families: Vec<Family> = key
+                .choice_actions
+                .iter()
+                .map(|a| match a {
+                    KeyAction::Family(f) => *f,
+                    other => panic!("{view}/{token}: choice runs {other:?}"),
+                })
+                .collect();
+            assert_eq!(key.choices.len(), families.len());
+            (key.choices.clone(), families)
+        };
+        use Family::{Number, Terminal, Text};
+        assert_eq!(
+            offers("base", "to_symbols"),
+            (vec!["Term.".into(), "Num.".into()], vec![Terminal, Number])
+        );
+        assert_eq!(offers("symbols", "to_letters").1, [Terminal, Number]);
+        assert_eq!(offers("more_symbols", "to_symbols").1, [Terminal, Number]);
+        assert_eq!(offers("terminal", "to_symbols").1, [Text, Number]);
+        assert_eq!(
+            offers("terminal_symbols", "to_more_symbols").1,
+            [Text, Number]
+        );
+        assert_eq!(offers("email", "to_symbols").1, [Text, Terminal, Number]);
+        assert_eq!(offers("emoji", "to_letters").1, [Terminal, Number]);
+        assert_eq!(
+            offers("phone", "to_phone_symbols").1,
+            [Text, Terminal, Number]
+        );
+        assert_eq!(
+            offers("number", "period_pad"),
+            (vec!["Base".into(), "Term.".into()], vec![Text, Terminal])
+        );
+        // The number pad's `.` still types a period; the letters' `.` keeps
+        // its punctuation choices.
+        let pad = km
+            .view("number")
+            .unwrap()
+            .keys()
+            .find(|k| k.token == "period_pad")
+            .unwrap();
+        assert!(is_keysym(&pad.action, "period"));
+        let period = km
+            .view("base")
+            .unwrap()
+            .keys()
+            .find(|k| k.token == "period")
+            .unwrap();
+        assert!(period.choice_actions.is_empty() && period.choices.len() == 16);
     }
 
     #[test]

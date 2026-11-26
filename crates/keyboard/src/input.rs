@@ -14,7 +14,7 @@ use xkbcommon::xkb::Keysym;
 
 use crate::complete::Completion;
 use crate::field::Field;
-use crate::layout::{KeyAction, Modifier};
+use crate::layout::{KeyAction, Modifier, Page};
 use crate::modifiers::latch::{LatchedState, consume_latch, toggle_latch};
 use crate::modifiers::pointing_stick::{self, PointingStickMode};
 use crate::modifiers::shift::{self, Shift, ShiftState};
@@ -96,6 +96,17 @@ pub(crate) fn dispatch(ctx: &mut Context<'_, Keyboard>, action: &KeyAction, time
                     switch_view(ctx, &name);
                 }
                 None => tracing::warn!(?page, "no view for page; ignored"),
+            }
+        }
+        KeyAction::Family(family) => {
+            let me = ctx.me();
+            match view_for(&me.views, *family, Page::Letters) {
+                Some(idx) => {
+                    me.family = *family;
+                    let name = me.views[idx].name.clone();
+                    switch_view(ctx, &name);
+                }
+                None => tracing::warn!(?family, "no view for family; ignored"),
             }
         }
         KeyAction::Shift => shift::released(ctx, time),

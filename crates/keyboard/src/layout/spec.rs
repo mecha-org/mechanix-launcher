@@ -20,6 +20,26 @@ pub(crate) struct Layout {
     pub(crate) views: HashMap<String, ViewSpec>,
     #[serde(default)]
     pub(crate) buttons: HashMap<String, Button>,
+    /// Long-press keyboard switching on the view-switching keys.
+    #[serde(default)]
+    pub(crate) switcher: SwitcherSpec,
+}
+
+/// The `switcher:` block: holding one of `keys` offers every target but the
+/// view's own family; sliding to one shows that family's letters page.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct SwitcherSpec {
+    #[serde(default)]
+    pub(crate) keys: Vec<String>,
+    #[serde(default)]
+    pub(crate) targets: Vec<SwitchTargetSpec>,
+}
+
+/// One keyboard the switcher offers: its cell label and its family.
+#[derive(Debug, Deserialize)]
+pub(crate) struct SwitchTargetSpec {
+    pub(crate) label: String,
+    pub(crate) family: String,
 }
 
 /// A view: a plain list of rows, or a map with family/page/extends metadata.

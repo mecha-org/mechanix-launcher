@@ -32,6 +32,7 @@ fn kind_of(action: &KeyAction) -> KeyKind {
         KeyAction::LatchModifier(_)
         | KeyAction::SetView(_)
         | KeyAction::Page(_)
+        | KeyAction::Family(_)
         | KeyAction::Shift
         | KeyAction::PointingStick
         | KeyAction::Unhandled(_) => KeyKind::Function,

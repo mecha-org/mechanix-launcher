@@ -159,6 +159,9 @@ pub enum KeyAction {
     LatchModifier(Modifier),
     /// Show a page of the current family.
     Page(Page),
+    /// Make this the current family (until the next field focus) and show
+    /// its letters page.
+    Family(Family),
     /// Toggle shift (tap) / caps lock (double tap).
     Shift,
     /// The pointing stick: a tap toggles caret / select mode; a hold opens a
@@ -187,6 +190,9 @@ pub struct Key {
     pub hint: Option<String>,
     /// Long-press choices, first is the default highlight. Lowercase.
     pub choices: Vec<String>,
+    /// What each choice does, in step with `choices`; empty when the choices
+    /// type their own text.
+    pub choice_actions: Vec<KeyAction>,
 }
 
 impl Row {
@@ -211,6 +217,7 @@ impl Key {
             look: KeyLook::default(),
             hint: None,
             choices: Vec::new(),
+            choice_actions: Vec::new(),
         }
     }
 }
