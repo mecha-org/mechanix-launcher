@@ -42,6 +42,11 @@ pub mod color {
     pub const ACCEPT: ColorRole = ColorRole::Success;
     /// Empty-state bell. Figma white.
     pub const EMPTY_ICON: ColorRole = ColorRole::OnSurface;
+    /// Media play/pause circle. Figma surface-variant `#141415` (same as the card), outline
+    /// `#373739` border, on-surface `#F5F5F5` glyph.
+    pub const MEDIA_BUTTON: ColorRole = ColorRole::SurfaceContainerLow;
+    pub const MEDIA_BUTTON_BORDER: ColorRole = ColorRole::Outline;
+    pub const MEDIA_BUTTON_ICON: ColorRole = ColorRole::OnSurface;
     /// Card shadow. Figma `rgba(0,0,0,0.25)`, offset 2,0, blur 1.5.
     pub const SHADOW: ColorRole = ColorRole::Shadow;
 }
@@ -77,12 +82,12 @@ pub mod text {
     /// "Clear all" chip. Figma SemiBold 13, `#B0B0B0`.
     pub const CHIP: TextStyle =
         TextStyle::new(TextVariant::LabelMedium, ColorRole::OnSecondaryContainer);
-    /// Media card song title. Figma ~20, near white.
+    /// Media card song title. Figma Geist Regular 20/26, `#F5F5F5`.
     pub const MEDIA_TITLE: TextStyle =
         TextStyle::new(TextVariant::TitleLarge, ColorRole::OnSurface);
-    /// Media card artist. Figma ~16, grey.
+    /// Media card artist. Figma Geist Regular 16/22, `#A1A1A5`.
     pub const MEDIA_ARTIST: TextStyle =
-        TextStyle::new(TextVariant::BodyLarge, ColorRole::OnSurfaceVariant);
+        TextStyle::new(TextVariant::BodyLarge, ColorRole::OnSecondaryContainer);
     /// Badge digit. Figma SemiBold 14–16.
     pub const BADGE: TextStyle = TextStyle::new(TextVariant::LabelMedium, ColorRole::OnError);
     /// "No new notifications.". Figma same as the date header, 16/20 `#8D8D91`.
@@ -126,10 +131,13 @@ pub mod space {
     pub const MENU_ITEM_X: Spacing = Spacing::Space50;
     /// Padding inside a menu row. Figma 12.
     pub const MENU_ROW_PAD: Spacing = Spacing::Space150;
-    /// Media card padding. Figma ~20.
-    pub const MEDIA_PAD: Spacing = Spacing::Space250;
-    /// Between the media card's art, text and button. Figma ~16.
+    /// Media card padding. Figma 20 horizontal, 24 vertical.
+    pub const MEDIA_PAD_X: Spacing = Spacing::Space250;
+    pub const MEDIA_PAD_Y: Spacing = Spacing::Space300;
+    /// Between the media card's art, text and button. Figma 16.
     pub const MEDIA_GAP: Spacing = Spacing::Space200;
+    /// Between media cards. Figma: same as notification cards.
+    pub const MEDIA_LIST_GAP: Spacing = Spacing::Space150;
     /// Media title to artist. Figma ~4.
     pub const MEDIA_TITLE_TO_ARTIST: Spacing = Spacing::Space50;
 }
@@ -183,6 +191,11 @@ pub mod size {
     pub const ACTION_ICON: f32 = 48.0;
     /// Text action token height. Figma 36.
     pub const ACTION_CHIP_HEIGHT: f32 = 36.0;
+    /// Media play/pause circle. Figma 56.
+    pub const MEDIA_BUTTON: f32 = 56.0;
+    /// Album art square. Figma 72, radius 4.
+    pub const MEDIA_ART: f32 = 72.0;
+    pub const MEDIA_ART_RADIUS: f32 = 4.0;
     /// Visible cards before the list peeks. Figma "3 + 1 peeking".
     pub const VISIBLE_CARDS: usize = 3;
 }

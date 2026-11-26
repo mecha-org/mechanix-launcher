@@ -1,18 +1,22 @@
+mod album_art;
 mod media_card;
+mod media_list;
+mod play_button;
 mod track_info;
 
 use mecha_wayland::prelude::*;
 use services::mpris::MediaSignals;
 
-pub use media_card::{MediaCard, MediaCardBuilder, ShowPlayer};
+pub use media_card::PlayerUpdated;
+pub use media_list::{MediaList, MediaListBuilder, RemovePlayer, ShowPlayer};
 
 pub fn on_media_signal(app: &mut App, signal: &MediaSignals) {
+    let Some((list, _)) = app.widgets::<MediaList>().next() else {
+        return;
+    };
     match signal {
-        MediaSignals::NotifyPlayerArrival(id) => {
-            let Some((card, _)) = app.widgets::<MediaCard>().next() else {
-                return;
-            };
-            app.emit(ShowPlayer(id.clone()), card);
-        }
+        MediaSignals::NotifyPlayerArrival(id) => app.emit(ShowPlayer(id.clone()), list),
+        MediaSignals::PlayerChanged(id) => app.emit(PlayerUpdated(id.clone()), list),
+        MediaSignals::PlayerRemoved(id) => app.emit(RemovePlayer(id.clone()), list),
     }
 }

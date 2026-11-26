@@ -1,6 +1,6 @@
 use crate::card_list::CardListBuilder;
 use crate::empty_notifications_screen::EmptyNotificationsScreenBuilder;
-use crate::media::MediaCardBuilder;
+use crate::media::MediaListBuilder;
 use crate::notification_store::NotificationStore;
 use crate::notify_signal::NotificationSignal;
 use crate::ongoing::OngoingListBuilder;
@@ -65,7 +65,7 @@ impl Widget for NotificationsCenter {
             ))
             .gap(px(space::HEADER_TO_LIST.dp()));
 
-        s.spawn(me, MediaCardBuilder);
+        s.spawn(me, MediaListBuilder);
         s.spawn(me, OngoingListBuilder);
         let header = s.spawn(
             me,

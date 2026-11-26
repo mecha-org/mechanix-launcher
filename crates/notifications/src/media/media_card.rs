@@ -1,15 +1,36 @@
 use mecha_wayland::prelude::*;
-use services::mpris::{MprisPlayers, PlayerId};
+use services::mpris::{MediaPlayer, MprisPlayers, PlaybackStatus, PlayerId, Track};
 
+use super::album_art::{AlbumArtBuilder, AlbumArtExt};
+use super::play_button::{PlayButtonBuilder, PlayButtonExt};
 use super::track_info::{TrackInfoBuilder, TrackInfoExt};
 use crate::style::space;
 
-pub struct ShowPlayer(pub PlayerId);
-impl Event for ShowPlayer {}
+pub struct PlayerUpdated(pub PlayerId);
+impl Event for PlayerUpdated {}
 
 pub struct MediaCard;
 
-pub struct MediaCardBuilder;
+pub struct MediaCardBuilder {
+    pub id: PlayerId,
+    pub title: String,
+    pub artist: String,
+    pub art_url: Option<String>,
+    pub status: PlaybackStatus,
+}
+
+impl From<&MediaPlayer> for MediaCardBuilder {
+    fn from(player: &MediaPlayer) -> Self {
+        let (title, artist) = track_text(&player.track);
+        Self {
+            id: player.id.clone(),
+            title,
+            artist,
+            art_url: player.track.art_url.clone(),
+            status: player.status,
+        }
+    }
+}
 
 impl Build for MediaCardBuilder {
     type Widget = MediaCard;
@@ -18,17 +39,19 @@ impl Build for MediaCardBuilder {
 impl Widget for MediaCard {
     type Builder = MediaCardBuilder;
 
-    fn build(_: MediaCardBuilder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
-        let pad = px(space::MEDIA_PAD.dp());
+    fn build(b: MediaCardBuilder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
+        let (x, y) = (px(space::MEDIA_PAD_X.dp()), px(space::MEDIA_PAD_Y.dp()));
         *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
             .row()
             .align_items(Align::Center)
             .width(percent(100.0))
             .shrink(0.0)
-            .padding(Insets::new(pad, pad, pad, pad))
+            .padding(Insets::new(y, x, y, x))
             .gap(px(space::MEDIA_GAP.dp()));
         *s.component_mut::<Paint>(me).unwrap() =
             Paint::Quad(Quad::new(s.color(ColorRole::SurfaceContainerLow)));
+
+        let art = s.spawn(me, AlbumArtBuilder { url: b.art_url });
 
         let middle = s.spawn(
             me,
@@ -44,17 +67,35 @@ impl Widget for MediaCard {
         let info = s.spawn(
             middle,
             TrackInfoBuilder {
-                title: "Faisal (envelopes mix)".into(),
-                artist: "Fred again..".into(),
+                title: b.title,
+                artist: b.artist,
             },
         );
 
-        s.on::<ShowPlayer>(me, move |ctx, e| {
-            let Some((title, artist)) = track_text(ctx.resource(), &e.0) else {
+        let play = s.spawn(
+            me,
+            PlayButtonBuilder {
+                id: b.id,
+                status: b.status,
+            },
+        );
+
+        s.on::<PlayerUpdated>(me, move |ctx, e| {
+            let Some(player) = ctx.resource::<MprisPlayers>().get(&e.0) else {
                 return;
             };
+            let (title, artist) = track_text(&player.track);
+            let art_url = player.track.art_url.clone();
+            let status = player.status;
+
+            if let Some(mut n) = ctx.at(art) {
+                n.set_art(art_url);
+            }
             if let Some(mut n) = ctx.at(info) {
                 n.set_track(title, artist);
+            }
+            if let Some(mut n) = ctx.at(play) {
+                n.set_status(status);
             }
         });
 
@@ -62,9 +103,8 @@ impl Widget for MediaCard {
     }
 }
 
-fn track_text(players: &MprisPlayers, id: &PlayerId) -> Option<(String, String)> {
-    let track = &players.get(id)?.track;
+fn track_text(track: &Track) -> (String, String) {
     let title = track.title.clone().unwrap_or_default();
     let artist = track.artists.join(", ");
-    Some((title, artist))
+    (title, artist)
 }
