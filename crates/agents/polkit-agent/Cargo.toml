@@ -1,0 +1,14 @@
+[package]
+name = "polkit-agent"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+assets.workspace = true
+mecha-wayland.workspace = true
+nix = { version = "0.32", default-features = false, features = ["user"] }
+tracing = "0.1"
+zeroize = "1.8"
+
+[dev-dependencies]
+dbus = { git = "https://github.com/mecha-org/mecha-wayland", branch = "dev", features = ["fake"] }

@@ -1,0 +1,643 @@
+//! The dialog's widget: the sheet, its header, the user and the field,
+//! drawn from the [`Dialog`]'s state.
+
+use mecha_wayland::mechanix_widgets::prelude::{
+    BottomSheet, BottomSheetContextExt, FontContextExt, FontWeight, SheetClosed, Text,
+    TextContextExt, TextOverflow, TextVariant, VerticalTrim, bottom_sheet, text,
+};
+use mecha_wayland::prelude::*;
+use std::time::{Duration, Instant};
+
+use super::{Clear, Countdown, Dialog, HEADER_ICON, Icons, Note, Refresh};
+use crate::helper::protocol::{UNSENDABLE, sendable};
+use crate::signals::{AuthAnswer, AuthCancel};
+
+const TAP: f32 = 48.0;
+const FIELD_HEIGHT: f32 = 40.0;
+const OK_CIRCLE: f32 = 32.0;
+/// The header's side padding: ✕ (48), the title, ✓ (48), no gaps.
+const HEADER_SIDE: f32 = 8.0;
+const DISABLED_OPACITY: f32 = 0.10;
+const AVATAR: f32 = 40.0;
+
+pub(super) const DEFAULT_PROMPT: &str = "Password";
+
+pub(super) const CHECKING: &str = "Authenticating…";
+
+const STROKE: f32 = 1.0;
+
+pub(super) struct PolkitDialog {
+    pub(super) parts: Parts,
+    pub(super) empty: bool,
+    pub(super) revealed: bool,
+    pub(super) focused: bool,
+    /// Something was typed for this request: ✓ shows from then on.
+    pub(super) started: bool,
+    /// The field's length, to tell an edit from a focus change.
+    pub(super) len: usize,
+    /// Refreshes the lockout's countdown every second.
+    pub(super) tick: TimerId,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct Parts {
+    pub(super) sheet: Handle<BottomSheet>,
+    pub(super) ok: Handle<Div>,
+    pub(super) ok_icon: Handle<Icon>,
+    pub(super) initial: Handle<Text>,
+    pub(super) user: Handle<Text>,
+    pub(super) message: Handle<Text>,
+    pub(super) input: Handle<Input>,
+    pub(super) placeholder: Handle<Text>,
+    pub(super) reveal: Handle<Div>,
+    pub(super) eye: Handle<Icon>,
+    pub(super) alert: Handle<Div>,
+    pub(super) line: Handle<Div>,
+    pub(super) note: Handle<Text>,
+}
+
+pub(super) struct PolkitDialogBuilder;
+
+impl Build for PolkitDialogBuilder {
+    type Widget = PolkitDialog;
+}
+
+type Spawn<'a, 'b> = &'a mut Spawner<'b, PolkitDialog>;
+
+fn tap_area() -> LayoutStyle {
+    LayoutStyle::default()
+        .size(px(TAP), px(TAP))
+        .shrink(0.0)
+        .center()
+}
+
+/// Replace `node`'s layout with `change` of it.
+fn restyle(s: Spawn, node: impl Into<NodeId>, change: impl FnOnce(LayoutStyle) -> LayoutStyle) {
+    let mut style = s.component_mut::<LayoutStyle>(node).unwrap();
+    let changed = change(style.clone());
+    *style = changed;
+}
+
+/// The header's buttons: ✕, and ✓ with its icon.
+struct HeaderParts {
+    cancel: Handle<Div>,
+    ok: Handle<Div>,
+    ok_icon: Handle<Icon>,
+}
+
+/// The user's avatar, name, and the request's message.
+struct IdentityParts {
+    initial: Handle<Text>,
+    user: Handle<Text>,
+    message: Handle<Text>,
+}
+
+/// The answer field, its buttons, underline and note.
+struct FieldParts {
+    input: Handle<Input>,
+    placeholder: Handle<Text>,
+    reveal: Handle<Div>,
+    eye: Handle<Icon>,
+    alert: Handle<Div>,
+    line: Handle<Div>,
+    note: Handle<Text>,
+}
+
+impl Widget for PolkitDialog {
+    type Builder = PolkitDialogBuilder;
+
+    fn build(_: Self::Builder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
+        *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
+            .absolute()
+            .inset(Insets::all(px(0.0)))
+            .size(percent(100.0), percent(100.0));
+        let icons = *s.resource::<Icons>();
+
+        let sheet = s.spawn(me, bottom_sheet().height(percent(100.0)));
+        let (header, body) = style_sheet(s, sheet);
+        let head = build_header(s, header, icons);
+        let who = build_identity(s, body);
+        let field = build_field(s, body, icons);
+        let parts = Parts {
+            sheet,
+            ok: head.ok,
+            ok_icon: head.ok_icon,
+            initial: who.initial,
+            user: who.user,
+            message: who.message,
+            input: field.input,
+            placeholder: field.placeholder,
+            reveal: field.reveal,
+            eye: field.eye,
+            alert: field.alert,
+            line: field.line,
+            note: field.note,
+        };
+        let tick = handle_events(s, me, &parts, head.cancel);
+
+        PolkitDialog {
+            parts,
+            empty: true,
+            revealed: false,
+            focused: false,
+            started: false,
+            len: 0,
+            tick,
+        }
+    }
+}
+
+/// Fit the sheet's header and body to the dialog; returns them.
+fn style_sheet(s: Spawn, sheet: Handle<BottomSheet>) -> (NodeId, NodeId) {
+    let (header, body, title) = {
+        let w = s.widget::<BottomSheet>(sheet).expect("the sheet is built");
+        (w.header(), w.body(), w.title())
+    };
+    // Our title replaces the sheet's, which would sit before the ✕.
+    restyle(s, title, LayoutStyle::hidden);
+    restyle(s, header, |style| {
+        style
+            .justify(Justify::Start)
+            .column_gap(px(0.0))
+            .padding(Insets::new(
+                px(Spacing::Space100.dp()),
+                px(HEADER_SIDE),
+                px(Spacing::Space100.dp()),
+                px(HEADER_SIDE),
+            ))
+    });
+    // Tighter above and below the user, so the field clears the keys.
+    restyle(s, body, |style| {
+        style
+            .row_gap(px(Spacing::Space100.dp()))
+            .padding(Insets::new(
+                px(0.0),
+                px(Spacing::Space300.dp()),
+                px(Spacing::Space300.dp()),
+                px(Spacing::Space300.dp()),
+            ))
+    });
+    (header.into(), body.into())
+}
+
+/// ✕, the title, and ✓ (hidden until something is typed).
+fn build_header(s: Spawn, header: NodeId, icons: Icons) -> HeaderParts {
+    let header_icon = Size::new(HEADER_ICON, HEADER_ICON);
+    let cancel = s.spawn(header, div().style(tap_area()));
+    s.spawn(
+        cancel,
+        icon(icons.close)
+            .size(header_icon)
+            .color(s.color(ColorRole::OnSurface)),
+    );
+    let title_large = s.typography(TextVariant::TitleLarge);
+    s.spawn(
+        header,
+        text("Authentication required")
+            .variant(TextVariant::TitleLarge)
+            .weight(FontWeight::Regular)
+            .line_height(title_large.line_height)
+            .letter_spacing(title_large.letter_spacing)
+            .vertical_trim(VerticalTrim::CapHeight)
+            .color(ColorRole::OnSurface)
+            .max_lines(1)
+            .overflow(TextOverflow::Ellipsis)
+            // At the start, after ✕: the auto margin pushes ✓ to the end.
+            .style(LayoutStyle::default().margin(Insets::new(px(0.0), auto(), px(0.0), px(0.0)))),
+    );
+    let ok = s.spawn(header, div().style(tap_area().hidden()));
+    let ok_circle = s.spawn(
+        ok,
+        div()
+            .style(
+                LayoutStyle::default()
+                    .size(px(OK_CIRCLE), px(OK_CIRCLE))
+                    .center(),
+            )
+            .background(s.color(ColorRole::SurfaceContainerHighest))
+            .radius(OK_CIRCLE / 2.0),
+    );
+    let ok_icon = s.spawn(
+        ok_circle,
+        icon(icons.confirm)
+            .size(header_icon)
+            .color(s.color(ColorRole::OnSurface).with_alpha(DISABLED_OPACITY)),
+    );
+    HeaderParts {
+        cancel,
+        ok,
+        ok_icon,
+    }
+}
+
+/// The avatar beside the user's name and the request's message.
+fn build_identity(s: Spawn, body: NodeId) -> IdentityParts {
+    // The avatar stays beside the name however long the message is.
+    let row = s.spawn(
+        body,
+        div().style(
+            LayoutStyle::default()
+                .row()
+                .align_items(Align::Start)
+                .gap(px(Spacing::Space200.dp())),
+        ),
+    );
+    let avatar = s.spawn(
+        row,
+        div()
+            .style(
+                LayoutStyle::default()
+                    .size(px(AVATAR), px(AVATAR))
+                    .shrink(0.0)
+                    .center(),
+            )
+            .background(s.color(ColorRole::SecondaryFixedDim))
+            .radius(AVATAR / 2.0),
+    );
+    let initial = s.spawn(
+        avatar,
+        text("")
+            .variant(TextVariant::TitleLarge)
+            .color(ColorRole::Primary),
+    );
+    let words = s.spawn(
+        row,
+        div().style(
+            LayoutStyle::default()
+                .column()
+                .grow(1.0)
+                .shrink(1.0)
+                .min_width(px(0.0)),
+        ),
+    );
+    let user = s.spawn(
+        words,
+        text("")
+            .variant(TextVariant::TitleMedium)
+            .color(ColorRole::OnSurface)
+            .max_lines(1)
+            .overflow(TextOverflow::Ellipsis),
+    );
+    let message = s.spawn(
+        words,
+        text("")
+            .wrap(TextWrap::Word)
+            .variant(TextVariant::BodyMedium)
+            .color(ColorRole::OnSurfaceVariant),
+    );
+    IdentityParts {
+        initial,
+        user,
+        message,
+    }
+}
+
+/// The input with its placeholder, the reveal (eye) and alert icons at
+/// its end, the underline, and the note below.
+fn build_field(s: Spawn, body: NodeId, icons: Icons) -> FieldParts {
+    let answer = s.spawn(
+        body,
+        div().style(LayoutStyle::default().column().width(percent(100.0))),
+    );
+    let field = s.spawn(
+        answer,
+        div().style(LayoutStyle::default().relative().width(percent(100.0))),
+    );
+    let inset = px(Spacing::Space200.dp());
+    let eye_room = px(TAP);
+    let font = s.font(FontWeight::Regular);
+    // As the placeholder over it.
+    let text_size = s.typography(TextVariant::BodyLarge).font_size.round() as u16;
+    let input = s.spawn(
+        field,
+        input(font)
+            .size(text_size)
+            .color(s.color(ColorRole::OnSurface))
+            .caret(s.color(ColorRole::Primary))
+            .background(Color::TRANSPARENT)
+            .border(0.0, Color::TRANSPARENT)
+            .content_hint(ContentHint::HIDDENTEXT | ContentHint::SENSITIVEDATA)
+            .content_purpose(ContentPurpose::Password)
+            .style(
+                LayoutStyle::default()
+                    .row()
+                    .align_items(Align::Center)
+                    .width(percent(100.0))
+                    .min_height(px(FIELD_HEIGHT))
+                    .padding(Insets::new(px(0.0), eye_room, px(0.0), inset)),
+            ),
+    );
+    *s.component_mut::<LayoutStyle>(input).unwrap() =
+        LayoutStyle::default().relative().width(percent(100.0));
+    // Inside the input, so a press on it focuses the field.
+    let hint_box = s.spawn(
+        input,
+        div().style(
+            LayoutStyle::default()
+                .absolute()
+                .inset(Insets::new(px(0.0), eye_room, px(0.0), inset))
+                .row()
+                .align_items(Align::Center),
+        ),
+    );
+    let placeholder = s.spawn(
+        hint_box,
+        text(DEFAULT_PROMPT)
+            .variant(TextVariant::BodyLarge)
+            .color(ColorRole::OnSurfaceVariant)
+            .max_lines(1)
+            .overflow(TextOverflow::Ellipsis),
+    );
+    // At the field's end, beside the input, so a press on it keeps the
+    // field's focus. The eye and the alert share the spot.
+    let end_slot = || {
+        div().style(
+            LayoutStyle::default()
+                .absolute()
+                .inset(Insets::new(px(0.0), px(0.0), px(0.0), auto()))
+                .width(eye_room)
+                .center()
+                .hidden(),
+        )
+    };
+    let reveal = s.spawn(field, end_slot());
+    let eye = s.spawn(
+        reveal,
+        icon(icons.show).color(s.color(ColorRole::OnSurface)),
+    );
+    let alert = s.spawn(field, end_slot());
+    s.spawn(alert, icon(icons.warning).color(s.color(ColorRole::Error)));
+    let line = s.spawn(
+        answer,
+        div()
+            .style(LayoutStyle::default().size(percent(100.0), px(STROKE)))
+            .background(s.color(ColorRole::Primary)),
+    );
+    let note = s.spawn(
+        answer,
+        text("")
+            .variant(TextVariant::BodySmall)
+            .color(ColorRole::OnSurfaceVariant)
+            .style(LayoutStyle::default().padding(Insets::new(
+                px(Spacing::Space100.dp()),
+                inset,
+                px(0.0),
+                inset,
+            ))),
+    );
+    FieldParts {
+        input,
+        placeholder,
+        reveal,
+        eye,
+        alert,
+        line,
+        note,
+    }
+}
+
+/// Wire up the parts' events; returns the lockout countdown's timer.
+fn handle_events(s: Spawn, me: Handle<PolkitDialog>, p: &Parts, cancel: Handle<Div>) -> TimerId {
+    s.on::<InputSubmit>(p.input, |ctx, _| submit(ctx));
+    // After the input's own handlers: what it holds now.
+    s.on::<InputFocus>(p.input, |ctx, e| {
+        let changed = ctx.me().focused != e.focused;
+        ctx.me().focused = e.focused;
+        if !typed(ctx) && changed {
+            sync_field(ctx);
+        }
+    });
+    s.on::<InputEdit>(p.input, |ctx, _| {
+        typed(ctx);
+    });
+    s.on::<Clicked>(p.ok, |ctx, _| submit(ctx));
+    s.on::<Clicked>(p.reveal, |ctx, _| {
+        ctx.me().revealed ^= true;
+        sync_field(ctx);
+    });
+    s.on::<Clicked>(cancel, |ctx, _| cancel_shown(ctx));
+    s.on::<SheetClosed>(p.sheet, |ctx, _| cancel_shown(ctx));
+    s.on::<Refresh>(me, show);
+    let tick = s.add_interval(Duration::from_secs(1), |ctx, e| {
+        let locked = ctx
+            .resource::<Dialog>()
+            .shown
+            .as_ref()
+            .and_then(|s| s.locked)
+            .is_some_and(|until| until > Instant::now());
+        if !locked {
+            ctx.cancel_timer(e.id);
+        }
+        sync_field(ctx);
+    });
+    s.on::<Countdown>(me, |ctx, _| {
+        let tick = ctx.me().tick;
+        ctx.start_timer(tick);
+    });
+    tick
+}
+
+fn cancel_shown(ctx: &mut Context<'_, PolkitDialog>) {
+    if let Some(cookie) = ctx.resource::<Dialog>().cookie() {
+        ctx.signal(AuthCancel { cookie });
+    }
+}
+
+/// Send the typed answer; it stays in the field, masked, while checked.
+fn submit(ctx: &mut Context<'_, PolkitDialog>) {
+    let cookie = ctx
+        .resource::<Dialog>()
+        .shown
+        .as_ref()
+        .filter(|s| s.prompt.is_some())
+        .map(|s| s.cookie.clone());
+    let Some(cookie) = cookie.filter(|_| !ctx.me().empty) else {
+        return;
+    };
+    let input = ctx.me().parts.input;
+    let Some(answer) = ctx.widget::<Input>(input.id()).map(|i| i.secret()) else {
+        return;
+    };
+    // The helper would refuse it: say why, and leave it to edit.
+    if !sendable(answer.as_bytes()) {
+        if let Some(s) = ctx.resource_mut::<Dialog>().shown.as_mut() {
+            s.note = Some(Note {
+                text: UNSENDABLE.into(),
+                error: true,
+            });
+        }
+        sync_field(ctx);
+        return;
+    }
+    ctx.me().revealed = false;
+    ctx.signal(AuthAnswer { cookie, answer });
+}
+
+/// Follow whether the field is empty; typing after an error clears it.
+fn typed(ctx: &mut Context<'_, PolkitDialog>) -> bool {
+    let input = ctx.me().parts.input;
+    let len = ctx
+        .widget::<Input>(input.id())
+        .map_or(0, |i| i.text().len());
+    let empty = len == 0;
+    let edited = len != std::mem::replace(&mut ctx.me().len, len);
+    let cleared = edited
+        && !empty
+        && ctx
+            .resource_mut::<Dialog>()
+            .shown
+            .as_mut()
+            .is_some_and(|s| s.note.take_if(|n| n.error).is_some());
+    if ctx.me().empty == empty && !cleared {
+        return false;
+    }
+    ctx.me().empty = empty;
+    ctx.me().started |= !empty;
+    sync_field(ctx);
+    true
+}
+
+/// The lockout's message, `left` to go, in whole seconds rounded up.
+pub(super) fn locked_text(left: Duration) -> String {
+    let secs = left.as_secs() + u64::from(left.subsec_nanos() > 0);
+    let unit = if secs == 1 { "second" } else { "seconds" };
+    format!("Too many attempts. Try again in {secs} {unit}")
+}
+
+/// The prompt as a placeholder: `Password: ` reads `Password`.
+pub(super) fn placeholder(prompt: &str) -> &str {
+    let p = prompt.trim().trim_end_matches(':').trim_end();
+    if p.is_empty() { DEFAULT_PROMPT } else { p }
+}
+
+fn display(shown: bool) -> Display {
+    if shown {
+        Display::Flex
+    } else {
+        Display::Hidden
+    }
+}
+
+fn sync_field(ctx: &mut Context<'_, PolkitDialog>) {
+    let (open, secret, note, hint, checking) = {
+        let shown = ctx.resource::<Dialog>().shown.as_ref();
+        let prompt = shown.and_then(|s| s.prompt.as_ref());
+        let locked = shown
+            .and_then(|s| s.locked)
+            .map(|until| until.saturating_duration_since(Instant::now()))
+            .filter(|left| !left.is_zero());
+        let note = match locked {
+            Some(left) => Some(Note {
+                text: locked_text(left),
+                error: true,
+            }),
+            None => shown.and_then(|s| s.note.clone()),
+        };
+        let last_prompt = shown.and_then(|s| s.last_prompt.as_deref());
+        (
+            prompt.is_some(),
+            !prompt.is_some_and(|q| q.echo),
+            note,
+            placeholder(last_prompt.unwrap_or(DEFAULT_PROMPT)).to_owned(),
+            shown.is_some_and(|s| s.checking),
+        )
+    };
+    let (p, empty, revealed, focused, started) = {
+        let me = ctx.me();
+        (me.parts, me.empty, me.revealed, me.focused, me.started)
+    };
+    let icons = *ctx.resource::<Icons>();
+    let error = note.as_ref().is_some_and(|n| n.error);
+    let accent = ctx.color(if error {
+        ColorRole::Error
+    } else {
+        ColorRole::Primary
+    });
+
+    if let Some(mut i) = ctx.at(p.input) {
+        i.set_hidden(secret && !revealed);
+        i.set_disabled(!open);
+        i.set_caret_color(accent);
+    }
+    if let Some(mut l) = ctx.at(p.line) {
+        l.set_background(accent);
+    }
+    if let Some(mut t) = ctx.at(p.placeholder) {
+        t.set_text(hint);
+        t.set_display(display(empty));
+    }
+    if let Some(mut r) = ctx.at(p.reveal) {
+        r.set_display(display(secret && !empty && focused && !error));
+    }
+    if let Some(mut e) = ctx.at(p.eye) {
+        e.set_sprite(if revealed { icons.hide } else { icons.show });
+    }
+    if let Some(mut a) = ctx.at(p.alert) {
+        a.set_display(display(error));
+    }
+    if let Some(mut b) = ctx.at(p.ok) {
+        b.set_display(display(started));
+    }
+    let on_surface = ctx.color(ColorRole::OnSurface);
+    if let Some(mut i) = ctx.at(p.ok_icon) {
+        i.set_color(if open && !empty {
+            on_surface
+        } else {
+            on_surface.with_alpha(DISABLED_OPACITY)
+        });
+    }
+
+    let (line, error) = match note {
+        Some(n) => (n.text, n.error),
+        None if checking => (CHECKING.into(), false),
+        None => Default::default(),
+    };
+    if let Some(mut t) = ctx.at(p.note) {
+        t.set_display(display(!line.is_empty()));
+        t.set_text(line);
+        t.set_color(if error {
+            ColorRole::Error
+        } else {
+            ColorRole::OnSurfaceVariant
+        });
+    }
+}
+
+pub(super) fn show(ctx: &mut Context<'_, PolkitDialog>, e: &Refresh) {
+    let (shown, user, message) = match &ctx.resource::<Dialog>().shown {
+        Some(s) => (true, s.user.clone().unwrap_or_default(), s.message.clone()),
+        None => (false, String::new(), String::new()),
+    };
+    let p = ctx.me().parts;
+    if e.clear != Clear::Nothing {
+        if let Some(mut i) = ctx.at(p.input) {
+            // Dropped: the text is wiped.
+            drop(i.take_text());
+        }
+        ctx.me().empty = true;
+        ctx.me().len = 0;
+        ctx.me().revealed = false;
+    }
+    if e.clear == Clear::All {
+        ctx.me().started = false;
+    }
+    // Back up, if the user dragged it away last time.
+    if shown && let Some(mut sheet) = ctx.at(p.sheet) {
+        sheet.open();
+    }
+    let initial = user
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().collect::<String>())
+        .unwrap_or_default();
+    if let Some(mut t) = ctx.at(p.initial) {
+        t.set_text(initial);
+    }
+    if let Some(mut t) = ctx.at(p.user) {
+        t.set_text(user);
+    }
+    if let Some(mut t) = ctx.at(p.message) {
+        t.set_text(message);
+    }
+    sync_field(ctx);
+}

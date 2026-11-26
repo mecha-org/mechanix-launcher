@@ -14,6 +14,7 @@ use nav::core::{
 };
 use nav::shell::{ContainerShown, NavModule, nav_window};
 use notifications::NotificationsModule;
+use polkit_agent::PolkitAgentModule;
 use power_menu::PowerMenuModule;
 use quick_settings::QuickSettingsModule;
 use running_apps::{RunningApps, RunningAppsModule};
@@ -316,6 +317,8 @@ fn main() {
     app.add_module(navigation(cfg, AppDrawer::new()))
         .add_module(StatusBarModule)
         .add_module(NotificationsModule)
+        // Before the keyboard, so its keys show over the dialog.
+        .add_module(PolkitAgentModule)
         .add_module(KeyboardModule { bottom_gap })
         .add_module(QuickSettingsModule)
         .add_module(PowerMenuModule)

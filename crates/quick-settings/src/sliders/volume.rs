@@ -3,7 +3,6 @@ use mecha_wayland::mechanix_widgets::prelude::{
     SliderChange, SliderContextExt, SliderSize, slider,
 };
 use mecha_wayland::prelude::*;
-use std::time::Duration;
 
 use super::control_style;
 use crate::util::load_icon;
@@ -19,16 +18,12 @@ const LEVEL_PERCENT: f32 = 70.0; // initial value
 const ICON_SIZE: f32 = 24.0;
 const SLIDER_LENGTH_PERCENT: f32 = 80.0;
 const ICON_GAP_PERCENT: f32 = 5.0; // space between the icon and the slider, of the row width
-const THROTTLE: Duration = Duration::from_millis(50);
 
 const HIGH_LEVEL: u32 = 65; // after what value we use the high icon
 const MUTED_ACTIVE_TICK_COLOR: ColorRole = ColorRole::SecondaryFixedDim;
 const MUTED_INACTIVE_TICK_COLOR: ColorRole = ColorRole::SecondaryFixed;
 
-pub struct VolumeSlider {
-    throttle: TimerId,
-    pending: Option<u32>,
-}
+pub struct VolumeSlider;
 
 pub struct VolumeSliderBuilder;
 
@@ -85,23 +80,8 @@ impl Widget for VolumeSlider {
             }
         });
 
-        let throttle = s.add_timeout(THROTTLE, |ctx, event| {
-            if let Some(volume) = ctx.me().pending.take() {
-                ctx.signal(SetVolume(volume));
-                ctx.start_timer(event.id);
-            }
-        });
         s.on::<SliderChange>(slider_handle, |ctx, e| {
-            println!("[volume] slider changed: value = {:.2}", e.value);
-
-            let volume = e.value.clamp(0.0, 100.0) as u32;
-            let throttle = ctx.me().throttle;
-            if ctx.timer_running(throttle) {
-                ctx.me().pending = Some(volume);
-            } else {
-                ctx.signal(SetVolume(volume));
-                ctx.start_timer(throttle);
-            }
+            ctx.signal(SetVolume(e.value.clamp(0.0, 100.0) as u32));
         });
 
         s.on::<VolumeStateEvent>(slider_handle, move |ctx, e| {
@@ -110,11 +90,6 @@ impl Widget for VolumeSlider {
                 muted,
             } = e.0
             {
-                println!(
-                    "[volume] state changed to: {} muted: {}",
-                    volume_percent, muted
-                );
-
                 if let Some(mut slider) = ctx.at(slider_handle) {
                     slider.set_active_color(muted.then_some(MUTED_ACTIVE_TICK_COLOR.into()));
                     slider.set_inactive_color(muted.then_some(MUTED_INACTIVE_TICK_COLOR.into()));
@@ -138,9 +113,6 @@ impl Widget for VolumeSlider {
             }
         });
 
-        VolumeSlider {
-            throttle,
-            pending: None,
-        }
+        VolumeSlider
     }
 }
