@@ -1,7 +1,7 @@
 //! Several sources as one: e.g. word-list completions with hunspell's
 //! corrections.
 
-use crate::complete::{Candidate, Completer, Query};
+use crate::complete::{Candidate, Completer, WordQuery};
 
 /// Interleaves its sources' candidates (each source's best, in source
 /// order, then each one's second, ...), skipping repeats. Every source
@@ -15,7 +15,7 @@ impl Merge {
 }
 
 impl Completer for Merge {
-    fn suggest(&mut self, q: &Query) -> Vec<Candidate> {
+    fn suggest(&mut self, q: &WordQuery) -> Vec<Candidate> {
         let lists: Vec<Vec<Candidate>> = self.0.iter_mut().map(|s| s.suggest(q)).collect();
         let mut iters: Vec<_> = lists.into_iter().map(Vec::into_iter).collect();
         let mut out: Vec<Candidate> = Vec::new();
@@ -49,7 +49,7 @@ mod tests {
 
     struct Fixed(Vec<&'static str>);
     impl Completer for Fixed {
-        fn suggest(&mut self, _q: &Query) -> Vec<Candidate> {
+        fn suggest(&mut self, _q: &WordQuery) -> Vec<Candidate> {
             self.0
                 .iter()
                 .map(|t| Candidate {
@@ -70,7 +70,7 @@ mod tests {
             Box::new(Fixed(vec!["a", "b", "c"])),
             Box::new(Fixed(vec!["B", "x"])),
         ]);
-        let q = Query {
+        let q = WordQuery {
             word: "",
             word_after: "",
             max: 3,
@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn empty_merge_suggests_nothing() {
-        let q = Query {
+        let q = WordQuery {
             word: "x",
             word_after: "",
             max: 3,

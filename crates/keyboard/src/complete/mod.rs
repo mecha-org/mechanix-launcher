@@ -36,7 +36,7 @@ pub(crate) const CARET_SETTLE: Duration = Duration::from_millis(150);
 
 /// What a source is asked about: the word around the cursor.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Query<'a> {
+pub(crate) struct WordQuery<'a> {
     /// The part of the word before the cursor, as typed.
     pub(crate) word: &'a str,
     /// The part of the word after the cursor (a caret moved into a word).
@@ -65,7 +65,7 @@ pub(crate) struct Candidate {
 pub(crate) trait Completer {
     /// Candidates for the word in `q`, best first. May return more than
     /// `q.max`, and words equal to the typed one; the caller drops those.
-    fn suggest(&mut self, q: &Query) -> Vec<Candidate>;
+    fn suggest(&mut self, q: &WordQuery) -> Vec<Candidate>;
 
     /// The user finished typing `word` (or accepted it): learn from it.
     /// Only called in fields that allow learning.
@@ -199,7 +199,7 @@ impl Completion {
         if word.is_empty() {
             return Vec::new();
         }
-        let q = Query {
+        let q = WordQuery {
             word: &word,
             word_after: ctx.word_after(),
             max: self.cfg.max,

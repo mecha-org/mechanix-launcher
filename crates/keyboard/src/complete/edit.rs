@@ -2,7 +2,7 @@
 //! shows and the exact edit a tap on it makes. Every source shares this, so
 //! the byte arithmetic and casing live in one place.
 
-use super::{Candidate, Kind, Query};
+use super::{Candidate, Kind, WordQuery};
 
 /// What accepting a suggestion does to the field, sent as one input-method
 /// commit: delete `delete_before` bytes before the cursor and
@@ -31,7 +31,7 @@ pub(crate) struct Suggestion {
 /// space after it if `append_space`), at most `q.max` of them. Candidates
 /// that would leave the word as typed, and repeats, are dropped.
 pub(crate) fn suggestions(
-    q: &Query,
+    q: &WordQuery,
     candidates: Vec<Candidate>,
     append_space: bool,
 ) -> Vec<Suggestion> {
@@ -144,8 +144,8 @@ fn recase(typed: &str, candidate: &str) -> String {
 mod tests {
     use super::*;
 
-    fn q<'a>(word: &'a str, word_after: &'a str) -> Query<'a> {
-        Query {
+    fn q<'a>(word: &'a str, word_after: &'a str) -> WordQuery<'a> {
+        WordQuery {
             word,
             word_after,
             max: 3,

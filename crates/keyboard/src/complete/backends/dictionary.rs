@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use crate::complete::{Candidate, Completer, Kind, Query};
+use crate::complete::{Candidate, Completer, Kind, WordQuery};
 use crate::dictionaries::{Dictionary, is_normalised};
 
 /// A correction is offered next to completions only when it is this many
@@ -88,7 +88,7 @@ fn edits1(word: &str) -> Vec<String> {
 }
 
 impl Completer for DictionaryCompleter {
-    fn suggest(&mut self, q: &Query) -> Vec<Candidate> {
+    fn suggest(&mut self, q: &WordQuery) -> Vec<Candidate> {
         // The list is lowercase ASCII; whole-word matching needs both halves.
         let word = format!("{}{}", q.word, q.word_after).to_lowercase();
         if word.is_empty() || !is_normalised(&word) {
@@ -131,7 +131,7 @@ mod tests {
     }
 
     fn suggest(word: &str, after: &str) -> Vec<(String, Kind)> {
-        let q = Query {
+        let q = WordQuery {
             word,
             word_after: after,
             max: 3,
@@ -199,7 +199,7 @@ mod tests {
         let mut c = DictionaryCompleter::new(Arc::new(Dictionary::bundled("en").unwrap()));
         let start = std::time::Instant::now();
         for w in ["a", "t", "th", "documen", "teh", "recieve", "xqzv"] {
-            let q = Query {
+            let q = WordQuery {
                 word: w,
                 word_after: "",
                 max: 3,
@@ -211,7 +211,7 @@ mod tests {
             "{:?}",
             start.elapsed()
         );
-        let q = Query {
+        let q = WordQuery {
             word: "recieve",
             word_after: "",
             max: 3,
