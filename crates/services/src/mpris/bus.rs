@@ -32,6 +32,9 @@ impl MprisDiscovery {
     }
 
     pub(super) fn subscribe_player(app: &mut App, name: BusName) {
+        if app.resource::<MprisDiscovery>().is_subscribed(&name) {
+            return;
+        }
         let (subscription, call) = subscribe_on_bus(app.resource_mut::<DBus>().session(), &name);
         app.resource_mut::<MprisDiscovery>()
             .add_subscription(&name, subscription, call);

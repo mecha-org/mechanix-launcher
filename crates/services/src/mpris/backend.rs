@@ -44,12 +44,7 @@ fn handle(app: &mut App, event: MprisEvent) {
             app.resource_mut::<MprisPlayers>().add_player(player);
             app.signal(MediaSignals::NotifyPlayerArrival(id));
         }
-        MprisEvent::PlayerAppeared(name) => {
-            if app.resource::<MprisDiscovery>().is_subscribed(&name) {
-                return;
-            }
-            MprisDiscovery::subscribe_player(app, name);
-        }
+        MprisEvent::PlayerAppeared(name) => MprisDiscovery::subscribe_player(app, name),
         MprisEvent::PlayerLeft(name) => {
             MprisDiscovery::unsubscribe_player(app, &name);
             let id = PlayerId::from(name);
