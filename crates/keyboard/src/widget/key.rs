@@ -256,8 +256,8 @@ mod tests {
     use super::*;
     use crate::layout::tokens::{Font, Fonts};
     use crate::layout::{Cell, load_keymap};
-    use crate::widget::keyboard::{cell_style, row_style, view_span};
     use crate::modifiers::latch::LatchedState;
+    use crate::widget::keyboard::{cell_style, row_style, view_span};
 
     struct Leaf;
     impl Build for Leaf {

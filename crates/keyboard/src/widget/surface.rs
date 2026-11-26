@@ -388,12 +388,7 @@ pub(crate) fn relayout(app: &mut App) {
 
     let (bar, bar_h, bar_shown, padding) = {
         let me = app.widget::<Keyboard>(kb).unwrap();
-        (
-            me.bar,
-            me.bar_height,
-            me.bar_shown,
-            me.padding(&style),
-        )
+        (me.bar, me.bar_height, me.bar_shown, me.padding(&style))
     };
     restyle(app, kb, |s| s.gap(px(style.row_gap)).padding(padding));
     // The bar keeps whether it shows; only its size follows the scale.

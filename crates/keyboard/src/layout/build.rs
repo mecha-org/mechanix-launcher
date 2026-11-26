@@ -12,7 +12,10 @@ use super::{KeyboardStyle, Keymap, PredictionConfig};
 
 /// Size used when a button names an outline that isn't defined (and no
 /// `default` outline exists to fall back to). Keeps conversion total.
-const FALLBACK_OUTLINE: Outline = Outline { width: 50.0, height: None };
+const FALLBACK_OUTLINE: Outline = Outline {
+    width: 50.0,
+    height: None,
+};
 
 /// A row after `extends`/`replace` expansion: tokens still unresolved.
 struct RawRow {
