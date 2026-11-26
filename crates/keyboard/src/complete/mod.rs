@@ -77,8 +77,9 @@ pub(crate) struct Completion {
     cfg: CompletionConfig,
     /// `None` while completion is off.
     completer: Option<Box<dyn Completer>>,
-    /// What the bar shows now, in order.
-    pub(crate) current: Vec<Suggestion>,
+    /// What the bar shows now, one per slot left to right (`None` an empty
+    /// slot); empty while there are no suggestions.
+    pub(crate) current: Vec<Option<Suggestion>>,
     /// The inputs [`refresh`] last saw, to skip unchanged ticks.
     seen: Option<Inputs>,
     /// The caret moved since `current` was computed and has not yet rested:
@@ -166,7 +167,7 @@ impl Completion {
         if self.stale {
             return None;
         }
-        self.current.get(index)
+        self.current.get(index)?.as_ref()
     }
 
     /// Whether the keyboard has a suggestion bar at all.
@@ -213,8 +214,9 @@ impl Completion {
 pub(crate) struct SuggestionsChanged {
     /// Whether the bar takes space at all.
     pub(crate) shown: bool,
-    /// The suggestions' labels, in order; empty leaves the bar blank.
-    pub(crate) labels: Vec<String>,
+    /// Each slot's label, left to right (`None` an empty slot); empty
+    /// leaves the bar blank.
+    pub(crate) labels: Vec<Option<String>>,
 }
 impl Event for SuggestionsChanged {}
 
@@ -239,16 +241,20 @@ fn recompute(
 ) -> SuggestionsChanged {
     completion.stale = false;
     let policy = completion.policy(field, active);
-    // Words still suggested keep their slots, so the bar does not reshuffle
-    // under a finger about to tap.
+    // The best word goes in the middle, but words still suggested keep their
+    // slots, so the bar does not reshuffle under a finger about to tap.
     let next = match policy {
         Some(p) => completion.suggest(ctx, p),
         None => Vec::new(),
     };
-    completion.current = edit::stabilize(&completion.current, next);
+    completion.current = edit::stabilize(&completion.current, next, completion.cfg.max);
     SuggestionsChanged {
         shown: policy.is_some(),
-        labels: completion.current.iter().map(|s| s.label.clone()).collect(),
+        labels: completion
+            .current
+            .iter()
+            .map(|s| s.as_ref().map(|s| s.label.clone()))
+            .collect(),
     }
 }
 

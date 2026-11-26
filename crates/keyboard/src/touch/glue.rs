@@ -198,7 +198,10 @@ fn bar_hit(ctx: &mut Context<'_, Keyboard>, p: Point) -> Option<Option<usize>> {
     if !rect.contains(p) {
         return None;
     }
-    let cells = ctx.widget::<SuggestionBar>(bar)?.cells().to_vec();
+    let (cells, filled) = {
+        let w = ctx.widget::<SuggestionBar>(bar)?;
+        (w.cells().to_vec(), w.filled().to_vec())
+    };
     let rects: Vec<Rect> = cells
         .into_iter()
         .map(|c| {
@@ -207,7 +210,7 @@ fn bar_hit(ctx: &mut Context<'_, Keyboard>, p: Point) -> Option<Option<usize>> {
                 .unwrap_or_default()
         })
         .collect();
-    Some(SuggestionBar::cell_at(&rects, p))
+    Some(SuggestionBar::cell_at(&rects, &filled, p))
 }
 
 /// Whether `contact` went down on the suggestion bar.

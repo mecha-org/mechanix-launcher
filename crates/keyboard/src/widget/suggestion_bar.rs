@@ -1,5 +1,6 @@
-//! The suggestion bar across the top of the keys: suggestions left to
-//! right, a thin vertical line between them, and a thin line under the bar
+//! The suggestion bar across the top of the keys: equal slots left to
+//! right, the best suggestion in the middle one, each word centred in its
+//! slot, a thin vertical line between two shown words, and a thin line under the bar
 //! separating it from the keys. It is the keyboard container's first child,
 //! absolutely positioned over the container's top padding, draw-only: the
 //! input layer hit-tests it ([`SuggestionBar::cell_at`]) and drives it with
@@ -25,8 +26,9 @@ const PRESSED_ROLE: ColorRole = ColorRole::SurfaceContainerHigh;
 /// The input layer's (and the keyboard's) word to the bar.
 #[derive(Clone, Debug)]
 pub(crate) enum BarFeedback {
-    /// Show these labels, in order, none pressed.
-    Show(Vec<String>),
+    /// Show these slots, left to right (`None` an empty slot), none
+    /// pressed.
+    Show(Vec<Option<String>>),
     /// Light cell `i` as pressed, or none.
     Press(Option<usize>),
 }
@@ -45,19 +47,21 @@ impl Build for SuggestionBarBuilder {
     type Widget = SuggestionBar;
 }
 
-/// The bar. Its cells persist: a [`BarFeedback::Show`] relabels them in
-/// place, adding or removing only the difference in count, so a word that
-/// stays in its slot is not redrawn.
+/// The bar. Its cells (one per slot, sharing the width equally) persist: a
+/// [`BarFeedback::Show`] relabels them in place, adding or removing only the
+/// difference in count, so a word that stays in its slot is not redrawn.
 pub(crate) struct SuggestionBar {
     font: FontId,
     font_size: u16,
     /// Side padding of each cell (a rescale updates it).
     pub(crate) padding: f32,
-    /// One per suggestion, in order.
+    /// One per slot, left to right.
     cells: Vec<Handle<Div>>,
     /// Each cell's label.
     texts: Vec<Handle<Text>>,
-    /// The lines between cells.
+    /// Whether each cell shows a word (an empty one cannot be pressed).
+    filled: Vec<bool>,
+    /// The lines between cells, `dividers[i]` after `cells[i]`.
     dividers: Vec<Handle<Div>>,
     pressed: Option<usize>,
 }
@@ -73,10 +77,18 @@ impl SuggestionBar {
             .inset(Insets::new(px(0.0), px(0.0), auto(), px(0.0)))
     }
 
-    /// The cell index under `point`, given each cell's laid-out rectangle,
-    /// if any.
-    pub(crate) fn cell_at(cells: &[Rect], point: Point) -> Option<usize> {
-        cells.iter().position(|r| r.contains(point))
+    /// The cell index under `point`, given each cell's laid-out rectangle
+    /// and whether it shows a word, if it falls on one that does.
+    pub(crate) fn cell_at(cells: &[Rect], filled: &[bool], point: Point) -> Option<usize> {
+        cells
+            .iter()
+            .position(|r| r.contains(point))
+            .filter(|&i| filled.get(i).copied().unwrap_or(false))
+    }
+
+    /// Whether each cell shows a word, in order.
+    pub(crate) fn filled(&self) -> &[bool] {
+        &self.filled
     }
 
     /// Each cell's handle, in order.
@@ -106,6 +118,7 @@ impl Widget for SuggestionBar {
             padding: b.padding,
             cells: Vec::new(),
             texts: Vec::new(),
+            filled: Vec::new(),
             dividers: Vec::new(),
             pressed: None,
         }
@@ -119,13 +132,15 @@ fn underline(color: Color) -> Quad {
         .border_color(color)
 }
 
-/// Show `labels`, one per cell: relabel the cells there are (unchanged
-/// labels are left alone), spawn any more needed, and remove any extra. A
-/// pressed cell stays lit: the finger is still on it.
-fn show(ctx: &mut Context<'_, SuggestionBar>, labels: &[String]) {
+/// Show `labels`, one per cell (`None` leaves it empty): relabel the cells
+/// there are (unchanged labels are left alone), spawn any more needed, and
+/// remove any extra. A pressed cell stays lit: the finger is still on it.
+fn show(ctx: &mut Context<'_, SuggestionBar>, labels: &[Option<String>]) {
     let texts = ctx.me().texts.clone();
     for (text, label) in texts.iter().zip(labels) {
-        ctx.at(*text).unwrap().set_text(label.as_str());
+        ctx.at(*text)
+            .unwrap()
+            .set_text(label.as_deref().unwrap_or(""));
     }
     while ctx.me().cells.len() > labels.len() {
         let bar = ctx.me();
@@ -140,8 +155,9 @@ fn show(ctx: &mut Context<'_, SuggestionBar>, labels: &[String]) {
     }
     let have = ctx.me().cells.len();
     for label in labels.iter().skip(have) {
-        spawn_cell(ctx, label);
+        spawn_cell(ctx, label.as_deref().unwrap_or(""));
     }
+    ctx.me().filled = labels.iter().map(Option::is_some).collect();
     restyle_cells(ctx);
 }
 
@@ -163,15 +179,19 @@ fn spawn_cell(ctx: &mut Context<'_, SuggestionBar>, label: &str) {
         );
         ctx.me().dividers.push(divider);
     }
-    // Cells take their text's width, shrinking (with an ellipsis) only when
-    // the labels do not fit.
+    // Cells share the bar's width equally, whatever their words, so a slot
+    // stays put; a word too long for its slot ends in an ellipsis.
     let cell = ctx.spawn(
         me,
         div().style(
             LayoutStyle::default()
                 .row()
                 .align_items(Align::Center)
+                .justify(Justify::Center)
                 .height(percent(100.0))
+                .flex_basis(px(0.0))
+                .grow(1.0)
+                .shrink(1.0)
                 .min_width(px(0.0))
                 .padding(Insets::new(px(0.0), px(padding), px(0.0), px(padding))),
         ),
@@ -197,16 +217,17 @@ fn press(ctx: &mut Context<'_, SuggestionBar>, i: Option<usize>) {
 }
 
 /// Paint every cell, label and divider for the pressed state and the
-/// current theme.
+/// current theme. A divider shows only between two shown words.
 fn restyle_cells(ctx: &mut Context<'_, SuggestionBar>) {
     let fill = ctx.color(PRESSED_ROLE);
     let line = ctx.color(LINE_ROLE);
     let ink = ctx.color(INK_ROLE);
-    let (cells, texts, dividers, pressed) = {
+    let (cells, texts, filled, dividers, pressed) = {
         let bar = ctx.me();
         (
             bar.cells.clone(),
             bar.texts.clone(),
+            bar.filled.clone(),
             bar.dividers.clone(),
             bar.pressed,
         )
@@ -222,10 +243,15 @@ fn restyle_cells(ctx: &mut Context<'_, SuggestionBar>) {
         };
         ctx.at(cell).unwrap().set_paint(paint);
     }
-    for divider in dividers {
-        ctx.at(divider)
-            .unwrap()
-            .set_paint(Paint::Quad(Quad::new(line)));
+    for (i, divider) in dividers.into_iter().enumerate() {
+        let between_words =
+            filled.get(i).copied().unwrap_or(false) && filled.get(i + 1).copied().unwrap_or(false);
+        let paint = if between_words {
+            Paint::Quad(Quad::new(line))
+        } else {
+            Paint::None
+        };
+        ctx.at(divider).unwrap().set_paint(paint);
     }
 }
 
@@ -239,17 +265,23 @@ mod tests {
             Rect::new(0.0, 0.0, 80.0, 40.0),
             Rect::new(81.0, 0.0, 60.0, 40.0),
         ];
+        let filled = [true, true];
         assert_eq!(
-            SuggestionBar::cell_at(&cells, Point::new(10.0, 20.0)),
+            SuggestionBar::cell_at(&cells, &filled, Point::new(10.0, 20.0)),
             Some(0)
         );
         assert_eq!(
-            SuggestionBar::cell_at(&cells, Point::new(100.0, 20.0)),
+            SuggestionBar::cell_at(&cells, &filled, Point::new(100.0, 20.0)),
             Some(1)
         );
         // Past the last cell: blank bar, nothing.
         assert_eq!(
-            SuggestionBar::cell_at(&cells, Point::new(300.0, 20.0)),
+            SuggestionBar::cell_at(&cells, &filled, Point::new(300.0, 20.0)),
+            None
+        );
+        // An empty slot is nothing either.
+        assert_eq!(
+            SuggestionBar::cell_at(&cells, &[false, true], Point::new(10.0, 20.0)),
             None
         );
     }
