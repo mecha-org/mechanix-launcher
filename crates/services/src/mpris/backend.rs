@@ -1,112 +1,82 @@
 use mecha_wayland::prelude::*;
 
-use super::bus::{MprisBus, MprisDiscovery, PendingCall};
-use super::interface::{MPRIS_PATH, MPRIS_PREFIX, PLAYER_INTERFACE};
+use super::bus::MprisDiscovery;
+use super::event::MprisEvent;
+use super::interface::{MPRIS_PATH, MPRIS_PREFIX, PAUSE, PLAY_PAUSE, PLAYER_INTERFACE};
+use super::media_command::MediaCommand;
 use super::media_signal::MediaSignals;
-use super::types::{MediaPlayer, MprisPlayers, PlaybackStatus, PlayerId, Track};
+use super::players::MprisPlayers;
+use super::types::{MediaPlayer, PlaybackStatus, PlayerId, Track};
 
 pub fn on_reply(app: &mut App, e: &MethodReply) {
-    let pending = app.resource_mut::<MprisDiscovery>().pending.remove(&e.call);
-    let Some(call) = pending else {
+    let Some(event) = MprisEvent::from_reply(app, e) else {
         return;
     };
-
-    match call {
-        PendingCall::ListNames => on_names(app, e),
-        PendingCall::GetAll(name) => on_data(app, name, e),
-    }
-}
-
-fn on_names(app: &mut App, e: &MethodReply) {
-    let msg = match &e.result {
-        Ok(msg) => msg,
-        Err(error) => {
-            eprintln!("[mpris] ListNames failed: {error:?}");
-            return;
-        }
-    };
-
-    let Ok((names,)) = msg.body::<(Vec<String>,)>() else {
-        eprintln!("[mpris] ListNames: unexpected reply");
-        return;
-    };
-
-    for name in names {
-        if !name.starts_with(MPRIS_PREFIX) {
-            continue;
-        }
-        let Ok(name) = BusName::try_from(name) else {
-            continue;
-        };
-        request_data(app, &name);
-        app.resource_mut::<MprisBus>().names.push(name);
-    }
+    handle(app, event);
 }
 
 pub fn on_signal(app: &mut App, e: &SignalReceived) {
-    if !e
-        .matches
-        .contains(&app.resource::<MprisDiscovery>().owner_match)
-    {
-        return;
-    }
-
-    let Ok((name, _old, new)) = e.msg.body::<(String, String, String)>() else {
+    let Some(event) = MprisEvent::from_signal(app, e) else {
         return;
     };
-    let Ok(name) = BusName::try_from(name) else {
-        return;
-    };
-
-    if new.is_empty() {
-        app.resource_mut::<MprisBus>().names.retain(|n| *n != name);
-        app.resource_mut::<MprisPlayers>()
-            .players
-            .retain(|p| p.id.0 != name.as_str());
-    } else if !app.resource::<MprisBus>().names.contains(&name) {
-        request_data(app, &name);
-        app.resource_mut::<MprisBus>().names.push(name);
-    }
+    handle(app, event);
 }
 
-fn request_data(app: &mut App, name: &BusName) {
-    let call = app
-        .resource_mut::<DBus>()
-        .session()
-        .object(name.clone(), MPRIS_PATH)
-        .get_all(PLAYER_INTERFACE);
-    app.resource_mut::<MprisDiscovery>()
-        .pending
-        .insert(call, PendingCall::GetAll(name.as_str().to_string()));
-}
-
-fn on_data(app: &mut App, name: String, e: &MethodReply) {
-    let msg = match &e.result {
-        Ok(msg) => msg,
-        Err(error) => {
-            eprintln!("[mpris] GetAll {name} failed: {error:?}");
-            return;
+fn handle(app: &mut App, event: MprisEvent) {
+    match event {
+        MprisEvent::PlayerNames(names) => {
+            for name in names {
+                if !name.starts_with(MPRIS_PREFIX) {
+                    continue;
+                }
+                let Ok(name) = BusName::try_from(name) else {
+                    continue;
+                };
+                MprisDiscovery::subscribe_player(app, name);
+            }
         }
-    };
+        MprisEvent::PlayerData(id, props) => {
+            let player = MediaPlayer {
+                id: id.clone(),
+                status: PlaybackStatus::from(&props),
+                track: Track::from(&props),
+            };
+            app.resource_mut::<MprisPlayers>().add_player(player);
+            app.signal(MediaSignals::NotifyPlayerArrival(id));
+        }
+        MprisEvent::PlayerAppeared(name) => {
+            if app.resource::<MprisDiscovery>().is_subscribed(&name) {
+                return;
+            }
+            MprisDiscovery::subscribe_player(app, name);
+        }
+        MprisEvent::PlayerLeft(name) => {
+            MprisDiscovery::unsubscribe_player(app, &name);
+            let id = PlayerId::from(name);
+            app.resource_mut::<MprisPlayers>().remove_player(&id);
+            app.signal(MediaSignals::PlayerRemoved(id));
+        }
+        MprisEvent::PlayerUpdated(id, changed) => {
+            let updated = app
+                .resource_mut::<MprisPlayers>()
+                .player_data_changed(&id, &changed);
+            if updated {
+                app.signal(MediaSignals::PlayerChanged(id));
+            }
+        }
+    }
+}
 
-    let Ok((props,)) = msg.body::<(PropMap,)>() else {
-        eprintln!("[mpris] GetAll {name}: unexpected reply");
-        return;
-    };
+pub fn on_command(app: &mut App, command: &MediaCommand) {
+    match command {
+        MediaCommand::Pause(id) => dbus_method_call(app, id, PAUSE),
+        MediaCommand::PlayPause(id) => dbus_method_call(app, id, PLAY_PAUSE),
+    }
+}
 
-    let player = MediaPlayer {
-        id: PlayerId(name),
-        status: PlaybackStatus::from(&props),
-        track: Track::from(&props),
-    };
-
-    let mut players = app.resource_mut::<MprisPlayers>();
-
-    players.players.retain(|p| p.id != player.id);
-    let id = player.id.clone();
-    players.players.push(player);
-    drop(players);
-
-    // TODO: show all of the mpris servers that are active??
-    app.signal(MediaSignals::NotifyPlayerArrival(id));
+fn dbus_method_call(app: &mut App, id: &PlayerId, method: &'static str) {
+    app.resource_mut::<DBus>()
+        .session()
+        .object(id.0.clone(), MPRIS_PATH)
+        .call_no_reply(PLAYER_INTERFACE, method, &());
 }
