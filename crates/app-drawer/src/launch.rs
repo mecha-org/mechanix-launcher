@@ -21,8 +21,17 @@
 //!    is spawned from the launcher.
 //!
 //! systemd answers a start once its job is queued; whether the program ran
-//! comes later, as the job's `JobRemoved`, and a failure is logged.
+//! comes later, as the job's `JobRemoved`. A start that failed ends its
+//! launch at once, as does a spawn that failed, and the app's unit going
+//! away (`UnitRemoved`) before its window came: an app that exited or
+//! crashed first.
+//!
+//! Only the app's own unit is stopped when its launch is called off: one
+//! made for it here, or one named for it (`app-…`, or the unit the bus
+//! started it in). Never a unit it merely runs in, like the launcher's own
+//! or the bus's.
 
+use std::collections::HashMap;
 use std::hash::{BuildHasher, RandomState};
 use std::io;
 use std::os::unix::fs::PermissionsExt;
@@ -31,7 +40,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use apps::DesktopApp;
+use apps::{DesktopApp, LaunchId, Launches};
 use mecha_wayland::prelude::*;
 
 const SYSTEMD: &str = "org.freedesktop.systemd1";
@@ -63,6 +72,7 @@ const UNIT_VARIABLES: &[&str] = &[
 /// One app on its way to starting.
 struct AppStart {
     entry: DesktopApp,
+    launch: LaunchId,
     token: Option<String>,
 }
 
@@ -71,7 +81,15 @@ struct Waiting {
     request: TokenRequest,
     /// The ring timeout that starts it without the token.
     timeout: Token,
-    entry: DesktopApp,
+    start: AppStart,
+}
+
+/// What stopping a launch stops.
+enum Unit {
+    /// The unit its app runs in.
+    Known(String),
+    /// Called off before the unit was known: stopped once it is.
+    StopWhenKnown,
 }
 
 /// What a call in flight asked for.
@@ -81,11 +99,20 @@ enum Asked {
     /// The app's own service.
     Service(AppStart),
     /// The process of an app D-Bus activation reached.
-    AppProcess(DesktopApp),
+    AppProcess(AppStart),
     /// The bus's own process.
     BusProcess,
-    /// A scope for an app the bus runs among its own services.
-    Scope(String),
+    /// A scope for the launch's app, which the bus runs among its own
+    /// services.
+    Scope(LaunchId, String),
+}
+
+/// What a queued systemd start job starts.
+enum Job {
+    /// The launch's service: its failure is the app's.
+    Service(LaunchId),
+    /// The scope the launch's app is moved into: the app's unit once done.
+    Scope(LaunchId, String),
 }
 
 /// Starts in flight: apps waiting for their token, calls not yet answered,
@@ -97,13 +124,111 @@ struct Starting {
     /// its token first.
     timeouts: Vec<Token>,
     calls: Vec<(CallId, Asked)>,
-    jobs: Vec<(ObjectPath, String)>,
-    /// The match for systemd's `JobRemoved`, once subscribed.
-    jobs_removed: Option<MatchId>,
+    jobs: Vec<(ObjectPath, Job)>,
+    /// The matches for systemd's signals, once subscribed.
+    subscribed: Option<Subscription>,
     /// The unit the bus itself runs in, once known.
     bus_unit: Option<String>,
+    /// What stopping each launch stops, while it goes on.
+    units: HashMap<LaunchId, Unit>,
 }
 impl Resource for Starting {}
+
+/// The matches for systemd's `JobRemoved` and `UnitRemoved`.
+#[derive(Clone, Copy)]
+struct Subscription {
+    jobs_removed: MatchId,
+    units_removed: MatchId,
+}
+
+impl Starting {
+    /// Whether a call or job still in flight may yet name `launch`'s unit.
+    fn may_learn_unit(&self, launch: LaunchId) -> bool {
+        let asked = self.calls.iter().any(|(_, asked)| match asked {
+            Asked::Activate(s) | Asked::Service(s) | Asked::AppProcess(s) => s.launch == launch,
+            Asked::Scope(l, _) => *l == launch,
+            Asked::BusProcess => false,
+        });
+        asked
+            || self
+                .jobs
+                .iter()
+                .any(|(_, job)| matches!(job, Job::Scope(l, _) if *l == launch))
+    }
+}
+
+/// Call off `launch`: an app still waiting for its token isn't started; one
+/// started has its unit stopped, now or once known. An app spawned from the
+/// launcher, outside any unit, or running in a unit not its own, can't be.
+pub(crate) fn stop(app: &mut App, launch: LaunchId) {
+    let mut starting = app.resource_mut::<Starting>();
+    if let Some(at) = starting
+        .waiting
+        .iter()
+        .position(|w| w.start.launch == launch)
+    {
+        starting.waiting.swap_remove(at);
+        return;
+    }
+    match starting.units.remove(&launch) {
+        Some(Unit::Known(unit)) => stop_unit(app, &unit),
+        _ if starting.may_learn_unit(launch) => {
+            starting.units.insert(launch, Unit::StopWhenKnown);
+        }
+        _ => {}
+    }
+}
+
+/// The unit `launch`'s app runs in, its own, once known.
+pub(crate) fn unit(app: &App, launch: LaunchId) -> Option<&str> {
+    match app.resource::<Starting>().units.get(&launch)? {
+        Unit::Known(unit) => Some(unit),
+        Unit::StopWhenKnown => None,
+    }
+}
+
+/// Done with `launch`: its window came, or it ended without one.
+pub(crate) fn forget(app: &mut App, launch: LaunchId) {
+    app.resource_mut::<Starting>().units.remove(&launch);
+}
+
+/// `launch`'s app runs in `unit`, its own: stopped at once if it was called
+/// off, else kept to stop while the launch goes on, and to know its window
+/// by, which may be up already. Once it is over, the window came or the app
+/// is gone, and there is nothing to keep.
+fn started_in(app: &mut App, launch: LaunchId, unit: String) {
+    let going_on =
+        app.has_resource::<Launches>() && app.resource::<Launches>().get(launch).is_some();
+    let mut starting = app.resource_mut::<Starting>();
+    match starting.units.remove(&launch) {
+        Some(Unit::StopWhenKnown) => stop_unit(app, &unit),
+        _ if going_on => {
+            starting.units.insert(launch, Unit::Known(unit));
+            crate::placeholder::end_arrived(app);
+        }
+        _ => {}
+    }
+}
+
+/// `launch`'s app turned out to have no unit of its own to stop: a stop
+/// waiting for one is done, unless another call may still name one.
+fn no_unit(app: &mut App, launch: LaunchId) {
+    let mut starting = app.resource_mut::<Starting>();
+    if !starting.may_learn_unit(launch)
+        && matches!(starting.units.get(&launch), Some(Unit::StopWhenKnown))
+    {
+        starting.units.remove(&launch);
+    }
+}
+
+/// Ask systemd to stop `unit`.
+fn stop_unit(app: &mut App, unit: &str) {
+    let call = MethodCall::new(SYSTEMD, SYSTEMD_PATH, SYSTEMD_MANAGER, "StopUnit")
+        .body(&(unit, "replace"));
+    if send(app, call).is_none() {
+        tracing::warn!(%unit, "no session bus to stop the app's unit on");
+    }
+}
 
 /// Registers the launcher's systems. Safe to call more than once.
 pub(crate) fn install(app: &mut App) {
@@ -117,9 +242,9 @@ pub(crate) fn install(app: &mut App) {
         .system(on_signal);
 }
 
-/// Start `entry`, asking for its activation token first when the compositor
-/// offers them.
-pub(crate) fn start(app: &mut App, entry: &DesktopApp) {
+/// Start `entry` for `launch`, asking for its activation token first when
+/// the compositor offers them.
+pub(crate) fn start(app: &mut App, entry: &DesktopApp, launch: LaunchId) {
     let can_wait = app.has_resource::<Toplevels>()
         && app.has_resource::<Wayland>()
         && app.has_resource::<Ring>();
@@ -129,14 +254,13 @@ pub(crate) fn start(app: &mut App, entry: &DesktopApp) {
             toplevels.request_activation_token(&mut wl, app_id(&entry.id))
         })
         .flatten();
+    let start = AppStart {
+        entry: entry.clone(),
+        launch,
+        token: None,
+    };
     let Some(request) = request else {
-        return launch(
-            app,
-            AppStart {
-                entry: entry.clone(),
-                token: None,
-            },
-        );
+        return run(app, start);
     };
     let timeout = app.resource_mut::<Ring>().timeout(TOKEN_WAIT);
     let mut starting = app.resource_mut::<Starting>();
@@ -144,26 +268,29 @@ pub(crate) fn start(app: &mut App, entry: &DesktopApp) {
     starting.waiting.push(Waiting {
         request,
         timeout,
-        entry: entry.clone(),
+        start,
     });
 }
 
 /// The token is here: start the app with it.
 fn on_token(app: &mut App, e: &ActivationToken) {
-    let entry = {
+    let mut start = {
         let mut starting = app.resource_mut::<Starting>();
         let Some(at) = starting.waiting.iter().position(|w| w.request == e.request) else {
             return;
         };
-        starting.waiting.swap_remove(at).entry
+        starting.waiting.swap_remove(at).start
     };
-    let token = Some(e.token.clone()).filter(|t| !t.is_empty());
-    launch(app, AppStart { entry, token });
+    if !e.token.is_empty() {
+        crate::placeholder::started_with(app, start.launch, &e.token);
+        start.token = Some(e.token.clone());
+    }
+    run(app, start);
 }
 
 /// The token is late: start the app without it.
 fn on_timeout(app: &mut App, e: &IoEvent) {
-    let entry = {
+    let start = {
         let (mut starting, mut ring) = app.query::<(ResMut<Starting>, ResMut<Ring>)>();
         let Some(at) = starting.timeouts.iter().position(|t| *t == e.token) else {
             return;
@@ -173,14 +300,15 @@ fn on_timeout(app: &mut App, e: &IoEvent) {
         let Some(at) = starting.waiting.iter().position(|w| w.timeout == e.token) else {
             return;
         };
-        starting.waiting.swap_remove(at).entry
+        starting.waiting.swap_remove(at).start
     };
-    tracing::warn!(id = %entry.id, "no activation token came, starting it without one");
-    launch(app, AppStart { entry, token: None });
+    let id = &start.entry.id;
+    tracing::warn!(%id, "no activation token came, starting it without one");
+    run(app, start);
 }
 
 /// Start through D-Bus activation when the app takes it, else as a service.
-fn launch(app: &mut App, start: AppStart) {
+fn run(app: &mut App, start: AppStart) {
     let Some(call) = start
         .entry
         .dbus_activatable
@@ -200,13 +328,17 @@ fn launch(app: &mut App, start: AppStart) {
 
 /// Start `start` as a service, or spawn it when that can't be asked.
 fn start_service(app: &mut App, start: AppStart) {
-    let Some(call) = service_call(&start) else {
-        return spawn_logged(&start);
+    let unit = service_name(&start.entry.id);
+    let Some(call) = service_call(&start, &unit) else {
+        return spawn_or_fail(app, &start);
     };
-    subscribe_to_jobs(app);
+    subscribe_to_units(app);
     match send(app, call) {
-        Some(id) => awaiting(app, id, Asked::Service(start)),
-        None => spawn_logged(&start),
+        Some(id) => {
+            started_in(app, start.launch, unit);
+            awaiting(app, id, Asked::Service(start));
+        }
+        None => spawn_or_fail(app, &start),
     }
 }
 
@@ -232,29 +364,34 @@ fn ask_process(app: &mut App, name: &str, asked: Asked) {
     }
 }
 
-/// Ask systemd for its `JobRemoved`, which it sends only to subscribers.
-fn subscribe_to_jobs(app: &mut App) {
-    if app.resource::<Starting>().jobs_removed.is_some() || !app.has_resource::<DBus>() {
+/// Ask systemd for its `JobRemoved` and `UnitRemoved`, which it sends only
+/// to subscribers.
+fn subscribe_to_units(app: &mut App) {
+    if app.resource::<Starting>().subscribed.is_some() || !app.has_resource::<DBus>() {
         return;
     }
-    let matched = {
-        let mut dbus = app.resource_mut::<DBus>();
-        dbus.bus(BusId::Session).map(|mut bus| {
+    let subscribed = app
+        .resource_mut::<DBus>()
+        .bus(BusId::Session)
+        .map(|mut bus| {
             bus.send_no_reply(MethodCall::new(
                 SYSTEMD,
                 SYSTEMD_PATH,
                 SYSTEMD_MANAGER,
                 "Subscribe",
             ));
-            bus.add_match(
+            let rule = |member| {
                 MatchRule::signal()
                     .sender(SYSTEMD)
                     .interface(SYSTEMD_MANAGER)
-                    .member("JobRemoved"),
-            )
-        })
-    };
-    app.resource_mut::<Starting>().jobs_removed = matched;
+                    .member(member)
+            };
+            Subscription {
+                jobs_removed: bus.add_match(rule("JobRemoved")),
+                units_removed: bus.add_match(rule("UnitRemoved")),
+            }
+        });
+    app.resource_mut::<Starting>().subscribed = subscribed;
 }
 
 /// An answer. An activation refused falls back to a service; one done asks
@@ -271,7 +408,7 @@ fn on_reply(app: &mut App, e: &MethodReply) {
     match (asked, &e.result) {
         (Asked::Activate(start), Ok(_)) => {
             let name = app_id(&start.entry.id).to_owned();
-            ask_process(app, &name, Asked::AppProcess(start.entry));
+            ask_process(app, &name, Asked::AppProcess(start));
         }
         (Asked::Activate(start), Err(error)) => {
             let id = &start.entry.id;
@@ -281,18 +418,24 @@ fn on_reply(app: &mut App, e: &MethodReply) {
         (Asked::Service(start), Err(error)) => {
             let id = &start.entry.id;
             tracing::warn!(%id, "systemd did not start it, spawning it instead: {error:?}");
-            spawn_logged(&start);
+            // In no unit now.
+            forget(app, start.launch);
+            spawn_or_fail(app, &start);
         }
-        (Asked::Service(AppStart { entry, .. }), Ok(reply)) => watch_job(app, reply, entry.id),
-        (Asked::Scope(id), Ok(reply)) => watch_job(app, reply, id),
-        (Asked::Scope(id), Err(error)) => {
-            tracing::warn!(%id, "systemd made no scope for it: {error:?}");
+        (Asked::Service(start), Ok(reply)) => {
+            watch_job(app, reply, Job::Service(start.launch));
         }
-        (Asked::AppProcess(entry), Ok(reply)) => {
-            if let Ok((pid,)) = reply.body::<(u32,)>() {
-                adopt(app, pid, &entry);
-            }
+        (Asked::Scope(launch, scope), Ok(reply)) => {
+            watch_job(app, reply, Job::Scope(launch, scope));
         }
+        (Asked::Scope(launch, scope), Err(error)) => {
+            tracing::warn!(%scope, "systemd made no scope for it: {error:?}");
+            no_unit(app, launch);
+        }
+        (Asked::AppProcess(start), Ok(reply)) => match reply.body::<(u32,)>() {
+            Ok((pid,)) => adopt(app, pid, &start),
+            Err(_) => no_unit(app, start.launch),
+        },
         (Asked::BusProcess, Ok(reply)) => {
             let unit = reply
                 .body::<(u32,)>()
@@ -300,9 +443,10 @@ fn on_reply(app: &mut App, e: &MethodReply) {
                 .and_then(|(pid,)| apps::unit_of(pid));
             app.resource_mut::<Starting>().bus_unit = unit;
         }
-        (Asked::AppProcess(entry), Err(error)) => {
-            let id = &entry.id;
+        (Asked::AppProcess(start), Err(error)) => {
+            let id = &start.entry.id;
             tracing::warn!(%id, "the bus did not say which process it is: {error:?}");
+            no_unit(app, start.launch);
         }
         (Asked::BusProcess, Err(error)) => {
             tracing::warn!("the bus did not say which process it is: {error:?}");
@@ -311,53 +455,100 @@ fn on_reply(app: &mut App, e: &MethodReply) {
 }
 
 /// A unit start queued: its job, watched until done.
-fn watch_job(app: &mut App, reply: &Message, id: String) {
+fn watch_job(app: &mut App, reply: &Message, job: Job) {
     match reply.body::<(ObjectPath,)>() {
-        Ok((job,)) => app.resource_mut::<Starting>().jobs.push((job, id)),
-        Err(error) => tracing::warn!(%id, "systemd's answer is unreadable: {error:?}"),
+        Ok((path,)) => app.resource_mut::<Starting>().jobs.push((path, job)),
+        Err(error) => {
+            tracing::warn!("systemd's answer is unreadable: {error:?}");
+            if let Job::Scope(launch, _) = job {
+                no_unit(app, launch);
+            }
+        }
     }
 }
 
 /// The app D-Bus activation reached is process `pid`. When the bus runs it
 /// in the bus's own unit, it is moved into a scope of its own: there it
-/// can be told apart, frozen or ended without the bus. In any other unit,
-/// the bus's own for it or one it was already in, it stays.
-fn adopt(app: &mut App, pid: u32, entry: &DesktopApp) {
-    let shared = {
-        let starting = app.resource::<Starting>();
-        let bus_unit = starting.bus_unit.as_deref();
-        bus_unit.is_some() && apps::unit_of(pid).as_deref() == bus_unit
+/// can be told apart, frozen or ended without the bus, and that scope is
+/// the app's once made. In a unit named for the app, one the bus started
+/// it in, it stays, and that unit is the app's. In any other, it is left
+/// alone: the unit is some other program's, like the launcher's own for an
+/// app it spawned earlier, and stopping the launch must not stop it.
+fn adopt(app: &mut App, pid: u32, start: &AppStart) {
+    let Some(unit) = apps::unit_of(pid) else {
+        return no_unit(app, start.launch);
     };
-    if !shared {
-        return;
-    }
-    subscribe_to_jobs(app);
-    if let Some(id) = send(app, scope_call(entry, pid)) {
-        awaiting(app, id, Asked::Scope(entry.id.clone()));
+    let entry = &start.entry;
+    if app.resource::<Starting>().bus_unit.as_ref() == Some(&unit) {
+        subscribe_to_units(app);
+        let scope = scope_name(&entry.id);
+        match send(app, scope_call(entry, pid, &scope)) {
+            Some(id) => awaiting(app, id, Asked::Scope(start.launch, scope)),
+            None => no_unit(app, start.launch),
+        }
+    } else if apps::unit_app_id(&unit).as_deref() == Some(app_id(&entry.id)) {
+        subscribe_to_units(app);
+        started_in(app, start.launch, unit);
+    } else {
+        no_unit(app, start.launch);
     }
 }
 
-/// A start job is done: logged if the app didn't start.
+/// systemd's `JobRemoved` or `UnitRemoved`.
 fn on_signal(app: &mut App, e: &SignalReceived) {
-    let ours = app
-        .resource::<Starting>()
-        .jobs_removed
-        .is_some_and(|id| e.matches.contains(&id));
-    if !ours {
-        return;
-    }
-    let Ok((_, job, _, result)) = e.msg.body::<(u32, ObjectPath, String, String)>() else {
+    let Some(subscribed) = app.resource::<Starting>().subscribed else {
         return;
     };
-    let id = {
+    if e.matches.contains(&subscribed.jobs_removed) {
+        job_removed(app, &e.msg);
+    } else if e.matches.contains(&subscribed.units_removed) {
+        unit_removed(app, &e.msg);
+    }
+}
+
+/// A start job is done. A service that failed to start ends its launch; a
+/// scope made is the app's unit.
+fn job_removed(app: &mut App, msg: &Message) {
+    let Ok((_, path, unit, result)) = msg.body::<(u32, ObjectPath, String, String)>() else {
+        return;
+    };
+    let job = {
         let mut starting = app.resource_mut::<Starting>();
-        let Some(at) = starting.jobs.iter().position(|(path, _)| *path == job) else {
+        let Some(at) = starting.jobs.iter().position(|(p, _)| *p == path) else {
             return;
         };
         starting.jobs.swap_remove(at).1
     };
-    if result != "done" {
-        tracing::warn!(%id, %result, "the app did not start");
+    let done = result == "done";
+    match job {
+        Job::Service(_) if done => {}
+        Job::Service(launch) => {
+            tracing::warn!(%unit, %result, "the app did not start");
+            crate::placeholder::failed(app, launch);
+        }
+        Job::Scope(launch, scope) if done => started_in(app, launch, scope),
+        Job::Scope(launch, _) => {
+            tracing::warn!(%unit, %result, "systemd made no scope for the app");
+            no_unit(app, launch);
+        }
+    }
+}
+
+/// A unit is gone. A launch whose app ran in it, its window not up yet, is
+/// over: the app exited or crashed first.
+fn unit_removed(app: &mut App, msg: &Message) {
+    let Ok((unit, _)) = msg.body::<(String, ObjectPath)>() else {
+        return;
+    };
+    let launch = app
+        .resource::<Starting>()
+        .units
+        .iter()
+        .find(|(_, u)| matches!(u, Unit::Known(known) if *known == unit))
+        .map(|(launch, _)| *launch);
+    if let Some(launch) = launch {
+        tracing::warn!(%unit, "the app ended before its window came");
+        crate::placeholder::failed(app, launch);
     }
 }
 
@@ -443,19 +634,19 @@ fn transient_unit(
         .body(&(name, "fail", properties, aux))
 }
 
-/// `StartTransientUnit` for a scope holding `pid`, the app `entry` that the
-/// bus runs among its own services.
-fn scope_call(entry: &DesktopApp, pid: u32) -> MethodCall {
+/// `StartTransientUnit` for scope `name` holding `pid`, the app `entry`
+/// that the bus runs among its own services.
+fn scope_call(entry: &DesktopApp, pid: u32, name: &str) -> MethodCall {
     let pids = Value::Array {
         elem: signature("u"),
         items: vec![Value::U32(pid)],
     };
-    transient_unit(&scope_name(&entry.id), entry, vec![("PIDs", pids)])
+    transient_unit(name, entry, vec![("PIDs", pids)])
 }
 
-/// `StartTransientUnit` for the app's service. `None` when its program is
-/// not found on `PATH`.
-fn service_call(start: &AppStart) -> Option<MethodCall> {
+/// `StartTransientUnit` for the app's service `name`. `None` when its
+/// program is not found on `PATH`.
+fn service_call(start: &AppStart, name: &str) -> Option<MethodCall> {
     let entry = &start.entry;
     let program = executable(entry.exec.first()?)?;
     let exec = Value::Array {
@@ -479,7 +670,7 @@ fn service_call(start: &AppStart) -> Option<MethodCall> {
         ("WorkingDirectory", text("~")),
         ("Environment", strings(environment(start.token.as_deref()))),
     ];
-    Some(transient_unit(&service_name(&entry.id), entry, properties))
+    Some(transient_unit(name, entry, properties))
 }
 
 /// `argv` for `ExecStart`: systemd expands `$` in arguments, and `$$` keeps
@@ -560,10 +751,11 @@ fn unit_name(desktop_id: &str, before_random: char, kind: &str) -> String {
     format!("app-mechanix-{id}{before_random}{random:016x}.{kind}")
 }
 
-/// Spawn the app from the launcher, logging a failure.
-fn spawn_logged(start: &AppStart) {
+/// Spawn the app from the launcher. One that can't be ends its launch.
+fn spawn_or_fail(app: &mut App, start: &AppStart) {
     if let Err(e) = spawn(&start.entry.exec, start.token.as_deref()) {
         tracing::warn!(id = %start.entry.id, "launch failed: {e}");
+        crate::placeholder::failed(app, start.launch);
     }
 }
 
@@ -637,32 +829,111 @@ mod tests {
         );
     }
 
-    fn start(id: &str, token: Option<&str>) -> AppStart {
-        AppStart {
-            entry: DesktopApp {
-                id: id.into(),
-                name: "Notes".into(),
-                exec: vec!["sh".into()],
-                icon: None,
-                startup_wm_class: None,
-                path: "/usr/share/applications/notes.desktop".into(),
-                dbus_activatable: true,
-            },
-            token: token.map(String::from),
+    const NOTES: &str = "org.example.Notes.desktop";
+
+    fn entry(id: &str) -> DesktopApp {
+        DesktopApp {
+            id: id.into(),
+            name: "Notes".into(),
+            exec: vec!["sh".into()],
+            icon: None,
+            startup_wm_class: None,
+            path: "/usr/share/applications/notes.desktop".into(),
+            dbus_activatable: true,
         }
+    }
+
+    /// An app with the start's bookkeeping, and the start of app `id`, its
+    /// launch going on.
+    fn starting_app(id: &str) -> (App, AppStart) {
+        let mut app = App::new();
+        app.init_resource::<Starting>();
+        let mut launches = Launches::default();
+        let launch = launches.add(entry(id), apps::RowIcon::Glyph(SpriteId(0)));
+        app.insert_resource(launches);
+        let start = AppStart {
+            entry: entry(id),
+            launch,
+            token: None,
+        };
+        (app, start)
     }
 
     #[test]
     fn calls_build_with_and_without_a_token() {
         // Building a call encodes its body, which checks every value's type.
         for token in [None, Some("tok")] {
-            let start = start("org.example.Notes.desktop", token);
+            let start = AppStart {
+                token: token.map(String::from),
+                ..starting_app(NOTES).1
+            };
             assert!(activate_call(&start).is_some());
-            assert!(service_call(&start).is_some());
-            let _ = scope_call(&start.entry, 42);
+            assert!(service_call(&start, &service_name(&start.entry.id)).is_some());
+            let _ = scope_call(&start.entry, 42, &scope_name(&start.entry.id));
         }
         // Not a bus name: no activation, the service instead.
-        assert!(activate_call(&start("kde-notes.desktop", None)).is_none());
+        assert!(activate_call(&starting_app("kde-notes.desktop").1).is_none());
+    }
+
+    fn units(app: &App) -> usize {
+        app.resource::<Starting>().units.len()
+    }
+
+    #[test]
+    fn a_unit_is_kept_only_while_its_launch_goes_on() {
+        let (mut app, start) = starting_app(NOTES);
+        let launch = start.launch;
+        started_in(&mut app, launch, "app-a.service".into());
+        assert_eq!(units(&app), 1);
+        forget(&mut app, launch);
+        assert_eq!(units(&app), 0);
+
+        // Learned after the launch ended: its window came first.
+        app.resource_mut::<Launches>().remove(launch);
+        started_in(&mut app, launch, "app-a.service".into());
+        assert_eq!(units(&app), 0);
+    }
+
+    /// A process in a unit that isn't the app's (here the test's own, with
+    /// the bus's own unit unknown) is left alone: no unit to stop.
+    #[test]
+    fn a_unit_not_named_for_the_app_is_never_its_own() {
+        let (mut app, start) = starting_app(NOTES);
+        adopt(&mut app, std::process::id(), &start);
+        assert_eq!(units(&app), 0);
+    }
+
+    #[test]
+    fn a_stop_waits_for_a_unit_only_while_one_may_come() {
+        let (mut app, start) = starting_app(NOTES);
+        let launch = start.launch;
+        // Nothing in flight: nothing to wait for.
+        stop(&mut app, launch);
+        assert_eq!(units(&app), 0);
+
+        // A scope on its way: the stop waits for it, then stops it.
+        let job = ObjectPath::new("/org/freedesktop/systemd1/job/1").unwrap();
+        let scope = "app-mechanix-a-1.scope".to_owned();
+        app.resource_mut::<Starting>()
+            .jobs
+            .push((job, Job::Scope(launch, scope.clone())));
+        stop(&mut app, launch);
+        assert!(matches!(
+            app.resource::<Starting>().units.get(&launch),
+            Some(Unit::StopWhenKnown)
+        ));
+        no_unit(&mut app, launch);
+        assert_eq!(units(&app), 1, "the scope may still come");
+        app.resource_mut::<Starting>().jobs.clear();
+        started_in(&mut app, launch, scope);
+        assert_eq!(units(&app), 0, "stopped once known");
+
+        // A stop waiting for a scope that failed instead: done with.
+        app.resource_mut::<Starting>()
+            .units
+            .insert(launch, Unit::StopWhenKnown);
+        no_unit(&mut app, launch);
+        assert_eq!(units(&app), 0);
     }
 
     #[test]

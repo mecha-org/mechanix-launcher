@@ -8,13 +8,16 @@
 //!
 //! The output's width is the keyboard surface's own: anchored left and right
 //! with no width, the compositor configures it to the output's full logical
-//! width ([`on_resized`]). Only while those anchors hold, though: hiding a
-//! drawn surface unmaps it, which resets the compositor's layer state
-//! (anchors included), so a configure that a commit on the hidden surface
-//! draws (a zone change, say) carries some other width. Those are ignored;
-//! the show re-sends the anchors and its configure brings the real width. Until the first configure the keyboard is laid out
-//! at the design width (factor 1); a later or changed width (rotation, a new
-//! output scale) re-lays it out ([`crate::widget::surface::relayout`]).
+//! width ([`on_resized`]). Only while those anchors hold, though: a hide
+//! that unmaps a drawn surface resets the compositor's layer state (anchors
+//! included), so a configure that a commit on the hidden surface draws (a
+//! zone change, say) carries some other width. Those are ignored; the show
+//! re-sends the anchors and its configure brings the real width. Where the
+//! compositor hides surfaces in place instead (`Surfaces::hides_in_place`),
+//! the anchors hold, so every configure counts. Until the first configure the
+//! keyboard is laid out at the design width (factor 1); a later or changed
+//! width (rotation, a new output scale) re-lays it out
+//! ([`crate::widget::surface::relayout`]).
 //!
 //! [`design_width`]: KeyboardGeometry::design_width
 
@@ -60,9 +63,16 @@ pub(crate) struct KeyboardGeometry {
     design: KeyboardStyle,
     /// The output's logical width, once the compositor configured the surface.
     pub(crate) output_width: Option<f32>,
-    /// Whether the keyboard was ever shown. Once it was, a hide resets the
-    /// surface's anchors at the compositor until the next show.
+    /// Whether the keyboard was ever shown. Once it was, a hide that unmaps
+    /// resets the surface's anchors at the compositor until the next show.
     pub(crate) ever_shown: bool,
+    /// The compositor hides the keyboard in place rather than unmapped
+    /// (`Surfaces::hides_in_place`), so it keeps its anchors.
+    pub(crate) hides_in_place: bool,
+    /// The largest factor whose keyboard fits the height the compositor
+    /// could give, once it gave less than asked ([`on_resized`]). Until the
+    /// output's width changes.
+    pub(crate) height_cap: Option<f32>,
 }
 impl Resource for KeyboardGeometry {}
 
@@ -72,6 +82,8 @@ impl KeyboardGeometry {
             design,
             output_width: None,
             ever_shown: false,
+            hides_in_place: false,
+            height_cap: None,
         }
     }
 
@@ -80,8 +92,10 @@ impl KeyboardGeometry {
         self.design.width.unwrap_or(DEFAULT_DESIGN_WIDTH)
     }
 
+    /// The width's factor, at most the [`Self::height_cap`].
     pub(crate) fn factor(&self) -> f32 {
-        geometry_factor(self.output_width, self.design_width())
+        let factor = geometry_factor(self.output_width, self.design_width());
+        self.height_cap.map_or(factor, |cap| factor.min(cap))
     }
 
     /// The keyboard style at the current output width.
@@ -90,11 +104,12 @@ impl KeyboardGeometry {
     }
 
     /// Whether the compositor holds the surface's bottom|left|right anchors
-    /// now: shown, or never shown (created anchored, not yet reset by a hide).
-    /// Only then does a configure carry the output's width, and only then may
-    /// the surface ask for width 0.
+    /// now: hidden in place rather than unmapped, shown, or never shown
+    /// (created anchored, not yet reset by a hide). Only then does a
+    /// configure carry the output's width, and only then may the surface ask
+    /// for width 0.
     pub(crate) fn anchored(&self, visible: bool) -> bool {
-        visible || !self.ever_shown
+        self.hides_in_place || visible || !self.ever_shown
     }
 
     /// Gap between a pop-up (or choices row) and its key at the current
@@ -104,30 +119,62 @@ impl KeyboardGeometry {
     }
 }
 
-/// The keyboard's surface was configured: its width is the output's. Re-lay
-/// the keyboard out if that changes the factor.
+/// The factor at which a keyboard asking for `requested` px, `bottom_gap` of
+/// them fixed, now at `factor`, asks for no more than `granted`. Everything
+/// but the gap scales with the factor; a px of slack covers the rounding up
+/// of the asked height.
+pub(crate) fn fitting_factor(factor: f32, requested: f32, granted: f32, bottom_gap: f32) -> f32 {
+    let scaled = requested - bottom_gap;
+    if scaled <= 0.0 {
+        return factor;
+    }
+    factor * ((granted - bottom_gap - 1.0).max(0.0) / scaled)
+}
+
+/// The keyboard's surface was configured: its width is the output's, and
+/// its height what the compositor could give. A new width re-lays the
+/// keyboard out at its factor, from scratch. A height short of the one
+/// asked for (an output too short for the keyboard at its width) caps the
+/// factor at one that fits it: the keyboard is laid out again, and asks,
+/// for no more height than it has.
 pub(crate) fn on_resized(app: &mut App, e: &Emitted<Resized>) {
-    let window = app.resource::<KeyboardSurface>().window;
-    if !e.targets.contains(&window) {
+    let surface = *app.resource::<KeyboardSurface>();
+    if !e.targets.contains(&surface.window) {
         return;
     }
     let visible = app.keyboard_visible();
-    if !app.resource::<KeyboardGeometry>().anchored(visible) {
+    let mut geometry = *app.resource::<KeyboardGeometry>();
+    if !geometry.anchored(visible) {
         tracing::debug!(
             width = e.event.size.width,
             "keyboard: ignoring a configure of the hidden, unanchored surface"
         );
         return;
     }
-    let before = app.resource::<KeyboardGeometry>().factor();
-    app.resource_mut::<KeyboardGeometry>().output_width = Some(e.event.size.width);
-    let geometry = *app.resource::<KeyboardGeometry>();
+    let before = geometry.factor();
+    if geometry.output_width != Some(e.event.size.width) {
+        geometry.output_width = Some(e.event.size.width);
+        geometry.height_cap = None;
+    }
+    // Less than asked: the output has no room for the keyboard at its width.
+    // A configure for a smaller ask made since gives more. The height asked
+    // was laid out at the factor before this configure, a new width's
+    // included, so the fit scales from that one.
+    if e.event.size.height + 0.5 < surface.height {
+        geometry.height_cap = Some(fitting_factor(
+            before,
+            surface.height,
+            e.event.size.height,
+            surface.bottom_gap,
+        ));
+    }
+    *app.resource_mut::<KeyboardGeometry>() = geometry;
     if geometry.factor() != before {
         tracing::info!(
             output_width = e.event.size.width,
             factor = geometry.factor(),
             height = geometry.style().height,
-            "keyboard: scaled to the output width"
+            "keyboard: scaled to the output"
         );
         relayout(app);
     }
@@ -221,14 +268,58 @@ mod tests {
         (app, window, other)
     }
 
+    /// `target` configured `width` wide, at the height the keyboard asked.
     fn resized(app: &mut App, target: NodeId, width: f32) {
+        let height = app.resource::<KeyboardSurface>().height;
+        resized_to(app, target, width, height);
+    }
+
+    fn resized_to(app: &mut App, target: NodeId, width: f32, height: f32) {
         let e = Emitted {
             event: Resized {
-                size: Size::new(width, 100.0),
+                size: Size::new(width, height),
             },
             targets: target.into(),
         };
         on_resized(app, &e);
+    }
+
+    #[test]
+    fn the_factor_that_fits_asks_for_no_more_than_was_given() {
+        // 391 asked at factor 1, 20 of it the fixed gap; 300 given.
+        let f = fitting_factor(1.0, 391.0, 300.0, 20.0);
+        assert!(f < 1.0);
+        assert!((391.0 - 20.0) * f + 20.0 <= 300.0, "{f}");
+        assert!((391.0 - 20.0) * f + 20.0 >= 298.0, "not much less: {f}");
+    }
+
+    /// Given less height than asked, the keyboard scales down to what it
+    /// was given; a new width starts over from the width alone.
+    #[test]
+    fn a_shorter_configure_caps_the_factor_until_the_width_changes() {
+        let (mut app, window, _) = keyboard_app(true, true);
+        resized_to(&mut app, window, 540.0, 300.0);
+        let g = *app.resource::<KeyboardGeometry>();
+        assert_eq!(g.height_cap, Some(fitting_factor(1.0, 391.0, 300.0, 20.0)));
+        assert!(g.factor() < 1.0);
+
+        resized_to(&mut app, window, 600.0, 391.0);
+        let g = *app.resource::<KeyboardGeometry>();
+        assert_eq!(g.height_cap, None);
+        assert_eq!(g.factor(), 600.0 / 540.0);
+    }
+
+    /// A new width and a shorter height in one configure, as on rotation:
+    /// the height asked was laid out at the old width's factor, so the fit
+    /// scales from that one, not the new width's.
+    #[test]
+    fn a_rotation_given_less_height_fits_from_the_factor_asked_at() {
+        let (mut app, window, _) = keyboard_app(true, true);
+        app.resource_mut::<KeyboardGeometry>().output_width = Some(540.0);
+        resized_to(&mut app, window, 800.0, 360.0);
+        let g = *app.resource::<KeyboardGeometry>();
+        assert_eq!(g.height_cap, Some(fitting_factor(1.0, 391.0, 360.0, 20.0)));
+        assert!(g.factor() < 1.0, "fits 360 px, not the new width's");
     }
 
     #[test]
@@ -261,5 +352,16 @@ mod tests {
         let g = *app.resource::<KeyboardGeometry>();
         assert!(!g.anchored(false));
         assert!(g.anchored(true));
+    }
+
+    /// Hidden in place rather than unmapped, the surface keeps its anchors:
+    /// a configure while hidden after a show counts.
+    #[test]
+    fn a_configure_while_hidden_in_place_counts() {
+        let (mut app, window, _) = keyboard_app(false, true);
+        app.resource_mut::<KeyboardGeometry>().hides_in_place = true;
+        app.resource_mut::<KeyboardGeometry>().output_width = Some(408.0);
+        resized(&mut app, window, 337.5);
+        assert_eq!(app.resource::<KeyboardGeometry>().output_width, Some(337.5));
     }
 }

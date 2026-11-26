@@ -197,6 +197,12 @@ impl Registry {
         self.apps.iter().find(|a| a.entry == Some(entry))
     }
 
+    /// The running app of the entry with desktop id `id`, if it runs.
+    pub fn running_id(&self, id: &str) -> Option<&RunningApp> {
+        let entry = self.entries.iter().position(|e| e.id == id)?;
+        self.running_entry(entry)
+    }
+
     /// A registry holding exactly `entries` and `apps`, for tests of
     /// consumers that need no compositor or scan.
     #[doc(hidden)]
@@ -302,6 +308,7 @@ mod tests {
             parent: None,
             pid: None,
             modal: false,
+            activation_token: None,
             last_activated,
         }
     }

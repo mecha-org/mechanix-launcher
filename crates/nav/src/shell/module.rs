@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use mecha_wayland::prelude::*;
-use screen::AppLaunched;
+use screen::{AppLaunched, LaunchPlaceholderDown, LaunchPlaceholderUp};
 
 use super::apply::{Action, ContainerNodes, Nav, NavWindow, apply, on_resized};
 use super::input::{on_claimed, on_contact};
@@ -19,6 +19,8 @@ pub struct WindowSpec {
     layout: LayoutStyle,
     containers: Vec<ContainerSpec>,
     no_input: bool,
+    takes_keyboard: bool,
+    home: bool,
     clear: Color,
 }
 
@@ -29,6 +31,8 @@ pub fn nav_window(area: AreaId, role: Role, layout: LayoutStyle) -> WindowSpec {
         layout,
         containers: Vec::new(),
         no_input: false,
+        takes_keyboard: false,
+        home: false,
         clear: Color::BLACK,
     }
 }
@@ -44,6 +48,25 @@ impl WindowSpec {
     /// Applied on the window's first `Resized`.
     pub fn no_input(mut self) -> Self {
         self.no_input = true;
+        self
+    }
+
+    /// Takes the keyboard focus while any of its containers is shown: its
+    /// layer surface asks for it exclusively, which a hidden one cannot
+    /// have. A layer window covering the apps takes it from them, so their
+    /// text inputs disable and an input method hides its keyboard; hidden
+    /// again, it gives it back, they enable again and it shows.
+    pub fn takes_keyboard(mut self) -> Self {
+        self.takes_keyboard = true;
+        self
+    }
+
+    /// Is home: a layer window below the apps (on the bottom layer), which
+    /// shows over them while any of its containers is shown, the compositor
+    /// hiding them ([`Surfaces::set_showing_home`]). When an app comes to
+    /// the front by itself, the stack hears [`ExternalEvent::HomeLeft`].
+    pub fn home(mut self) -> Self {
+        self.home = true;
         self
     }
 
@@ -110,23 +133,27 @@ impl Module for NavModule {
                 root_window.insert(c.id, i);
                 roots.push(c);
             }
-            let layer = match &w.role {
-                Role::Layer(l) => Some(l.layer),
-                Role::Toplevel | Role::Lock(_) => None,
-            };
+            let mut role = w.role;
+            if w.takes_keyboard
+                && let Role::Layer(l) = &mut role
+            {
+                l.keyboard_interactivity = KeyboardInteractivity::Exclusive;
+            }
+            let is_layer = matches!(role, Role::Layer(_));
             let node = app
                 .spawn_with(
                     root,
                     window().title(w.area.0).layout(w.layout).clear(w.clear),
-                    (w.role,),
+                    (role,),
                 )
                 .id();
             windows.push(NavWindow {
                 node,
-                layer,
+                is_layer,
                 area: w.area,
                 containers: Vec::new(),
                 no_input: w.no_input,
+                home: w.home,
             });
         }
 
@@ -186,18 +213,55 @@ impl Module for NavModule {
         app.system(on_claimed);
         app.system(on_frame);
         app.insert_resource(SeenToplevels::default());
-        app.system(on_app_launched);
+        app.system(|app: &mut App, _: &AppLaunched| feed(app, ExternalEvent::AppLaunched));
+        app.system(|app: &mut App, _: &LaunchPlaceholderUp| {
+            feed(app, ExternalEvent::LaunchPlaceholderUp)
+        });
+        app.system(|app: &mut App, _: &LaunchPlaceholderDown| {
+            feed(app, ExternalEvent::LaunchPlaceholderDown)
+        });
+        app.system(|app: &mut App, e: &NavExternal| feed(app, e.0));
+        app.system(on_showing_home);
         app.system(on_toplevels_changed);
         apply(app);
     }
 }
 
-/// Feeds a screen's app launch to the stack, which closes what closes on it.
-fn on_app_launched(app: &mut App, _: &AppLaunched) {
-    app.resource_mut::<Nav>()
-        .stack
-        .handle(Input::External(ExternalEvent::AppLaunched));
+/// Signalled by the host for an [`ExternalEvent`] only it can see, such as
+/// [`ExternalEvent::Locked`]: the stack opens and closes what opens and
+/// closes on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NavExternal(pub ExternalEvent);
+impl Signal for NavExternal {}
+
+/// Feeds `e`, a screen's (such as its app launch), the compositor's or the
+/// host's, to the stack, which opens and closes what opens and closes on
+/// it, and shows the result.
+fn feed(app: &mut App, e: ExternalEvent) {
+    handle(app, e);
     apply(app);
+}
+
+/// Feeds `e` to the stack, for a caller that applies once after several.
+fn handle(app: &mut App, e: ExternalEvent) {
+    app.resource_mut::<Nav>().stack.handle(Input::External(e));
+}
+
+/// Feeds the compositor's leaving home by itself, at a home window, to the
+/// stack: an app came to the front, and what shows home closes.
+fn on_showing_home(app: &mut App, e: &Emitted<ShowingHome>) {
+    if e.event.showing {
+        return;
+    }
+    let at_home = {
+        let nav = app.resource::<Nav>();
+        nav.windows
+            .iter()
+            .any(|w| w.home && e.targets.contains(&w.node))
+    };
+    if at_home {
+        feed(app, ExternalEvent::HomeLeft);
+    }
 }
 
 #[derive(Default)]
@@ -248,9 +312,7 @@ fn on_toplevels_changed(app: &mut App, _: &ToplevelsChanged) {
         (last_closed, ExternalEvent::LastWindowClosed),
     ] {
         if happened {
-            app.resource_mut::<Nav>()
-                .stack
-                .handle(Input::External(event));
+            handle(app, event);
         }
     }
     if opened || last_closed || fullscreen_changed {
@@ -292,9 +354,7 @@ pub(crate) fn feed_fullscreen(app: &mut App) {
     } else {
         ExternalEvent::FullscreenLeft
     };
-    app.resource_mut::<Nav>()
-        .stack
-        .handle(Input::External(event));
+    handle(app, event);
 }
 
 #[cfg(test)]
@@ -311,7 +371,7 @@ pub(crate) mod tests {
         AreaId, BOTTOM_EDGE, ContainerId, Direction, ExternalEvent, FADE, INSTANT, Input,
         NavConfig, OnExternal, Timing, container, swipe,
     };
-    use crate::shell::apply::window_layers;
+    use crate::shell::apply::window_hidden;
     use crate::shell::apply::{ContainerShown, Nav, apply};
 
     pub(crate) const HOME_AREA: AreaId = AreaId("home");
@@ -497,24 +557,42 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn hidden_windows_go_to_background_visible_to_their_own_layer() {
+    fn windows_without_a_visible_container_are_hidden() {
         let app = app_with(module(true));
         let nav = app.resource::<Nav>();
         let w = |i: usize| nav.windows[i].node;
         // Home is open; the panel is closed; the strip is never asked.
-        assert_eq!(
-            window_layers(nav),
-            vec![(w(0), Layer::Bottom), (w(2), Layer::Background)]
-        );
+        assert_eq!(window_hidden(nav), vec![(w(0), false), (w(2), true)]);
         let app = app_with(module(false));
         let nav = app.resource::<Nav>();
         assert_eq!(
-            window_layers(nav),
-            vec![
-                (nav.windows[0].node, Layer::Background),
-                (nav.windows[2].node, Layer::Background)
-            ]
+            window_hidden(nav),
+            vec![(nav.windows[0].node, true), (nav.windows[2].node, true)]
         );
+    }
+
+    /// Asked for once: hidden, the window cannot have the focus anyway.
+    #[test]
+    fn only_a_window_that_takes_the_keyboard_asks_for_it() {
+        use KeyboardInteractivity as Ki;
+        let keyboard = |takes: bool, home_open: bool| {
+            let window = nav_window(HOME_AREA, role(Layer::Top, "home"), LayoutStyle::default())
+                .container(home_spec(home_open));
+            let window = if takes {
+                window.takes_keyboard()
+            } else {
+                window
+            };
+            let app = app_with(NavModule::new(NavConfig::default()).window(window));
+            let node = app.resource::<Nav>().windows[0].node;
+            match app.component::<Role>(node) {
+                Some(Role::Layer(role)) => role.keyboard_interactivity,
+                _ => panic!("a layer window"),
+            }
+        };
+        assert_eq!(keyboard(true, true), Ki::Exclusive);
+        assert_eq!(keyboard(true, false), Ki::Exclusive);
+        assert_eq!(keyboard(false, true), Ki::None);
     }
 
     #[test]
@@ -686,12 +764,6 @@ pub(crate) mod tests {
             .no_input(),
         );
         let mut app = app_with(m);
-        let external = |app: &mut App, event| {
-            app.resource_mut::<Nav>()
-                .stack
-                .handle(Input::External(event));
-            apply(app);
-        };
         assert_eq!(display(&app, node_of(&app, BAR)), Display::Flex);
 
         // A fullscreen app takes the focus, nothing over it.
@@ -700,12 +772,12 @@ pub(crate) mod tests {
         assert_eq!(display(&app, node_of(&app, BAR)), Display::Hidden);
 
         // Home over it: the bar is back, though the app keeps the focus.
-        external(&mut app, ExternalEvent::LastWindowClosed);
+        feed(&mut app, ExternalEvent::LastWindowClosed);
         assert_eq!(display(&app, node_of(&app, HOME)), Display::Flex);
         assert_eq!(display(&app, node_of(&app, BAR)), Display::Flex);
 
         // Back to the app: out of the way again.
-        external(&mut app, ExternalEvent::WindowOpened);
+        feed(&mut app, ExternalEvent::WindowOpened);
         assert_eq!(display(&app, node_of(&app, HOME)), Display::Hidden);
         assert_eq!(display(&app, node_of(&app, BAR)), Display::Hidden);
     }
@@ -716,6 +788,77 @@ pub(crate) mod tests {
         let mut app = app_with(module_with(home));
         assert_eq!(display(&app, node_of(&app, HOME)), Display::Flex);
         app.signal(AppLaunched);
+        app.flush();
+        assert_eq!(display(&app, node_of(&app, HOME)), Display::Hidden);
+    }
+
+    /// A screen's launch placeholder signals open and close what opens and
+    /// closes on them.
+    #[test]
+    fn the_launch_placeholder_signals_open_and_close_it() {
+        let home = home_spec(false)
+            .open(OnExternal(ExternalEvent::LaunchPlaceholderUp), INSTANT)
+            .close(OnExternal(ExternalEvent::LaunchPlaceholderDown), INSTANT);
+        let mut app = app_with(module_with(home));
+        assert_eq!(display(&app, node_of(&app, HOME)), Display::Hidden);
+        app.signal(LaunchPlaceholderUp);
+        app.flush();
+        assert_eq!(display(&app, node_of(&app, HOME)), Display::Flex);
+        app.signal(LaunchPlaceholderDown);
+        app.flush();
+        assert_eq!(display(&app, node_of(&app, HOME)), Display::Hidden);
+    }
+
+    /// An external event the host feeds, such as the session locking,
+    /// closes what closes on it.
+    #[test]
+    fn a_fed_external_event_closes_what_closes_on_it() {
+        let home = home_spec(true).close(OnExternal(ExternalEvent::Locked), INSTANT);
+        let mut app = app_with(module_with(home));
+        assert_eq!(display(&app, node_of(&app, HOME)), Display::Flex);
+        app.signal(NavExternal(ExternalEvent::Locked));
+        app.flush();
+        assert_eq!(display(&app, node_of(&app, HOME)), Display::Hidden);
+    }
+
+    /// The compositor leaving home by itself closes it, heard at a home
+    /// window only.
+    #[test]
+    fn home_left_closes_home_heard_at_a_home_window() {
+        let home = home_spec(true).close(OnExternal(ExternalEvent::HomeLeft), INSTANT);
+        let m = NavModule::new(NavConfig::default())
+            .window(
+                nav_window(
+                    HOME_AREA,
+                    role(Layer::Bottom, "home"),
+                    LayoutStyle::default(),
+                )
+                .container(home)
+                .home(),
+            )
+            .window(nav_window(
+                BOTTOM_EDGE,
+                role(Layer::Top, "bottom-edge"),
+                LayoutStyle::default(),
+            ));
+        let mut app = app_with(m);
+        let (home_window, edge) = {
+            let nav = app.resource::<Nav>();
+            (nav.windows[0].node, nav.windows[1].node)
+        };
+        app.emit(ShowingHome { showing: false }, edge);
+        app.flush();
+        assert_eq!(
+            display(&app, node_of(&app, HOME)),
+            Display::Flex,
+            "not home"
+        );
+
+        app.emit(ShowingHome { showing: true }, home_window);
+        app.flush();
+        assert_eq!(display(&app, node_of(&app, HOME)), Display::Flex);
+
+        app.emit(ShowingHome { showing: false }, home_window);
         app.flush();
         assert_eq!(display(&app, node_of(&app, HOME)), Display::Hidden);
     }

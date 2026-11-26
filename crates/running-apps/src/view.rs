@@ -1,16 +1,18 @@
-//! The screen: a row of cards kept in step with the registry,
-//! and the previews that go with them while it is shown.
+//! The screen: a row of cards kept in step with the apps starting and the
+//! registry, and the previews that go with them while it is shown.
 
 use std::rc::Rc;
 
-use apps::{AppKey, IconCache, IconDirs, Registry, RegistryChanged, RowIcon, RunningApp};
+use apps::{
+    IconCache, IconDirs, Launch, Launches, LaunchesChanged, Registry, RegistryChanged, RowIcon,
+};
 use mecha_wayland::mechanix_widgets::{self as mw, TextWrap};
 use mecha_wayland::prelude::*;
 use screen::{Hidden, Shown};
 
 use crate::card::{
-    self, Activate, Card, CardBuilder, CloseWindows, ForceClose, HEADER, SIDE, WindowsChanged,
-    hole_style,
+    self, Activate, Card, CardBuilder, CardKey, CloseWindows, ForceClose, HEADER, SIDE,
+    WindowsChanged, hole_style,
 };
 use crate::thumbs::{Place, ThumbKey, ThumbSink};
 use crate::{Killer, WindowAction};
@@ -159,7 +161,8 @@ pub(crate) fn install(
     if first {
         app.system(on_shown)
             .system(on_hidden)
-            .system(on_registry)
+            .system(|app: &mut App, _: &RegistryChanged| sync_all(app))
+            .system(|app: &mut App, _: &LaunchesChanged| sync_all(app))
             .system(fit_holes)
             .system(|app: &mut App, e: &Activate| {
                 let f = app.resource::<Hooks>().activator.clone();
@@ -222,63 +225,73 @@ fn on_hidden(app: &mut App, e: &Emitted<Hidden>) {
     }
 }
 
-fn on_registry(app: &mut App, _: &RegistryChanged) {
+fn sync_all(app: &mut App) {
     for view in views(app) {
         sync(app, view);
     }
 }
 
-/// One running app as the registry has it, as a card shows it.
+/// One app starting or running, as a card shows it.
 struct Want {
-    key: AppKey,
+    key: CardKey,
     name: String,
     icon: RowIcon,
-    front: ToplevelId,
+    front: Option<ToplevelId>,
     windows: Vec<ToplevelId>,
     dialogs: Vec<ToplevelId>,
     modal: bool,
     pids: Vec<u32>,
 }
 
-fn wanted(app: &mut App, view: NodeId) -> Vec<Want> {
-    if !app.has_resource::<Registry>() {
-        return Vec::new();
+impl Want {
+    /// An app starting: no windows yet.
+    fn starting(launch: &Launch) -> Want {
+        Want {
+            key: CardKey::Launch(launch.id),
+            name: launch.app.name.clone(),
+            icon: launch.icon,
+            front: None,
+            windows: Vec::new(),
+            dialogs: Vec::new(),
+            modal: false,
+            pids: Vec::new(),
+        }
     }
-    let dirs = app.widget::<View>(view).unwrap().icon_dirs.clone();
-    // Each app with the name and icon file its card shows.
-    let found: Vec<(RunningApp, String, Option<apps::IconFile>)> = {
-        let registry = app.resource::<Registry>();
-        registry
-            .apps()
-            .iter()
-            .map(|a| {
-                let entry = a.entry.and_then(|i| registry.entries().get(i));
-                let name = entry.map_or_else(|| a.title.clone(), |e| e.name.clone());
-                let file = entry
-                    .and_then(|e| e.icon.as_deref())
-                    .and_then(|i| dirs.find(i));
-                (a.clone(), name, file)
-            })
-            .collect()
-    };
-    let (mut atlas, mut cache) = app.query::<(ResMut<Atlas>, ResMut<IconCache>)>();
-    found
-        .into_iter()
-        .map(|(a, name, file)| Want {
-            key: a.key,
-            name,
-            icon: cache.get(&mut atlas, file.as_ref()),
-            front: a.front,
-            windows: a.windows,
-            dialogs: a.dialogs,
-            modal: a.modal,
-            pids: a.pids,
-        })
-        .collect()
 }
 
-/// Brings the cards in line with the registry and, while shown, the
-/// previews in line with the cards.
+/// The apps starting, newest first, then the running apps in the
+/// registry's order.
+fn wanted(app: &mut App, view: NodeId) -> Vec<Want> {
+    let dirs = app.widget::<View>(view).unwrap().icon_dirs.clone();
+    let mut wants = Vec::new();
+    if app.has_resource::<Launches>() {
+        wants.extend(app.resource::<Launches>().iter().map(Want::starting));
+    }
+    if app.has_resource::<Registry>() {
+        let (registry, mut atlas, mut cache) =
+            app.query::<(Res<Registry>, ResMut<Atlas>, ResMut<IconCache>)>();
+        wants.extend(registry.apps().iter().map(|a| {
+            let entry = a.entry.and_then(|i| registry.entries().get(i));
+            let file = entry
+                .and_then(|e| e.icon.as_deref())
+                .and_then(|i| dirs.find(i));
+            Want {
+                key: CardKey::App(a.key.clone()),
+                name: entry.map_or_else(|| a.title.clone(), |e| e.name.clone()),
+                icon: cache.get(&mut atlas, file.as_ref()),
+                front: Some(a.front),
+                windows: a.windows.clone(),
+                dialogs: a.dialogs.clone(),
+                modal: a.modal,
+                pids: a.pids.clone(),
+            }
+        }));
+    }
+    wants
+}
+
+/// Brings the cards in line with the apps starting and the registry and,
+/// while shown, the previews in line with the cards.
 fn sync(app: &mut App, view: NodeId) {
     let want = wanted(app, view);
     let sink = app.widget::<View>(view).unwrap().thumbs.clone();
@@ -312,7 +325,7 @@ fn sync(app: &mut App, view: NodeId) {
             card::set_pids(app, slot.card, w.pids.clone());
         }
     } else {
-        let closing: Vec<(AppKey, card::Closing)> = kept
+        let closing: Vec<(CardKey, card::Closing)> = kept
             .iter()
             .filter_map(|s| app.widget::<Card>(s.card))
             .filter_map(|c| Some((c.key().clone(), c.closing_state()?)))
@@ -402,7 +415,8 @@ fn sync_thumbs(app: &mut App, view: NodeId) {
             .iter()
             .enumerate()
             .filter_map(|(i, s)| {
-                let front = app.widget::<Card>(s.card)?.front;
+                // An app starting has no window to preview yet.
+                let front = app.widget::<Card>(s.card)?.front?;
                 match s.thumb {
                     Some((_, shown)) if shown == front => None,
                     Some((key, _)) => Some((i, Some(key), front)),
@@ -427,14 +441,14 @@ fn sync_thumbs(app: &mut App, view: NodeId) {
     }
 }
 
-/// The preview box keeps the window's aspect: apps on the phone fill the
-/// output, and this screen's window does too. A card takes most of the
-/// width, narrower when header and box would not fit the height. With no
-/// previews to show (a compositor without thumbnail views) there is no
-/// box: the cards are headers only.
+/// The preview box keeps this screen's aspect: apps on the phone fill the
+/// area below the status bar, and this screen does too. A card takes most
+/// of the width, narrower when header and box would not fit the height.
+/// With no previews to show (a compositor without thumbnail views) there is
+/// no box: the cards are headers only.
 fn fit_holes(app: &mut App, _: &LayoutDone) {
     for view in views(app) {
-        let Some(size) = window_size(app, view) else {
+        let Some(size) = view_size(app, view) else {
             continue;
         };
         let aspect = size.height / size.width;
@@ -462,9 +476,10 @@ fn fit_holes(app: &mut App, _: &LayoutDone) {
     }
 }
 
-fn window_size(app: &App, view: NodeId) -> Option<Size> {
-    let window = app.component::<InWindow>(view).and_then(|w| w.0)?;
-    let rect = app.component::<ComputedLayout>(window)?.rect;
+/// The screen's own box: the area an app gets, which its window, laid
+/// over the status bar too, is not.
+fn view_size(app: &App, view: NodeId) -> Option<Size> {
+    let rect = app.component::<ComputedLayout>(view)?.rect;
     (rect.width() > 0.0 && rect.height() > 0.0).then(|| Size::new(rect.width(), rect.height()))
 }
 
@@ -479,7 +494,7 @@ pub(crate) fn place_thumbnails(app: &mut App, f: &Frame) {
         if !v.shown || app.component::<InWindow>(view).and_then(|w| w.0) != Some(f.0) {
             continue;
         }
-        let Some(size) = window_size(app, view) else {
+        let Some(size) = view_size(app, view) else {
             continue;
         };
         let sink = v.thumbs.clone();

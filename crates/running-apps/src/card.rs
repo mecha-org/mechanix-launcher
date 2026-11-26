@@ -1,8 +1,10 @@
-//! One running app: a header (icon, name, ✕) over the preview hole.
+//! One running app: a header (icon, name, ✕) over the preview hole. Or
+//! one app starting: its icon where the preview goes, until its window
+//! comes.
 
 use std::time::Duration;
 
-use apps::{AppKey, RowIcon};
+use apps::{AppKey, LaunchId, RowIcon, ShowLaunch, StopLaunch};
 use mecha_wayland::mechanix_widgets::{self as mw, TextWrap};
 use mecha_wayland::prelude::*;
 use screen::AppLaunched;
@@ -16,6 +18,8 @@ pub(crate) const SIDE: f32 = 24.0;
 pub(crate) const GAP: f32 = 24.0;
 pub(crate) const HEADER: f32 = 56.0;
 const ICON: f32 = 32.0;
+/// A starting app's icon, in its preview's place.
+const LAUNCH_ICON: f32 = 96.0;
 const NAME_PX: f32 = 20.0;
 /// The ✕'s touch target.
 const CLOSE: f32 = 48.0;
@@ -43,6 +47,15 @@ impl Signal for CloseWindows {}
 /// Asks the screen's hooks to kill these processes.
 pub(crate) struct ForceClose(pub Vec<u32>);
 impl Signal for ForceClose {}
+
+/// What a card is for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CardKey {
+    /// A running app.
+    App(AppKey),
+    /// An app starting.
+    Launch(LaunchId),
+}
 
 /// The app's windows changed: a closing card looks for a new dialog.
 pub(crate) struct WindowsChanged;
@@ -73,12 +86,13 @@ impl Closing {
 }
 
 pub(crate) struct CardBuilder {
-    pub key: AppKey,
+    pub key: CardKey,
     pub name: String,
     pub icon: RowIcon,
     pub cross: SpriteId,
     pub skull: SpriteId,
-    pub front: ToplevelId,
+    /// The window to bring forward; `None` for an app starting.
+    pub front: Option<ToplevelId>,
     pub windows: Vec<ToplevelId>,
     pub dialogs: Vec<ToplevelId>,
     /// One of the dialogs is modal.
@@ -104,10 +118,10 @@ struct Drag {
 }
 
 pub(crate) struct Card {
-    key: AppKey,
+    key: CardKey,
     name: String,
     icon: RowIcon,
-    pub(crate) front: ToplevelId,
+    pub(crate) front: Option<ToplevelId>,
     pub(crate) windows: Vec<ToplevelId>,
     pub(crate) dialogs: Vec<ToplevelId>,
     pub(crate) modal: bool,
@@ -130,7 +144,7 @@ pub(crate) struct Card {
 }
 
 impl Card {
-    pub(crate) fn key(&self) -> &AppKey {
+    pub(crate) fn key(&self) -> &CardKey {
         &self.key
     }
 
@@ -143,7 +157,7 @@ impl Card {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn front(&self) -> ToplevelId {
+    pub(crate) fn front(&self) -> Option<ToplevelId> {
         self.front
     }
 
@@ -209,6 +223,7 @@ fn card_style(dy: f32, width: f32) -> LayoutStyle {
 
 pub(crate) fn hole_style(height: f32) -> LayoutStyle {
     LayoutStyle::default()
+        .center()
         .width(percent(100.0))
         .height(px(height))
         .shrink(0.0)
@@ -231,22 +246,7 @@ impl Widget for Card {
                     .padding(Insets::new(px(0.0), px(4.0), px(0.0), px(12.0))),
             ),
         );
-        let size = LayoutStyle::default().size(px(ICON), px(ICON)).shrink(0.0);
-        match b.icon {
-            RowIcon::Image(sprite) => {
-                s.spawn(header, image(sprite).style(size));
-            }
-            RowIcon::Glyph(sprite) => {
-                let color = s.color(ColorRole::OnSurfaceVariant);
-                s.spawn(
-                    header,
-                    icon(sprite)
-                        .size(Size::new(ICON, ICON))
-                        .color(color)
-                        .style(size),
-                );
-            }
-        }
+        b.icon.spawn(s, header, ICON);
         let label = s.spawn(
             header,
             div().style(
@@ -293,8 +293,20 @@ impl Widget for Card {
         let close = s.spawn(actions, div().style(button()));
         s.spawn(close, icon(b.cross).color(cross_color));
 
-        // Paints nothing: the compositor draws the preview here.
-        let hole = s.spawn(me, div().style(hole_style(b.hole_height)));
+        // Paints nothing: the compositor draws the preview here. An app
+        // starting has none yet: its icon shows instead.
+        let hole = match b.key {
+            CardKey::App(_) => s.spawn(me, div().style(hole_style(b.hole_height))),
+            CardKey::Launch(_) => {
+                let surface = s.color(ColorRole::Surface);
+                let hole = s.spawn(
+                    me,
+                    div().background(surface).style(hole_style(b.hole_height)),
+                );
+                b.icon.spawn(s, hole, LAUNCH_ICON);
+                hole
+            }
+        };
 
         // Over everything: fades the card toward the screen's black.
         let veil = s.spawn(
@@ -450,16 +462,22 @@ pub(crate) fn reset_gesture(app: &mut App, card: NodeId) {
 /// ✕ and swipe-away: every window is asked to close; the card dims and
 /// ignores input until the registry drops it, or the app stays open. An
 /// app with a modal dialog open is asking something already: it comes to
-/// the front on the dialog instead, and nothing is closed.
+/// the front on the dialog instead, and nothing is closed. An app starting
+/// is stopped; its card goes with its launch.
 fn close_app(ctx: &mut Context<'_, Card>) {
     if ctx.me().closing.is_some() {
+        return;
+    }
+    if let CardKey::Launch(launch) = ctx.me().key {
+        ctx.signal(StopLaunch(launch));
         return;
     }
     if ctx.me().modal {
         ctx.me().dy = 0.0;
         restyle(ctx);
-        let front = ctx.me().front;
-        bring_forward(ctx, front);
+        if let Some(front) = ctx.me().front {
+            bring_forward(ctx, front);
+        }
         return;
     }
     let dialogs = ctx.me().dialogs.clone();
@@ -513,17 +531,26 @@ fn still_open(ctx: &mut Context<'_, Card>, dialog: Option<ToplevelId>) {
     };
     ctx.cancel_timer(wait);
     restyle(ctx);
-    if ctx.widget::<View>(view).is_some_and(View::shown) {
-        bring_forward(ctx, dialog.unwrap_or(front));
+    if ctx.widget::<View>(view).is_some_and(View::shown)
+        && let Some(window) = dialog.or(front)
+    {
+        bring_forward(ctx, window);
     }
 }
 
+/// To the app: its front window, or for an app starting, its placeholder.
 fn tap(ctx: &mut Context<'_, Card>) {
     if std::mem::take(&mut ctx.me().swallow_click) || ctx.me().closing.is_some() {
         return;
     }
-    let front = ctx.me().front;
-    bring_forward(ctx, front);
+    if let CardKey::Launch(launch) = ctx.me().key {
+        ctx.signal(ShowLaunch(launch));
+        ctx.signal(AppLaunched);
+        return;
+    }
+    if let Some(front) = ctx.me().front {
+        bring_forward(ctx, front);
+    }
 }
 
 fn on_press(ctx: &mut Context<'_, Card>, e: &Press) {

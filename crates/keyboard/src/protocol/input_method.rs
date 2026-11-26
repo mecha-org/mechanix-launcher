@@ -14,7 +14,6 @@ use mecha_wayland::prelude::*;
 use crate::complete::TextEdit;
 use crate::predict::TypingContext;
 use crate::visibility::KeyboardVisibilityExt;
-use crate::zone::ExclusiveZone;
 
 /// The text-input context the compositor reports for the focused field.
 ///
@@ -277,26 +276,12 @@ fn on_input_method_event(app: &mut App, event: &ZwpInputMethodV2Event) {
             ctx.set_surrounding(&text, cursor);
         }
     }
-    // Under the host's own screens, an activation shows the keyboard only
-    // for the host's field: an app beneath that gets keyboard focus back
-    // re-enables its text input too, and must not bring the keyboard up.
-    if apply_visible == Some(true) && !may_show(app) {
-        return;
-    }
     if let Some(focused) = focused {
         app.signal(focused);
     }
     if let Some(visible) = apply_visible {
         app.set_keyboard_visibility(visible);
     }
-}
-
-/// Whether an activation may show the keyboard: always over apps; while
-/// [`suspend_keyboard_zone`](crate::suspend_keyboard_zone) holds (the host's
-/// screens cover the apps), only when the host's own text field has focus.
-fn may_show(app: &App) -> bool {
-    let covered = app.has_resource::<ExclusiveZone>() && app.resource::<ExclusiveZone>().suspended;
-    !covered || (app.has_resource::<TextInput>() && app.resource::<TextInput>().focused().is_some())
 }
 
 #[cfg(test)]
@@ -359,21 +344,6 @@ mod tests {
         let mut app = app();
         send(&mut app, &[activate, done]);
         app.set_keyboard_visibility(false);
-        send(&mut app, &[activate, done]);
-        assert!(app.keyboard_visible());
-    }
-
-    #[test]
-    fn an_app_under_the_hosts_screens_cannot_bring_it_up() {
-        let mut app = app();
-        app.insert_resource(ExclusiveZone {
-            suspended: true,
-            ..Default::default()
-        });
-        send(&mut app, &[activate, done]);
-        assert!(!app.keyboard_visible());
-
-        app.resource_mut::<ExclusiveZone>().suspended = false;
         send(&mut app, &[activate, done]);
         assert!(app.keyboard_visible());
     }

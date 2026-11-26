@@ -13,12 +13,22 @@ use super::{AreaId, EXTERNAL};
 pub enum ExternalEvent {
     /// A screen started an app.
     AppLaunched,
+    /// An app's launch placeholder is to show.
+    LaunchPlaceholderUp,
+    /// The launch placeholder is to go: its launch is over, or a window came
+    /// up under it.
+    LaunchPlaceholderDown,
     /// A new app window, not a dialog, opened with focus, however it was
     /// started.
     WindowOpened,
     /// The last app window closed, however it went: nothing is left to
     /// show but the shell.
     LastWindowClosed,
+    /// The compositor stopped showing home by itself: an app came to the
+    /// front over it, activated or newly opened.
+    HomeLeft,
+    /// The session locked: the lock screen covers everything until unlock.
+    Locked,
     /// A fullscreen app is what shows: the focused window is fullscreen
     /// and no shell view covers it.
     FullscreenEntered,
