@@ -1,7 +1,13 @@
 use mecha_wayland::prelude::*;
 
-use super::interface::{ARTIST, METADATA, PAUSED, PLAYBACK_STATUS, PLAYING, TITLE};
-use super::types::{PlaybackStatus, Track};
+use super::interface::{ART_URL, ARTIST, METADATA, PAUSED, PLAYBACK_STATUS, PLAYING, TITLE};
+use super::types::{PlaybackStatus, PlayerId, Track};
+
+impl From<BusName> for PlayerId {
+    fn from(name: BusName) -> Self {
+        Self(name)
+    }
+}
 
 impl From<&PropMap> for PlaybackStatus {
     fn from(props: &PropMap) -> Self {
@@ -21,6 +27,7 @@ impl From<&PropMap> for Track {
         Track {
             title: text(&metadata, TITLE),
             artists: list(&metadata, ARTIST),
+            art_url: text(&metadata, ART_URL),
         }
     }
 }
