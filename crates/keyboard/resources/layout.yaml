@@ -79,7 +79,7 @@ views:
         more_keys: symbols
         rows:
             - "1 2 3 4 5 6 7 8 9 0"
-            - "[5] @ # $ % & - + ( ) [5]"
+            - "@ # $ % & pointing_stick - + ( )"
             - "to_more_symbols * \" ' : ; ! ? BackSpace"
             - "to_letters comma _ space_short / . Return"
     more_symbols:
@@ -88,7 +88,7 @@ views:
         more_keys: symbols
         rows:
             - "~ ` | • √ π ÷ × ¶ ∆"
-            - "[5] £ ¢ € ¥ ^ ° = { } [5]"
+            - "£ ¢ € ¥ ^ pointing_stick ° = { }"
             - "to_symbols \\ © ® ™ § [ ] BackSpace"
             - "to_letters comma < space_short > . Return"
     # Emoji pages, one per category, all `page: emoji`. Any key here without
