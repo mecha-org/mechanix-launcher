@@ -146,7 +146,7 @@ fn error_rate_cfg<S: AsRef<str>>(words: &[S], cfg: Cfg, noise: f32, seed: u64) -
     let (mut wrong, mut total) = (0usize, 0usize);
     for word in words {
         let word = word.as_ref();
-        for (i, c) in word.chars().enumerate() {
+        for (i, c) in word.char_indices() {
             let target = keys.iter().position(|k| k.letter == Some(c)).unwrap();
             let r = keys[target].rect;
             let p = Point {

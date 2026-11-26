@@ -83,7 +83,6 @@ pub(crate) fn ensure_input_region(app: &mut App, _: &PostTick) {
     let (mut surfaces, mut wl) = app.query::<(ResMut<Surfaces>, ResMut<Wayland>)>();
     if surfaces.is_mapped(surface.window) {
         surfaces.set_input_region(surface.window, Some(&[surface.input_rect()]), &mut wl);
-        drop((surfaces, wl));
         app.resource_mut::<InputRegion>().applied = true;
     }
 }
