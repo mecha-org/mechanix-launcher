@@ -1,8 +1,9 @@
 #%PAM-1.0
 # The PIN itself, with faillock as in system-auth. Its own stack, so lines
-# added to mechanix-pin never land inside the jump below.
+# added to mechanix-pin never land inside the jump below. No PIN set ends
+# it as unavailable, not counted as a failure.
 # Install to /etc/pam.d/mechanix-pin-check.
-auth     required                 pam_faillock.so  preauth
-auth     [success=1 default=bad]  pam_pwdfile.so   pwdfile=/etc/mechanix/pin.passwd
-auth     [default=die]            pam_faillock.so  authfail
-auth     required                 pam_faillock.so  authsucc
+auth     required                                      pam_faillock.so  preauth
+auth     [success=1 authinfo_unavail=die default=bad]  pam_pwdfile.so   pwdfile=/etc/mechanix/pin.passwd
+auth     [default=die]                                 pam_faillock.so  authfail
+auth     required                                      pam_faillock.so  authsucc
