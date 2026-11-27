@@ -143,7 +143,7 @@ impl Board for Kb<'_, '_> {
         } else {
             0
         };
-        Some(ChoicesRow::open_at(key.rect, bounds, gap, choices, anchor))
+        Some(ChoicesRow::open(key.rect, bounds, gap, choices, anchor))
     }
     fn is_pointing_stick(&mut self, index: usize) -> bool {
         let me = self.0.me();
@@ -426,7 +426,7 @@ pub(crate) fn bar_long_pressed(ctx: &mut Context<'_, Keyboard>) {
     );
     let gap = ctx.me().popup_gap;
     let anchor = skin_tone::choice_of(ctx.resource::<Emoji>().skin_tone());
-    let row = ChoicesRow::open_at(anchor_rect, bounds, gap, choices, anchor);
+    let row = ChoicesRow::open(anchor_rect, bounds, gap, choices, anchor);
     ctx.me().touch.bar_row = Some(row.clone());
     show_emoji_row(ctx, &row);
 }
@@ -883,6 +883,7 @@ mod tests {
             Rect::new(0.0, 0.0, 400.0, 200.0),
             4.0,
             vec!["1".into()],
+            0,
         );
         t.long_pressed(A, row);
         assert_eq!(
