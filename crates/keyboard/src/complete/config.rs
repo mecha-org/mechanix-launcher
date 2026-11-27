@@ -34,6 +34,27 @@ pub(crate) const UNDO_WINDOW: Duration = Duration::from_secs(3);
 /// fields where that fits; never in addresses).
 pub(crate) const APPEND_SPACE: bool = false;
 
+/// Whether a word that is almost certainly misspelled is corrected by itself
+/// when a space or punctuation ends it (in text fields; never in addresses).
+pub(crate) const AUTOCORRECT: bool = true;
+
+/// Words shorter than this (in chars) are never autocorrected: too short to
+/// be sure of.
+pub(crate) const AUTOCORRECT_MIN_LEN: usize = 3;
+
+/// Punctuation that ends a word and so autocorrects it, as whitespace does.
+/// Not `'` (inside words), nor `-`, `/`, `@`, `_` and the like, which join
+/// parts of one token.
+const WORD_ENDERS: &[char] = &['.', ',', '!', '?', ';', ':', ')', ']', '}', '"'];
+
+/// Whether typing `text` right after a word ends that word, autocorrecting
+/// it: it starts with whitespace or with sentence punctuation.
+pub(crate) fn ends_word(text: &str) -> bool {
+    text.chars()
+        .next()
+        .is_some_and(|c| c.is_whitespace() || WORD_ENDERS.contains(&c))
+}
+
 /// Completion settings.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CompletionConfig {
@@ -45,6 +66,9 @@ pub(crate) struct CompletionConfig {
     /// Whether accepting a suggestion types a space after it; see
     /// [`APPEND_SPACE`].
     pub(crate) append_space: bool,
+    /// Whether misspelled words are corrected as they end; see
+    /// [`AUTOCORRECT`].
+    pub(crate) autocorrect: bool,
 }
 
 impl CompletionConfig {
@@ -61,6 +85,7 @@ impl CompletionConfig {
             backend,
             max: 3,
             append_space: APPEND_SPACE,
+            autocorrect: AUTOCORRECT,
         }
     }
 }
@@ -70,20 +95,28 @@ impl CompletionConfig {
 pub(crate) struct Policy {
     /// Whether accepting a suggestion types a space after it.
     pub(crate) append_space: bool,
+    /// Whether a misspelled word is corrected by itself as it ends.
+    pub(crate) autocorrect: bool,
 }
 
-/// The policy for `field`, a space following accepted words where it fits
-/// if `append_space`; `None` means no suggestions, and no bar. Sensitive
-/// fields never get any; nor do terminals, numbers and phones.
-pub(crate) fn policy(field: Field, append_space: bool) -> Option<Policy> {
+/// The policy for `field` under `cfg`: a space after accepted words and
+/// autocorrection where they fit, if `cfg` asks for them. `None` means no
+/// suggestions, and no bar. Sensitive fields never get any; nor do
+/// terminals, numbers and phones.
+pub(crate) fn policy(field: Field, cfg: &CompletionConfig) -> Option<Policy> {
     if field.sensitive {
         return None;
     }
     match field.family {
-        Family::Text => Some(Policy { append_space }),
-        // An address goes on after a completed part (`.`, `@`, `/`).
+        Family::Text => Some(Policy {
+            append_space: cfg.append_space,
+            autocorrect: cfg.autocorrect,
+        }),
+        // An address goes on after a completed part (`.`, `@`, `/`), and
+        // its parts are names, not dictionary words.
         Family::Email | Family::Url => Some(Policy {
             append_space: false,
+            autocorrect: false,
         }),
         _ => None,
     }
@@ -124,45 +157,73 @@ mod tests {
         Field { family, sensitive }
     }
 
+    fn cfg(append_space: bool, autocorrect: bool) -> CompletionConfig {
+        CompletionConfig {
+            append_space,
+            autocorrect,
+            ..CompletionConfig::hardcoded()
+        }
+    }
+
     #[test]
     fn no_space_by_default() {
         assert!(!CompletionConfig::hardcoded().append_space);
     }
 
     #[test]
-    fn text_gets_a_space_only_when_configured() {
+    fn autocorrect_by_default() {
+        assert!(CompletionConfig::hardcoded().autocorrect);
+    }
+
+    #[test]
+    fn text_gets_a_space_and_autocorrection_only_when_configured() {
         for space in [true, false] {
+            for autocorrect in [true, false] {
+                assert_eq!(
+                    policy(field(Family::Text, false), &cfg(space, autocorrect)),
+                    Some(Policy {
+                        append_space: space,
+                        autocorrect,
+                    })
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn addresses_never_get_a_space_or_autocorrection() {
+        for f in [Family::Email, Family::Url] {
             assert_eq!(
-                policy(field(Family::Text, false), space),
+                policy(field(f, false), &cfg(true, true)),
                 Some(Policy {
-                    append_space: space
+                    append_space: false,
+                    autocorrect: false,
                 })
             );
         }
     }
 
     #[test]
-    fn addresses_never_get_a_space() {
-        for f in [Family::Email, Family::Url] {
-            assert_eq!(
-                policy(field(f, false), true),
-                Some(Policy {
-                    append_space: false
-                })
-            );
+    fn spaces_and_sentence_punctuation_end_words() {
+        for t in [" ", "\n", ".", ",", "!", "?", ";", ":", ")", "\"", ". "] {
+            assert!(ends_word(t), "{t:?}");
+        }
+        for t in ["", "a", "'", "-", "/", "@", "_", "1"] {
+            assert!(!ends_word(t), "{t:?}");
         }
     }
 
     #[test]
     fn sensitive_terminal_number_and_phone_get_none() {
-        assert_eq!(policy(field(Family::Text, true), true), None);
+        let cfg = cfg(true, true);
+        assert_eq!(policy(field(Family::Text, true), &cfg), None);
         for f in [
             Family::Password,
             Family::Terminal,
             Family::Number,
             Family::Phone,
         ] {
-            assert_eq!(policy(field(f, false), true), None, "{f:?}");
+            assert_eq!(policy(field(f, false), &cfg), None, "{f:?}");
         }
     }
 }

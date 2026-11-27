@@ -12,7 +12,7 @@
 use mecha_wayland::prelude::*;
 use xkbcommon::xkb::Keysym;
 
-use crate::complete::Completion;
+use crate::complete::{Completion, TextEdit};
 use crate::field::Field;
 use crate::layout::{KeyAction, Modifier, Page};
 use crate::modifiers::latch::{LatchedState, consume_latch, toggle_latch};
@@ -49,12 +49,9 @@ pub(crate) fn dispatch(ctx: &mut Context<'_, Keyboard>, action: &KeyAction, time
             // forces the keycode path — IM2 commits plain text and would drop
             // the modifier.
             let text = virtual_keyboard::keysym_text(*ks);
-            if commits_as_text(latched_mask, text.as_deref())
-                && let Some(text) = &text
-                && im_commit_text(ctx, text)
-            {
-                tracing::info!(input = %text, "input method");
-            } else {
+            let typed = commits_as_text(latched_mask, text.as_deref())
+                && text.as_deref().is_some_and(|text| type_text(ctx, text));
+            if !typed {
                 vk_emit_keysym(ctx, *ks, latched_mask);
             }
             consume_latch(ctx);
@@ -62,6 +59,8 @@ pub(crate) fn dispatch(ctx: &mut Context<'_, Keyboard>, action: &KeyAction, time
                 shift::typed_letter(ctx);
             }
             match text {
+                // `type_text` noted it.
+                _ if typed => {}
                 Some(text) if latched_mask == 0 => note_text(ctx, &text),
                 Some(_) => ctx.resource_mut::<TypingContext>().clear(),
                 None => note_control(ctx, *ks),
@@ -71,9 +70,8 @@ pub(crate) fn dispatch(ctx: &mut Context<'_, Keyboard>, action: &KeyAction, time
             let (text, letter) = shifted_text(text, ctx.resource::<Shift>().state());
             let text = &text;
             let latched_mask = latched_mask(ctx);
-            if commits_as_text(latched_mask, Some(text)) && im_commit_text(ctx, text) {
-                tracing::info!("Input method: {text}");
-            } else {
+            let typed = commits_as_text(latched_mask, Some(text)) && type_text(ctx, text);
+            if !typed {
                 for ks in text_keysyms(text) {
                     vk_emit_keysym(ctx, ks, latched_mask);
                 }
@@ -82,7 +80,9 @@ pub(crate) fn dispatch(ctx: &mut Context<'_, Keyboard>, action: &KeyAction, time
             if letter {
                 shift::typed_letter(ctx);
             }
-            if latched_mask == 0 {
+            if typed {
+                // `type_text` noted it.
+            } else if latched_mask == 0 {
                 note_text(ctx, text);
             } else {
                 ctx.resource_mut::<TypingContext>().clear();
@@ -278,32 +278,78 @@ pub(crate) fn accept_suggestion(ctx: &mut Context<'_, Keyboard>, index: usize) {
     let Some(suggestion) = ctx.resource::<Completion>().get(index).cloned() else {
         return;
     };
-    let sent = {
-        let (st, mut wl) = ctx.fetch::<(Res<InputMethodState>, ResMut<Wayland>)>();
-        input_method::apply_edit(st, &mut wl, &suggestion.edit)
-    };
-    if !sent {
+    if !replace_word(ctx, &suggestion.edit, "") {
         tracing::warn!("suggestion tapped with no active input method; ignored");
         return;
     }
     // No haptic here: the touch gave one when it landed on the suggestion,
     // as a key's press does.
     tracing::info!(word = %suggestion.label, kind = ?suggestion.kind, "accepted suggestion");
-    let (words, original, rev) = {
-        let mut typing = ctx.resource_mut::<TypingContext>();
-        let original = format!("{}{}", typing.prefix(), typing.word_after());
-        let words = typing.replaced_word(&suggestion.edit.insert);
-        (words, original, typing.local_rev())
-    };
-    ctx.resource_mut::<Completion>()
-        .remember_undo(original, suggestion.edit.insert.clone(), rev);
-    record(ctx, words);
     shift::typed_letter(ctx);
 }
 
-/// Take back the last accepted suggestion, if a backspace now may (see
-/// [`Completion::take_undo`]): the suggestion's text is replaced by the word
-/// as it was typed, the caret after it. Returns whether it did.
+/// Type printable `text` through the input method (no modifier latched)
+/// and note it in the typing context. If `text` ends a word that is almost
+/// certainly misspelled ([`Completion::autocorrection`]), the same commit
+/// replaces that word with its correction, which a backspace right after
+/// takes back. Returns `false`, having typed and noted nothing, when the
+/// input method is not active.
+fn type_text(ctx: &mut Context<'_, Keyboard>, text: &str) -> bool {
+    let fix = {
+        let (mut completion, typing, st) = ctx.fetch::<(
+            ResMut<Completion>,
+            Res<TypingContext>,
+            Res<InputMethodState>,
+        )>();
+        completion.autocorrection(typing, st, text)
+    };
+    match fix {
+        Some(fix) if replace_word(ctx, &fix, text) => {
+            tracing::info!(input = %fix.insert, "autocorrected");
+        }
+        // Not sent: the input method is inactive, and a plain commit would
+        // fail too.
+        Some(_) => return false,
+        None => {
+            if !im_commit_text(ctx, text) {
+                return false;
+            }
+            tracing::info!(input = %text, "input method");
+            note_text(ctx, text);
+        }
+    }
+    true
+}
+
+/// Apply `edit`, which replaces the word around the cursor and the
+/// `typed_after` it is typed with, in one input-method commit; note it,
+/// recording the words it finished, and remember how a backspace right
+/// after undoes it. Returns `false`, having changed nothing, when the input
+/// method is not active.
+fn replace_word(ctx: &mut Context<'_, Keyboard>, edit: &TextEdit, typed_after: &str) -> bool {
+    let sent = {
+        let (st, mut wl) = ctx.fetch::<(Res<InputMethodState>, ResMut<Wayland>)>();
+        input_method::apply_edit(st, &mut wl, edit)
+    };
+    if !sent {
+        return false;
+    }
+    let (words, word, rev) = {
+        let mut typing = ctx.resource_mut::<TypingContext>();
+        let word = format!("{}{}", typing.prefix(), typing.word_after());
+        let words = typing.replaced_word(&edit.insert);
+        (words, word, typing.local_rev())
+    };
+    ctx.resource_mut::<Completion>()
+        .remember_undo(word, typed_after, edit.insert.clone(), rev);
+    record(ctx, words);
+    true
+}
+
+/// Take back the last accepted suggestion or autocorrection, if a backspace
+/// now may (see [`Completion::take_undo`]): its text is replaced by the word
+/// as it was typed (and the separator typed with an autocorrection), the
+/// caret after it. Returns whether it did.
 fn undo_suggestion(ctx: &mut Context<'_, Keyboard>) -> bool {
     let Some(undo) = ({
         let (mut completion, typing) = ctx.fetch::<(ResMut<Completion>, Res<TypingContext>)>();
@@ -318,9 +364,9 @@ fn undo_suggestion(ctx: &mut Context<'_, Keyboard>) -> bool {
     if !sent {
         return false;
     }
-    tracing::info!(word = %undo.original, "undid suggestion");
+    tracing::info!(word = %undo.word, "undid suggestion");
     ctx.resource_mut::<TypingContext>()
-        .replaced_word(&undo.original);
+        .replaced_before(&undo.inserted, &undo.original);
     true
 }
 

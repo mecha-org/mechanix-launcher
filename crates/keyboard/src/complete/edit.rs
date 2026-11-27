@@ -121,13 +121,18 @@ pub(crate) fn stabilize(
     out
 }
 
+/// Whether `word` is in all capitals: two or more letters, all uppercase.
+pub(crate) fn all_caps(word: &str) -> bool {
+    let mut letters = word.chars().filter(|c| c.is_alphabetic());
+    letters.clone().count() >= 2 && letters.all(char::is_uppercase)
+}
+
 /// `candidate` cased to match `typed`: all capitals if `typed` is (two or
 /// more letters, all uppercase), a capital first letter if `typed` starts
 /// with one, else as the source gave it (keeping capitals it has, like
 /// "I" or a name).
 fn recase(typed: &str, candidate: &str) -> String {
-    let letters: Vec<char> = typed.chars().filter(|c| c.is_alphabetic()).collect();
-    if letters.len() >= 2 && letters.iter().all(|c| c.is_uppercase()) {
+    if all_caps(typed) {
         return candidate.to_uppercase();
     }
     if typed.chars().next().is_some_and(char::is_uppercase) {

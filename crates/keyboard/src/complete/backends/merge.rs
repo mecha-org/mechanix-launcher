@@ -1,11 +1,13 @@
 //! Several sources as one: e.g. word-list completions with hunspell's
 //! corrections.
 
-use crate::complete::{Candidate, Completer, WordQuery};
+use crate::complete::{Candidate, Completer, Kind, WordQuery};
 
 /// Interleaves its sources' candidates (each source's best, in source
-/// order, then each one's second, ...), skipping repeats. Every source
-/// learns every word.
+/// order, then each one's second, ...), skipping repeats. A source's
+/// autocorrection stands only if no source takes the typed word as spelled
+/// right (one list may lack a word another has). Every source learns every
+/// word.
 pub(crate) struct Merge(Vec<Box<dyn Completer>>);
 
 impl Merge {
@@ -30,9 +32,20 @@ impl Completer for Merge {
                 }
             }
             if !any {
-                return out;
+                break;
             }
         }
+        let word = format!("{}{}", q.word, q.word_after);
+        if let Some(auto) = out.iter_mut().find(|c| c.kind == Kind::Autocorrection)
+            && self.accepts(&word)
+        {
+            auto.kind = Kind::Correction;
+        }
+        out
+    }
+
+    fn accepts(&mut self, word: &str) -> bool {
+        self.0.iter_mut().any(|s| s.accepts(word))
     }
 
     fn learn(&mut self, word: &str) {
@@ -45,7 +58,6 @@ impl Completer for Merge {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::complete::Kind;
 
     struct Fixed(Vec<&'static str>);
     impl Completer for Fixed {
@@ -58,6 +70,41 @@ mod tests {
                 })
                 .collect()
         }
+    }
+
+    /// Autocorrects every word to `fix`.
+    struct Fixer(&'static str);
+    impl Completer for Fixer {
+        fn suggest(&mut self, _q: &WordQuery) -> Vec<Candidate> {
+            vec![Candidate {
+                text: self.0.to_string(),
+                kind: Kind::Autocorrection,
+            }]
+        }
+    }
+
+    /// Takes `word` as spelled right; suggests nothing.
+    struct Knows(&'static str);
+    impl Completer for Knows {
+        fn suggest(&mut self, _q: &WordQuery) -> Vec<Candidate> {
+            Vec::new()
+        }
+        fn accepts(&mut self, word: &str) -> bool {
+            word == self.0
+        }
+    }
+
+    #[test]
+    fn a_source_that_knows_the_word_vetoes_autocorrection() {
+        let q = |word| WordQuery {
+            word,
+            word_after: "",
+            max: 3,
+        };
+        let mut m = Merge::new(vec![Box::new(Fixer("mocha")), Box::new(Knows("mecha"))]);
+        assert_eq!(m.suggest(&q("mecha"))[0].kind, Kind::Correction);
+        assert_eq!(m.suggest(&q("mechq"))[0].kind, Kind::Autocorrection);
+        assert!(m.accepts("mecha") && !m.accepts("mechq"));
     }
 
     fn texts(c: &[Candidate]) -> Vec<&str> {

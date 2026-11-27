@@ -68,6 +68,10 @@ impl Completer for HunspellCompleter {
         found
     }
 
+    fn accepts(&mut self, word: &str) -> bool {
+        matches!(self.speller.check(word), CheckResult::FoundInDictionary)
+    }
+
     fn learn(&mut self, word: &str) {
         // Words the user typed and kept are not misspellings: stop
         // correcting them this session.
@@ -103,6 +107,7 @@ mod tests {
         assert!(s.iter().all(|c| c.kind == Kind::Correction));
         assert!(h.suggest(&q("receive")).is_empty());
         assert!(h.suggest(&q("x")).is_empty());
+        assert!(h.accepts("receive") && !h.accepts("recieve"));
     }
 
     #[test]

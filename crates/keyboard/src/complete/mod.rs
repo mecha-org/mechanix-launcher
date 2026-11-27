@@ -13,11 +13,19 @@
 //! glide, the pointing stick) only once the caret has rested for
 //! [`CARET_SETTLE`] ([`CaretMoved`], then [`settle`]), so a moving caret
 //! neither runs the sources at every step nor flickers the bar.
+//!
+//! When a space or punctuation ends a word a source is sure is misspelled,
+//! the keyboard replaces it with the correction as it types the separator
+//! ([`Completion::autocorrection`]). Accepting a suggestion or an
+//! autocorrection can be taken back by a backspace right after
+//! ([`Completion::take_undo`]); a word restored that way is not
+//! autocorrected again.
 
 mod backends;
 pub(crate) mod config;
 mod edit;
 
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use mecha_wayland::prelude::*;
@@ -52,6 +60,11 @@ pub(crate) enum Kind {
     Completion,
     /// The typed word looks misspelled; this is a likely intended word.
     Correction,
+    /// The typed word is almost certainly misspelled and this is almost
+    /// certainly the intended word: it replaces the typed one by itself when
+    /// the word ends. At most one per word, and only for a word no source
+    /// takes as spelled right (see [`Completer::accepts`]).
+    Autocorrection,
 }
 
 /// A word a source suggests, in the source's own casing.
@@ -66,6 +79,13 @@ pub(crate) trait Completer {
     /// Candidates for the word in `q`, best first. May return more than
     /// `q.max`, and words equal to the typed one; the caller drops those.
     fn suggest(&mut self, q: &WordQuery) -> Vec<Candidate>;
+
+    /// Whether this source takes `word` (in its typed casing) as spelled
+    /// right, which vetoes another source's [`Kind::Autocorrection`] of it.
+    /// A source that cannot tell says `false`.
+    fn accepts(&mut self, _word: &str) -> bool {
+        false
+    }
 
     /// The user finished typing `word` (or accepted it): learn from it.
     /// Only called in fields that allow learning.
@@ -87,16 +107,22 @@ pub(crate) struct Completion {
     stale: bool,
     /// How to take back the last accepted suggestion.
     undo: Option<Undo>,
+    /// Words (lowercase) whose suggestion or autocorrection was undone:
+    /// the user meant them, so they are not autocorrected again.
+    kept: HashSet<String>,
 }
 
 /// An accepted suggestion, remembered so a backspace right after can take it
 /// back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Undo {
-    /// The word as it was before (both sides of the caret).
+    /// The word as it was typed (both sides of the caret).
+    pub(crate) word: String,
+    /// What the undo puts back: the word, then whatever was typed along
+    /// with the edit (the separator that triggered an autocorrection).
     pub(crate) original: String,
-    /// What the suggestion typed in its place, ending at the caret.
-    inserted: String,
+    /// What the edit typed in place of `original`, ending at the caret.
+    pub(crate) inserted: String,
     /// The typing context's local revision right after: anything this
     /// keyboard does to the text first makes the undo stale. The client's
     /// reports do not (an app may report the edit in steps).
@@ -134,14 +160,23 @@ impl Completion {
             seen: None,
             stale: false,
             undo: None,
+            kept: HashSet::new(),
         }
     }
 
-    /// A suggestion replaced `original` with `inserted`, leaving the typing
-    /// context at local revision `local_rev`: remember how to undo it.
-    pub(crate) fn remember_undo(&mut self, original: String, inserted: String, local_rev: u64) {
+    /// A suggestion or autocorrection replaced `word`, and the `typed_after`
+    /// it was typed with, by `inserted`, leaving the typing context at local
+    /// revision `local_rev`: remember how to undo it.
+    pub(crate) fn remember_undo(
+        &mut self,
+        word: String,
+        typed_after: &str,
+        inserted: String,
+        local_rev: u64,
+    ) {
         self.undo = Some(Undo {
-            original,
+            original: format!("{word}{typed_after}"),
+            word,
             inserted,
             local_rev,
             at: Instant::now(),
@@ -152,13 +187,73 @@ impl Completion {
     /// `now` for the typing context `ctx`: within [`config::UNDO_WINDOW`],
     /// nothing typed or pressed here since, and the inserted text still
     /// right before the caret (the caret was not moved away). It can be
-    /// taken once.
+    /// taken once; the word it restores is never autocorrected again.
     pub(crate) fn take_undo(&mut self, ctx: &TypingContext, now: Instant) -> Option<Undo> {
         let undo = self.undo.take()?;
         let fresh = now.saturating_duration_since(undo.at) <= config::UNDO_WINDOW;
         let untouched = undo.local_rev == ctx.local_rev();
         let in_place = ctx.before().ends_with(&undo.inserted);
-        (fresh && untouched && in_place).then_some(undo)
+        if !(fresh && untouched && in_place) {
+            return None;
+        }
+        self.kept.insert(undo.word.to_lowercase());
+        Some(undo)
+    }
+
+    /// The edit to make as `text` is typed, if it autocorrects the word
+    /// before the cursor: replacing that word with its correction, followed
+    /// by `text`. Only when `text` ends a word ([`config::ends_word`]), the
+    /// field autocorrects, the word was just typed here (not reached by
+    /// moving the caret) and does not go on after the cursor, is long
+    /// enough, not all capitals (likely an acronym), not one the user kept
+    /// by undoing its correction, and a source is sure of the correction
+    /// ([`Kind::Autocorrection`]).
+    pub(crate) fn autocorrection(
+        &mut self,
+        ctx: &TypingContext,
+        st: &InputMethodState,
+        text: &str,
+    ) -> Option<TextEdit> {
+        let (field, active) = field_state(st);
+        self.autocorrection_in(ctx, field, active, text)
+    }
+
+    /// [`autocorrection`](Self::autocorrection) in `field`, with the input
+    /// method `active`.
+    fn autocorrection_in(
+        &mut self,
+        ctx: &TypingContext,
+        field: Field,
+        active: bool,
+        text: &str,
+    ) -> Option<TextEdit> {
+        let policy = self.policy(field, active)?;
+        if !policy.autocorrect
+            || !config::ends_word(text)
+            || ctx.last_change() != Change::Typed
+            || !ctx.word_after().is_empty()
+        {
+            return None;
+        }
+        let word = ctx.prefix();
+        if word.chars().count() < config::AUTOCORRECT_MIN_LEN
+            || edit::all_caps(&word)
+            || self.kept.contains(&word.to_lowercase())
+        {
+            return None;
+        }
+        let policy = Policy {
+            append_space: false,
+            ..policy
+        };
+        let fix = self
+            .suggest(ctx, policy)
+            .into_iter()
+            .find(|s| s.kind == Kind::Autocorrection)?;
+        Some(TextEdit {
+            insert: format!("{}{text}", fix.edit.insert),
+            ..fix.edit
+        })
     }
 
     /// The suggestion at `index`, if the bar shows one that still matches
@@ -179,7 +274,7 @@ impl Completion {
     /// it gets no suggestions (and so no bar).
     fn policy(&self, field: Field, active: bool) -> Option<Policy> {
         (self.enabled() && active)
-            .then(|| config::policy(field, self.cfg.append_space))
+            .then(|| config::policy(field, &self.cfg))
             .flatten()
     }
 
@@ -430,7 +525,7 @@ mod tests {
         let mut ctx = TypingContext::default();
         ctx.set_surrounding("say teh", 7);
         ctx.replaced_word(inserted);
-        c.remember_undo("teh".into(), inserted.into(), ctx.local_rev());
+        c.remember_undo("teh".into(), "", inserted.into(), ctx.local_rev());
         ctx
     }
 
@@ -478,6 +573,103 @@ mod tests {
         let ctx = accepted(&mut c, "the");
         let late = Instant::now() + config::UNDO_WINDOW + Duration::from_millis(1);
         assert!(c.take_undo(&ctx, late).is_none());
+    }
+
+    /// The edit typing `typed` makes after `ctx` in a text field.
+    fn autocorrect(c: &mut Completion, ctx: &TypingContext, typed: &str) -> Option<TextEdit> {
+        c.autocorrection_in(ctx, text(), true, typed)
+    }
+
+    #[test]
+    fn a_space_or_punctuation_autocorrects_a_sure_misspelling() {
+        let mut c = completion();
+        for (sep, insert) in [(" ", "the "), (".", "the."), (", ", "the, ")] {
+            assert_eq!(
+                autocorrect(&mut c, &typed("teh"), sep),
+                Some(TextEdit {
+                    delete_before: 3,
+                    delete_after: 0,
+                    insert: insert.into()
+                }),
+                "{sep:?}"
+            );
+        }
+        // Cased like the typed word.
+        let fix = autocorrect(&mut c, &typed("Teh"), " ").unwrap();
+        assert_eq!(fix.insert, "The ");
+        let fix = autocorrect(&mut c, &typed("say recieve"), "!").unwrap();
+        assert_eq!((fix.delete_before, fix.insert.as_str()), (7, "receive!"));
+    }
+
+    #[test]
+    fn what_is_not_autocorrected() {
+        let mut c = completion();
+        // Not a word end, a known word, an unfinished one, too short to be
+        // sure, all capitals.
+        assert!(autocorrect(&mut c, &typed("teh"), "'").is_none());
+        assert!(autocorrect(&mut c, &typed("teh"), "-").is_none());
+        assert!(autocorrect(&mut c, &typed("the"), " ").is_none());
+        assert!(autocorrect(&mut c, &typed("documen"), " ").is_none());
+        assert!(autocorrect(&mut c, &typed("ot"), " ").is_none());
+        assert!(autocorrect(&mut c, &typed("TEH"), " ").is_none());
+        // A word reached by moving the caret, or one going on after it.
+        let mut ctx = TypingContext::default();
+        ctx.set_surrounding("say teh", 7);
+        assert!(autocorrect(&mut c, &ctx, " ").is_none());
+        ctx.set_surrounding("say tehx", 7);
+        ctx.committed("");
+        assert!(autocorrect(&mut c, &ctx, " ").is_none());
+    }
+
+    #[test]
+    fn autocorrection_follows_the_field() {
+        let mut c = completion();
+        let ctx = typed("teh");
+        let email = Field {
+            family: Family::Email,
+            sensitive: false,
+        };
+        assert!(c.autocorrection_in(&ctx, email, true, " ").is_none());
+        assert!(c.autocorrection_in(&ctx, text(), false, " ").is_none());
+        let cfg = CompletionConfig {
+            autocorrect: false,
+            ..CompletionConfig::hardcoded()
+        };
+        let mut off = Completion::new(cfg, &mut Dictionaries::default());
+        assert!(autocorrect(&mut off, &ctx, " ").is_none());
+    }
+
+    #[test]
+    fn undoing_an_autocorrection_restores_the_word_and_keeps_it() {
+        let mut c = completion();
+        let mut ctx = typed("say teh");
+        let fix = autocorrect(&mut c, &ctx, " ").unwrap();
+        ctx.replaced_word(&fix.insert);
+        c.remember_undo("teh".into(), " ", fix.insert.clone(), ctx.local_rev());
+        assert_eq!(ctx.before(), "say the ");
+
+        let undo = c.take_undo(&ctx, Instant::now()).unwrap();
+        assert_eq!(
+            undo.edit(),
+            TextEdit {
+                delete_before: 4,
+                delete_after: 0,
+                insert: "teh ".into()
+            }
+        );
+        ctx.replaced_before(&undo.inserted, &undo.original);
+        assert_eq!(ctx.before(), "say teh ");
+        // Typed again, the word the user kept stays as it is.
+        let ctx = typed("teh");
+        assert!(autocorrect(&mut c, &ctx, " ").is_none());
+    }
+
+    #[test]
+    fn undoing_a_tapped_suggestion_keeps_the_word_too() {
+        let mut c = completion();
+        let ctx = accepted(&mut c, "the");
+        assert!(c.take_undo(&ctx, Instant::now()).is_some());
+        assert!(autocorrect(&mut c, &typed("teh"), " ").is_none());
     }
 
     #[test]

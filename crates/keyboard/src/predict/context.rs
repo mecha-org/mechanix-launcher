@@ -193,7 +193,14 @@ impl TypingContext {
     pub(crate) fn replaced_word(&mut self, insert: &str) -> Vec<String> {
         // The part of the word before the cursor was deleted.
         let prefix = self.prefix();
-        match self.before.strip_suffix(prefix.as_str()) {
+        self.replaced_before(&prefix, insert)
+    }
+
+    /// An edit deleted `deleted`, which ended at the cursor, and anything of
+    /// the word after the cursor, then inserted `insert`: record that,
+    /// returning the words it finished.
+    pub(crate) fn replaced_before(&mut self, deleted: &str, insert: &str) -> Vec<String> {
+        match self.before.strip_suffix(deleted) {
             Some(rest) => self.before.truncate(rest.len()),
             None => self.before.clear(),
         }
@@ -443,6 +450,16 @@ mod tests {
         assert_eq!(c.before(), "say the ");
         c.clear();
         assert_eq!(c.before(), "");
+    }
+
+    #[test]
+    fn replacing_text_before_the_cursor_follows_before() {
+        let mut c = TypingContext::default();
+        c.committed("say the ");
+        // An autocorrection undone: "the " back to "teh ".
+        assert_eq!(c.replaced_before("the ", "teh "), vec!["teh".to_string()]);
+        assert_eq!(c.before(), "say teh ");
+        assert_eq!(c.prefix(), "");
     }
 
     #[test]
