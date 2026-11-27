@@ -47,28 +47,32 @@ pub(crate) fn tone_of(choice: usize) -> Option<usize> {
     choice.checked_sub(1)
 }
 
-/// Give every emoji key that takes a skin tone, in every view, the picked
-/// one: its face and what it types.
+/// Give every key drawn with an emoji that takes a skin tone, in every
+/// view, the picked one: its face, and what it types if it types that emoji
+/// (a button drawn with one keeps its action).
 fn retone_keys(ctx: &mut Context<'_, Keyboard>) {
-    let keys: Vec<(usize, usize, String, Handle<Key>)> = ctx
+    let keys: Vec<(usize, usize, String, bool, Handle<Key>)> = ctx
         .me()
         .keys
         .iter()
         .enumerate()
         .flat_map(|(v, view)| {
-            view.iter()
-                .enumerate()
-                .filter_map(move |(i, k)| Some((v, i, k.skin_tone_base.clone()?, k.node)))
+            view.iter().enumerate().filter_map(move |(i, k)| {
+                let types = k.skin_tone_base.is_some();
+                Some((v, i, k.toned_face.clone()?, types, k.node))
+            })
         })
         .collect();
-    for (v, i, base, node) in keys {
+    for (v, i, base, types, node) in keys {
         let (emoji, sprite) = {
             let (mut emoji, mut atlas) = ctx.fetch::<(ResMut<Emoji>, ResMut<Atlas>)>();
             let toned = emoji.toned(&base);
             let sprite = emoji.ensure(&mut atlas, &toned);
             (toned, sprite)
         };
-        ctx.me().keys[v][i].action = KeyAction::EmitText(emoji);
+        if types {
+            ctx.me().keys[v][i].action = KeyAction::EmitText(emoji);
+        }
         let image = ctx.widget::<Key>(node).and_then(|k| match k.label {
             Label::Image(h) => Some(h),
             _ => None,

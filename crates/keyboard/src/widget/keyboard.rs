@@ -423,11 +423,17 @@ impl Widget for Keyboard {
                     let mut entry =
                         KeyEntry::new(key_handle, key.action.clone(), key.choices.clone())
                             .with_choice_actions(key.choice_actions.clone());
-                    // An emoji that takes a skin tone offers its tones.
+                    // An emoji key that takes a skin tone offers its tones.
+                    // A button drawn with one (the people tab's 👋) only
+                    // shows the tone picked, keeping its own action.
                     if let KeyFace::Emoji(e) = &key.face
                         && let Some(tones) = s.resource_mut::<Emoji>().tones(e)
                     {
-                        entry = entry.with_skin_tones(e, tones);
+                        entry = if matches!(&key.action, KeyAction::EmitText(t) if t == e) {
+                            entry.with_skin_tones(e, tones)
+                        } else {
+                            entry.with_toned_face(e)
+                        };
                     }
                     view_keys.push(entry);
                 }
@@ -940,6 +946,33 @@ mod tests {
         app.emit(PickSkinTone(None), [kb]);
         app.tick();
         assert_eq!(types(&app, kb, v, thumbs), "👍");
+    }
+
+    /// A button drawn with a toneable emoji (the people tab's 👋) is no
+    /// emoji key: it offers no tones and keeps switching views whatever
+    /// tone is picked, though its face follows the tone.
+    #[test]
+    fn emoji_faced_buttons_keep_their_action() {
+        let (mut app, kb) = app();
+        let tabs = |app: &App| -> Vec<(bool, bool, bool)> {
+            let me = app.widget::<Keyboard>(kb).unwrap();
+            me.keys
+                .iter()
+                .flatten()
+                .filter(|k| matches!(&k.action, KeyAction::SetView(n) if n == "emoji_people"))
+                .map(|k| {
+                    let face = k.toned_face.as_deref() == Some("👋");
+                    (k.skin_tone_base.is_none(), k.choices.is_empty(), face)
+                })
+                .collect()
+        };
+        assert!(!tabs(&app).is_empty(), "the emoji pages have a people tab");
+        assert!(tabs(&app).iter().all(|&t| t == (true, true, true)));
+        app.emit(PickSkinTone(Some(1)), [kb]);
+        app.tick();
+        assert!(tabs(&app).iter().all(|&t| t == (true, true, true)));
+        // Its face was redrawn in the tone.
+        assert!(app.resource::<Emoji>().get("👋🏼").is_some());
     }
 
     /// Holding an emoji search result that takes a skin tone opens its

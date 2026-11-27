@@ -55,6 +55,10 @@ pub(crate) struct KeyEntry {
     /// choices are then that and its five toned forms, and picking one sets
     /// the skin tone of every such emoji.
     pub skin_tone_base: Option<String>,
+    /// For any key drawn with an emoji that takes a skin tone, that emoji
+    /// untoned: its face follows the tone picked. A key that does not type
+    /// it (the people tab's 👋) only shows the tone; it offers none.
+    pub toned_face: Option<String>,
 }
 
 impl KeyEntry {
@@ -69,6 +73,7 @@ impl KeyEntry {
             choice_actions: Vec::new(),
             hidden: false,
             skin_tone_base: None,
+            toned_face: None,
         }
     }
 
@@ -78,6 +83,14 @@ impl KeyEntry {
         self.choices = std::iter::once(base.to_owned()).chain(tones).collect();
         self.choice_actions = Vec::new();
         self.skin_tone_base = Some(base.to_owned());
+        self.toned_face = Some(base.to_owned());
+        self
+    }
+
+    /// The same entry for a key drawn with `face`, an emoji that takes a
+    /// skin tone, but not typing it: its face follows the tone picked.
+    pub(crate) fn with_toned_face(mut self, face: &str) -> Self {
+        self.toned_face = Some(face.to_owned());
         self
     }
 
