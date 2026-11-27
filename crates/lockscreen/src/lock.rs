@@ -100,6 +100,9 @@ pub(crate) struct Lockscreen {
     /// back to.
     homes: Vec<(NodeId, NodeId)>,
     locked: bool,
+    /// The compositor confirmed the lock. A lock it ends before that, it
+    /// refused: another lock holds the session.
+    confirmed: bool,
     /// Asked to lock for sleep: say [`SleepReady`] once the compositor
     /// confirms.
     sleep_waiting: bool,
@@ -179,13 +182,21 @@ pub(crate) fn install(app: &mut App, settings: LockSettings) {
         .system(|app, _: &UnlockRequested| unlock(app))
         .system(on_prepare_for_sleep)
         .system(|app, _: &SessionLocked| {
+            app.resource_mut::<Lockscreen>().confirmed = true;
             app.signal(SessionLockChanged(true));
             release_sleep(app);
         })
         .system(|app, _: &SessionLockFinished| {
-            tracing::warn!("the compositor ended the lock");
+            // Refused: the session stays locked by another lock (one whose
+            // client died), so the session's hint stays as it is.
+            let ended = app.resource::<Lockscreen>().confirmed;
+            if ended {
+                tracing::warn!("the compositor ended the lock");
+            } else {
+                tracing::warn!("the compositor refused the lock: the session is locked already");
+            }
             auth::cancel_all(app);
-            tear_down(app);
+            tear_down(app, ended);
         })
         .system(on_output_added)
         .system(on_output_removed)
@@ -327,14 +338,16 @@ fn unlock(app: &mut App) {
         let (mut session, mut wl) = app.query::<(ResMut<SessionLock>, ResMut<Wayland>)>();
         session.unlock(&mut wl);
     }
-    tear_down(app);
+    tear_down(app, true);
 }
 
-/// Forget the lock: the windows, the conversation, the focus.
-fn tear_down(app: &mut App) {
+/// Forget the lock: the windows, the conversation, the focus. `unlocked`:
+/// the session is unlocked now, and its hint says so.
+fn tear_down(app: &mut App, unlocked: bool) {
     {
         let mut ls = app.resource_mut::<Lockscreen>();
         ls.locked = false;
+        ls.confirmed = false;
         ls.attempt = Attempt::default();
         ls.others.clear();
     }
@@ -353,7 +366,9 @@ fn tear_down(app: &mut App) {
             None => kf.blur(),
         }
     }
-    app.signal(SessionLockChanged(false));
+    if unlocked {
+        app.signal(SessionLockChanged(false));
+    }
     app.signal(LockChanged(false));
     release_sleep(app);
 }

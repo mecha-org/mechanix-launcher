@@ -13,7 +13,9 @@
 //! says so, and the start of the launcher when
 //! [`LockSettings::lock_at_start`] says so; none of them when
 //! [`LockSettings::enabled`] is off. logind's `Unlock` unlocks. The
-//! session's `LockedHint` follows the compositor's answer.
+//! session's `LockedHint` follows the compositor's answer, except a
+//! refusal: the session is locked already (by a lock whose client died),
+//! and the hint stays.
 //!
 //! # Unlocking
 //!
