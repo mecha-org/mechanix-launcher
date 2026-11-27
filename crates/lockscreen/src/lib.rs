@@ -34,9 +34,10 @@
 //! runs alongside from the lock on, in its own worker, with its own
 //! stack; whichever succeeds first unlocks.
 //!
-//! The password's stack includes `system-auth`, so what the system asks of
-//! every login it asks here too. The PIN's doesn't: a factor added to
-//! `system-auth` doesn't guard it (see `resources/pam.d/mechanix-pin`).
+//! The password's stack includes `password-auth`, so what the system asks
+//! of every password login it asks here too. The PIN's doesn't: a factor
+//! added to `password-auth` doesn't guard it (see
+//! `resources/pam.d/mechanix-pin`).
 //!
 //! # The power key
 //!

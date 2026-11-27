@@ -1,4 +1,8 @@
 #%PAM-1.0
 # The lock screen's password method: the account password.
 # Install to /etc/pam.d/mechanix.
-auth     include  system-auth
+#
+# password-auth, not system-auth: system-auth also runs pam_fprintd when
+# fingerprint is on, which would wait for a finger before asking for the
+# password.
+auth     include  password-auth
