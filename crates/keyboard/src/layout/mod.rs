@@ -19,7 +19,6 @@ use tracing::{info, warn};
 use spec::{KeyboardSpec, Layout, PredictionSpec};
 use tokens::Font;
 
-#[cfg(test)]
 pub(crate) use keymap::Row;
 pub use keymap::{Cell, Family, Key, KeyAction, KeyFace, Keymap, Modifier, Page, View};
 

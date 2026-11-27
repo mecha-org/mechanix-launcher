@@ -12,9 +12,11 @@
 use mecha_wayland::prelude::*;
 use xkbcommon::xkb::Keysym;
 
-use crate::complete::Completion;
+use crate::complete::{Completion, Kind, TextEdit};
+use crate::emoji_search;
 use crate::field::Field;
-use crate::layout::{KeyAction, Modifier};
+use crate::layout::emoji::Emoji;
+use crate::layout::{KeyAction, Modifier, Page};
 use crate::modifiers::latch::{LatchedState, consume_latch, toggle_latch};
 use crate::modifiers::pointing_stick::{self, PointingStickMode};
 use crate::modifiers::shift::{self, Shift, ShiftState};
@@ -33,6 +35,9 @@ pub(crate) fn dispatch(ctx: &mut Context<'_, Keyboard>, action: &KeyAction, time
     if !matches!(action, KeyAction::PointingStick) {
         pointing_stick::reset(ctx);
     }
+    if emoji_search::active(ctx) && search_key(ctx, action) {
+        return;
+    }
     match action {
         KeyAction::SetView(name) => {
             switch_view(ctx, name);
@@ -49,12 +54,9 @@ pub(crate) fn dispatch(ctx: &mut Context<'_, Keyboard>, action: &KeyAction, time
             // forces the keycode path — IM2 commits plain text and would drop
             // the modifier.
             let text = virtual_keyboard::keysym_text(*ks);
-            if commits_as_text(latched_mask, text.as_deref())
-                && let Some(text) = &text
-                && im_commit_text(ctx, text)
-            {
-                tracing::info!(input = %text, "input method");
-            } else {
+            let typed = commits_as_text(latched_mask, text.as_deref())
+                && text.as_deref().is_some_and(|text| type_text(ctx, text));
+            if !typed {
                 vk_emit_keysym(ctx, *ks, latched_mask);
             }
             consume_latch(ctx);
@@ -62,6 +64,8 @@ pub(crate) fn dispatch(ctx: &mut Context<'_, Keyboard>, action: &KeyAction, time
                 shift::typed_letter(ctx);
             }
             match text {
+                // `type_text` noted it.
+                _ if typed => {}
                 Some(text) if latched_mask == 0 => note_text(ctx, &text),
                 Some(_) => ctx.resource_mut::<TypingContext>().clear(),
                 None => note_control(ctx, *ks),
@@ -71,9 +75,8 @@ pub(crate) fn dispatch(ctx: &mut Context<'_, Keyboard>, action: &KeyAction, time
             let (text, letter) = shifted_text(text, ctx.resource::<Shift>().state());
             let text = &text;
             let latched_mask = latched_mask(ctx);
-            if commits_as_text(latched_mask, Some(text)) && im_commit_text(ctx, text) {
-                tracing::info!("Input method: {text}");
-            } else {
+            let typed = commits_as_text(latched_mask, Some(text)) && type_text(ctx, text);
+            if !typed {
                 for ks in text_keysyms(text) {
                     vk_emit_keysym(ctx, ks, latched_mask);
                 }
@@ -82,7 +85,9 @@ pub(crate) fn dispatch(ctx: &mut Context<'_, Keyboard>, action: &KeyAction, time
             if letter {
                 shift::typed_letter(ctx);
             }
-            if latched_mask == 0 {
+            if typed {
+                // `type_text` noted it.
+            } else if latched_mask == 0 {
                 note_text(ctx, text);
             } else {
                 ctx.resource_mut::<TypingContext>().clear();
@@ -98,12 +103,55 @@ pub(crate) fn dispatch(ctx: &mut Context<'_, Keyboard>, action: &KeyAction, time
                 None => tracing::warn!(?page, "no view for page; ignored"),
             }
         }
+        KeyAction::Family(family) => {
+            let me = ctx.me();
+            match view_for(&me.views, *family, Page::Letters) {
+                Some(idx) => {
+                    me.family = *family;
+                    let name = me.views[idx].name.clone();
+                    switch_view(ctx, &name);
+                }
+                None => tracing::warn!(?family, "no view for family; ignored"),
+            }
+        }
         KeyAction::Shift => shift::released(ctx, time),
         KeyAction::PointingStick => pointing_stick::toggle(ctx),
         KeyAction::Unhandled(name) => {
             tracing::info!(action = %name, "tapped key with no wired action");
         }
     }
+}
+
+/// While an emoji search is typed, act on a tapped key's `action` there if
+/// it is one the search takes; returns whether it was. Printable keys type
+/// into the query, cased as usual (a letter spends a one-shot shift); the
+/// emoji key goes back to the emoji page; the pointing stick does nothing.
+/// Page and view switches, Shift and the latches work as ever.
+fn search_key(ctx: &mut Context<'_, Keyboard>, action: &KeyAction) -> bool {
+    let state = ctx.resource::<Shift>().state();
+    let (text, letter) = match action {
+        KeyAction::EmitKeysym(ks) => {
+            let (ks, letter) = shifted_keysym(*ks, state);
+            (virtual_keyboard::keysym_text(ks), letter)
+        }
+        KeyAction::EmitText(text) => {
+            let (text, letter) = shifted_text(text, state);
+            (Some(text), letter)
+        }
+        KeyAction::Page(Page::Emoji) => {
+            emoji_search::exit(ctx);
+            return true;
+        }
+        KeyAction::PointingStick => return true,
+        _ => return false,
+    };
+    if let Some(text) = text {
+        emoji_search::type_text(ctx, &text);
+    }
+    if letter {
+        shift::typed_letter(ctx);
+    }
+    true
 }
 
 /// Type long-press choice `choice` of a key; `key_letter` is the key's own
@@ -199,6 +247,16 @@ pub(crate) fn repeats(action: &KeyAction) -> bool {
 /// presses nothing. Returns whether the key was pressed.
 pub(crate) fn hold(ctx: &mut Context<'_, Keyboard>, ks: Keysym) -> bool {
     pointing_stick::reset(ctx);
+    // While an emoji search is typed, BackSpace edits its query and Return
+    // types the best result; other keys do nothing. None of them repeat.
+    if emoji_search::active(ctx) {
+        match ks {
+            Keysym::BackSpace => emoji_search::backspace(ctx),
+            Keysym::Return | Keysym::KP_Enter => emoji_search::pick(ctx, 0),
+            _ => {}
+        }
+        return false;
+    }
     if ks == Keysym::BackSpace && undo_suggestion(ctx) {
         return false;
     }
@@ -210,6 +268,10 @@ pub(crate) fn hold(ctx: &mut Context<'_, Keyboard>, ks: Keysym) -> bool {
 /// down until [`release`], as [`hold`] does, with Shift held too in select
 /// mode. The mode is kept.
 pub(crate) fn hold_direction(ctx: &mut Context<'_, Keyboard>, ks: Keysym) {
+    // Its key does nothing while an emoji search is typed; this is a guard.
+    if emoji_search::active(ctx) {
+        return;
+    }
     let shift = if ctx.resource::<PointingStickMode>().select() {
         ctx.resource::<VirtualKeyboardState>().shift_mask
     } else {
@@ -223,6 +285,15 @@ pub(crate) fn hold_direction(ctx: &mut Context<'_, Keyboard>, ks: Keysym) {
 /// latched modifiers (left for the next key). The caret may have moved
 /// (see [`TypingContext::caret_key`]).
 pub(crate) fn tap_direction(ctx: &mut Context<'_, Keyboard>, d: Direction, count: u32) {
+    // While an emoji search is typed, a glide moves the query's caret.
+    if emoji_search::active(ctx) {
+        match d.keysym() {
+            Keysym::Left => emoji_search::step(ctx, true, count),
+            Keysym::Right => emoji_search::step(ctx, false, count),
+            _ => {}
+        }
+        return;
+    }
     let shift = if ctx.resource::<PointingStickMode>().select() {
         ctx.resource::<VirtualKeyboardState>().shift_mask
     } else {
@@ -261,38 +332,122 @@ pub(crate) fn release(ctx: &mut Context<'_, Keyboard>) {
 /// inactive meanwhile, nothing is typed. Like any key, it ends the pointing
 /// stick's select mode and spends a one-shot shift.
 pub(crate) fn accept_suggestion(ctx: &mut Context<'_, Keyboard>, index: usize) {
+    accept(ctx, index, None);
+}
+
+/// [`accept_suggestion`] for emoji suggestion `index`, typing `emoji` (a
+/// skin tone form of it picked from its row) instead of its own.
+pub(crate) fn accept_emoji_suggestion(ctx: &mut Context<'_, Keyboard>, index: usize, emoji: &str) {
+    accept(ctx, index, Some(emoji));
+}
+
+/// Accept suggestion `index`; an emoji one types `emoji` if given, else
+/// itself in the skin tone picked.
+fn accept(ctx: &mut Context<'_, Keyboard>, index: usize, emoji: Option<&str>) {
     pointing_stick::reset(ctx);
     // While the caret settles the bar shows the last word's suggestions,
     // whose edits no longer fit: a tap then does nothing.
-    let Some(suggestion) = ctx.resource::<Completion>().get(index).cloned() else {
+    let Some(mut suggestion) = ctx.resource::<Completion>().get(index).cloned() else {
         return;
     };
-    let sent = {
-        let (st, mut wl) = ctx.fetch::<(Res<InputMethodState>, ResMut<Wayland>)>();
-        input_method::apply_edit(st, &mut wl, &suggestion.edit)
-    };
-    if !sent {
+    // An emoji goes in as the bar shows it: in the skin tone picked.
+    if suggestion.kind == Kind::Emoji {
+        let typed = match emoji {
+            Some(e) => e.to_owned(),
+            None => ctx.resource_mut::<Emoji>().toned(&suggestion.edit.insert),
+        };
+        suggestion.edit.insert = typed.clone();
+        suggestion.label = typed;
+    }
+    if !replace_word(ctx, &suggestion.edit, "") {
         tracing::warn!("suggestion tapped with no active input method; ignored");
         return;
     }
     // No haptic here: the touch gave one when it landed on the suggestion,
     // as a key's press does.
     tracing::info!(word = %suggestion.label, kind = ?suggestion.kind, "accepted suggestion");
-    let (words, original, rev) = {
-        let mut typing = ctx.resource_mut::<TypingContext>();
-        let original = format!("{}{}", typing.prefix(), typing.word_after());
-        let words = typing.replaced_word(&suggestion.edit.insert);
-        (words, original, typing.local_rev())
-    };
-    ctx.resource_mut::<Completion>()
-        .remember_undo(original, suggestion.edit.insert.clone(), rev);
-    record(ctx, words);
     shift::typed_letter(ctx);
 }
 
-/// Take back the last accepted suggestion, if a backspace now may (see
-/// [`Completion::take_undo`]): the suggestion's text is replaced by the word
-/// as it was typed, the caret after it. Returns whether it did.
+/// Type `emoji` (an emoji search result) through the input method as it
+/// is: no autocorrection, no virtual-keyboard fallback (the search only
+/// shows with the input method active). Like any key, it ends the pointing
+/// stick's select mode.
+pub(crate) fn commit_emoji(ctx: &mut Context<'_, Keyboard>, emoji: &str) {
+    pointing_stick::reset(ctx);
+    if !im_commit_text(ctx, emoji) {
+        tracing::warn!("emoji picked with no active input method; ignored");
+        return;
+    }
+    tracing::info!(input = %emoji, "emoji search");
+    note_text(ctx, emoji);
+}
+
+/// Type printable `text` through the input method (no modifier latched)
+/// and note it in the typing context. If `text` ends a word that is almost
+/// certainly misspelled ([`Completion::autocorrection`]), the same commit
+/// replaces that word with its correction, which a backspace right after
+/// takes back. Returns `false`, having typed and noted nothing, when the
+/// input method is not active.
+fn type_text(ctx: &mut Context<'_, Keyboard>, text: &str) -> bool {
+    let fix = {
+        let (mut completion, typing, st) = ctx.fetch::<(
+            ResMut<Completion>,
+            Res<TypingContext>,
+            Res<InputMethodState>,
+        )>();
+        completion.autocorrection(typing, st, text)
+    };
+    match fix {
+        Some(fix) if replace_word(ctx, &fix, text) => {
+            tracing::info!(input = %fix.insert, "autocorrected");
+        }
+        // Not sent: the input method is inactive, and a plain commit would
+        // fail too.
+        Some(_) => return false,
+        None => {
+            if !im_commit_text(ctx, text) {
+                return false;
+            }
+            tracing::info!(input = %text, "input method");
+            note_text(ctx, text);
+        }
+    }
+    true
+}
+
+/// Apply `edit`, which replaces the word around the cursor and the
+/// `typed_after` it is typed with, in one input-method commit; note it,
+/// recording the words it finished, and remember how a backspace right
+/// after undoes it. Returns `false`, having changed nothing, when the input
+/// method is not active.
+fn replace_word(ctx: &mut Context<'_, Keyboard>, edit: &TextEdit, typed_after: &str) -> bool {
+    let sent = {
+        let (st, mut wl) = ctx.fetch::<(Res<InputMethodState>, ResMut<Wayland>)>();
+        input_method::apply_edit(st, &mut wl, edit)
+    };
+    if !sent {
+        return false;
+    }
+    let (words, word, rev) = {
+        let mut typing = ctx.resource_mut::<TypingContext>();
+        // What the edit deleted before the cursor: the word's prefix, or
+        // more (an emoji's `:name`).
+        let deleted = typing.text_before(edit.delete_before);
+        let word = format!("{deleted}{}", typing.word_after());
+        let words = typing.replaced_before(&deleted, &edit.insert);
+        (words, word, typing.local_rev())
+    };
+    ctx.resource_mut::<Completion>()
+        .remember_undo(word, typed_after, edit.insert.clone(), rev);
+    record(ctx, words);
+    true
+}
+
+/// Take back the last accepted suggestion or autocorrection, if a backspace
+/// now may (see [`Completion::take_undo`]): its text is replaced by the word
+/// as it was typed (and the separator typed with an autocorrection), the
+/// caret after it. Returns whether it did.
 fn undo_suggestion(ctx: &mut Context<'_, Keyboard>) -> bool {
     let Some(undo) = ({
         let (mut completion, typing) = ctx.fetch::<(ResMut<Completion>, Res<TypingContext>)>();
@@ -307,9 +462,9 @@ fn undo_suggestion(ctx: &mut Context<'_, Keyboard>) -> bool {
     if !sent {
         return false;
     }
-    tracing::info!(word = %undo.original, "undid suggestion");
+    tracing::info!(word = %undo.word, "undid suggestion");
     ctx.resource_mut::<TypingContext>()
-        .replaced_word(&undo.original);
+        .replaced_before(&undo.inserted, &undo.original);
     true
 }
 

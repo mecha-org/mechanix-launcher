@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use super::Completer;
-use super::backends::{DictionaryCompleter, Merge};
+use super::backends::{Merge, WordlistCompleter};
 use crate::dictionaries::Dictionaries;
 use crate::field::Field;
 use crate::layout::Family;
@@ -14,9 +14,10 @@ use crate::layout::Family;
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)] // every variant is a choice for `hardcoded`, not all are used at once
 pub(crate) enum Backend {
-    /// A frequency word list (bundled name or path, as for prediction):
-    /// completions by frequency, and corrections one edit away.
-    Dictionary(String),
+    /// A word list in AOSP LatinIME's format (bundled locale, e.g. `en_US`,
+    /// or a path to a `.combined` or `.combined.gz` file): completions by
+    /// frequency, corrections one edit away, the list's replacements.
+    Wordlist(String),
     /// Hunspell spell-checking with the named dictionary (`en_US` loads
     /// `/usr/share/hunspell/en_US.{aff,dic}`): corrections of misspelled
     /// words. Needs the `hunspell` feature.
@@ -34,6 +35,29 @@ pub(crate) const UNDO_WINDOW: Duration = Duration::from_secs(3);
 /// fields where that fits; never in addresses).
 pub(crate) const APPEND_SPACE: bool = false;
 
+/// Whether a word that is almost certainly misspelled is corrected by itself
+/// when a space or punctuation ends it (in text fields; never in addresses).
+pub(crate) const AUTOCORRECT: bool = true;
+
+/// The emoji list typing `:` and part of an emoji's name (`:smil`)
+/// searches (in text fields; never in addresses): a bundled name, or a path
+/// to a gemoji `emoji.json` (gzipped if it ends in `.gz`). `None` = no
+/// emoji suggestions.
+pub(crate) const EMOJI: Option<&str> = Some("gemoji");
+
+/// Punctuation that ends a word and so autocorrects it, as whitespace does.
+/// Not `'` (inside words), nor `-`, `/`, `@`, `_` and the like, which join
+/// parts of one token.
+const WORD_ENDERS: &[char] = &['.', ',', '!', '?', ';', ':', ')', ']', '}', '"'];
+
+/// Whether typing `text` right after a word ends that word, autocorrecting
+/// it: it starts with whitespace or with sentence punctuation.
+pub(crate) fn ends_word(text: &str) -> bool {
+    text.chars()
+        .next()
+        .is_some_and(|c| c.is_whitespace() || WORD_ENDERS.contains(&c))
+}
+
 /// Completion settings.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CompletionConfig {
@@ -45,12 +69,17 @@ pub(crate) struct CompletionConfig {
     /// Whether accepting a suggestion types a space after it; see
     /// [`APPEND_SPACE`].
     pub(crate) append_space: bool,
+    /// Whether misspelled words are corrected as they end; see
+    /// [`AUTOCORRECT`].
+    pub(crate) autocorrect: bool,
+    /// The emoji list `:name` searches, `None` for none; see [`EMOJI`].
+    pub(crate) emoji: Option<String>,
 }
 
 impl CompletionConfig {
     /// The completion settings in use. Replace with the config system.
     pub(crate) fn hardcoded() -> Self {
-        let words = Backend::Dictionary("en".into());
+        let words = Backend::Wordlist("en_US".into());
         let backend = if cfg!(feature = "hunspell") {
             Backend::Merge(vec![words, Backend::Hunspell("en_US".into())])
         } else {
@@ -61,6 +90,8 @@ impl CompletionConfig {
             backend,
             max: 3,
             append_space: APPEND_SPACE,
+            autocorrect: AUTOCORRECT,
+            emoji: EMOJI.map(String::from),
         }
     }
 }
@@ -70,20 +101,33 @@ impl CompletionConfig {
 pub(crate) struct Policy {
     /// Whether accepting a suggestion types a space after it.
     pub(crate) append_space: bool,
+    /// Whether a misspelled word is corrected by itself as it ends.
+    pub(crate) autocorrect: bool,
+    /// Whether `:name` suggests emoji.
+    pub(crate) emoji: bool,
 }
 
-/// The policy for `field`, a space following accepted words where it fits
-/// if `append_space`; `None` means no suggestions, and no bar. Sensitive
-/// fields never get any; nor do terminals, numbers and phones.
-pub(crate) fn policy(field: Field, append_space: bool) -> Option<Policy> {
+/// The policy for `field` under `cfg`: a space after accepted words and
+/// autocorrection where they fit, if `cfg` asks for them. `None` means no
+/// suggestions, and no bar. Sensitive fields never get any; nor do
+/// terminals, numbers and phones.
+pub(crate) fn policy(field: Field, cfg: &CompletionConfig) -> Option<Policy> {
     if field.sensitive {
         return None;
     }
     match field.family {
-        Family::Text => Some(Policy { append_space }),
-        // An address goes on after a completed part (`.`, `@`, `/`).
+        Family::Text => Some(Policy {
+            append_space: cfg.append_space,
+            autocorrect: cfg.autocorrect,
+            emoji: cfg.emoji.is_some(),
+        }),
+        // An address goes on after a completed part (`.`, `@`, `/`), and
+        // its parts are names, not dictionary words; a `:` in one is a
+        // port or scheme, not an emoji.
         Family::Email | Family::Url => Some(Policy {
             append_space: false,
+            autocorrect: false,
+            emoji: false,
         }),
         _ => None,
     }
@@ -93,7 +137,7 @@ pub(crate) fn policy(field: Field, append_space: bool) -> Option<Policy> {
 /// feature is off, its files are missing) is warned about and left out.
 pub(crate) fn build(backend: &Backend, dicts: &mut Dictionaries) -> Box<dyn Completer> {
     match backend {
-        Backend::Dictionary(spec) => Box::new(DictionaryCompleter::new(dicts.get(spec))),
+        Backend::Wordlist(spec) => Box::new(WordlistCompleter::new(dicts.wordlist(spec))),
         Backend::Hunspell(lang) => hunspell(lang),
         Backend::Merge(all) => Box::new(Merge::new(all.iter().map(|b| build(b, dicts)).collect())),
     }
@@ -124,45 +168,75 @@ mod tests {
         Field { family, sensitive }
     }
 
+    fn cfg(append_space: bool, autocorrect: bool) -> CompletionConfig {
+        CompletionConfig {
+            append_space,
+            autocorrect,
+            ..CompletionConfig::hardcoded()
+        }
+    }
+
     #[test]
     fn no_space_by_default() {
         assert!(!CompletionConfig::hardcoded().append_space);
     }
 
     #[test]
-    fn text_gets_a_space_only_when_configured() {
+    fn autocorrect_by_default() {
+        assert!(CompletionConfig::hardcoded().autocorrect);
+    }
+
+    #[test]
+    fn text_gets_a_space_and_autocorrection_only_when_configured() {
         for space in [true, false] {
+            for autocorrect in [true, false] {
+                assert_eq!(
+                    policy(field(Family::Text, false), &cfg(space, autocorrect)),
+                    Some(Policy {
+                        append_space: space,
+                        autocorrect,
+                        emoji: true,
+                    })
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn addresses_never_get_a_space_or_autocorrection() {
+        for f in [Family::Email, Family::Url] {
             assert_eq!(
-                policy(field(Family::Text, false), space),
+                policy(field(f, false), &cfg(true, true)),
                 Some(Policy {
-                    append_space: space
+                    append_space: false,
+                    autocorrect: false,
+                    emoji: false,
                 })
             );
         }
     }
 
     #[test]
-    fn addresses_never_get_a_space() {
-        for f in [Family::Email, Family::Url] {
-            assert_eq!(
-                policy(field(f, false), true),
-                Some(Policy {
-                    append_space: false
-                })
-            );
+    fn spaces_and_sentence_punctuation_end_words() {
+        for t in [" ", "\n", ".", ",", "!", "?", ";", ":", ")", "\"", ". "] {
+            assert!(ends_word(t), "{t:?}");
+        }
+        for t in ["", "a", "'", "-", "/", "@", "_", "1"] {
+            assert!(!ends_word(t), "{t:?}");
         }
     }
 
     #[test]
     fn sensitive_terminal_number_and_phone_get_none() {
-        assert_eq!(policy(field(Family::Text, true), true), None);
+        let cfg = cfg(true, true);
+        assert_eq!(policy(field(Family::Text, true), &cfg), None);
         for f in [
             Family::Password,
             Family::Terminal,
             Family::Number,
             Family::Phone,
         ] {
-            assert_eq!(policy(field(f, false), true), None, "{f:?}");
+            assert_eq!(policy(field(f, false), &cfg), None, "{f:?}");
         }
     }
 }

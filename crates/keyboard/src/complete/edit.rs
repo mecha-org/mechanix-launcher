@@ -2,7 +2,8 @@
 //! shows and the exact edit a tap on it makes. Every source shares this, so
 //! the byte arithmetic and casing live in one place.
 
-use super::{Candidate, Kind, Query};
+use super::{Candidate, Kind, WordQuery};
+use crate::widget::suggestion_bar::BarLabel;
 
 /// What accepting a suggestion does to the field, sent as one input-method
 /// commit: delete `delete_before` bytes before the cursor and
@@ -26,12 +27,22 @@ pub(crate) struct Suggestion {
     pub(crate) edit: TextEdit,
 }
 
+impl Suggestion {
+    /// How the bar shows it.
+    pub(crate) fn bar_label(&self) -> BarLabel {
+        match self.kind {
+            Kind::Emoji => BarLabel::Emoji(self.label.clone()),
+            _ => BarLabel::Word(self.label.clone()),
+        }
+    }
+}
+
 /// The suggestions for `q` from a source's ranked `candidates`: cased like
 /// the typed word, each replacing the whole word around the cursor (with a
 /// space after it if `append_space`), at most `q.max` of them. Candidates
 /// that would leave the word as typed, and repeats, are dropped.
 pub(crate) fn suggestions(
-    q: &Query,
+    q: &WordQuery,
     candidates: Vec<Candidate>,
     append_space: bool,
 ) -> Vec<Suggestion> {
@@ -62,28 +73,69 @@ pub(crate) fn suggestions(
     out
 }
 
-/// `next` reordered to keep the bar steady: a word `prev` also showed (in
-/// any casing) keeps its slot when that slot still exists, so the word under
-/// a finger about to tap stays put; the rest fill the free slots in `next`'s
-/// order.
-pub(crate) fn stabilize(prev: &[Suggestion], next: Vec<Suggestion>) -> Vec<Suggestion> {
-    let mut slots: Vec<Option<Suggestion>> = (0..next.len()).map(|_| None).collect();
+/// The bar's `slots` slots, left to right, in the order the best words take
+/// them: the middle one first (left of middle when `slots` is even), then
+/// outwards, alternating sides and starting with the side that has more
+/// room (the left on a tie), so the words stay centred.
+pub(crate) fn center_out(slots: usize) -> Vec<usize> {
+    if slots == 0 {
+        return Vec::new();
+    }
+    let mid = (slots - 1) / 2;
+    let mut order = vec![mid];
+    let (mut left, mut right) = (mid, mid + 1);
+    while order.len() < slots {
+        // Slots still free on each side.
+        let (l, r) = (left, slots - right);
+        if l >= r {
+            left -= 1;
+            order.push(left);
+        } else {
+            order.push(right);
+            right += 1;
+        }
+    }
+    order
+}
+
+/// `next` (best first) laid out in the bar's `slots` slots, left to right,
+/// kept steady: a word `prev` also showed (in any casing) keeps its slot, so
+/// the word under a finger about to tap stays put; the rest take the free
+/// slots from the middle outwards ([`center_out`]), best first. No words
+/// leave the bar empty.
+pub(crate) fn stabilize(
+    prev: &[Option<Suggestion>],
+    next: Vec<Suggestion>,
+    slots: usize,
+) -> Vec<Option<Suggestion>> {
+    if next.is_empty() {
+        return Vec::new();
+    }
+    let mut out: Vec<Option<Suggestion>> = (0..slots).map(|_| None).collect();
     let mut rest = Vec::new();
     for s in next {
+        let label = s.label.to_lowercase();
         let was = prev
             .iter()
-            .position(|p| p.label.to_lowercase() == s.label.to_lowercase());
+            .position(|p| p.as_ref().is_some_and(|p| p.label.to_lowercase() == label));
         match was {
-            Some(i) if slots.get(i).is_some_and(Option::is_none) => slots[i] = Some(s),
+            Some(i) if out.get(i).is_some_and(Option::is_none) => out[i] = Some(s),
             _ => rest.push(s),
         }
     }
-    // As many slots are free as words are left.
     let mut rest = rest.into_iter();
-    slots
-        .into_iter()
-        .filter_map(|slot| slot.or_else(|| rest.next()))
-        .collect()
+    for i in center_out(slots) {
+        if out[i].is_none() {
+            out[i] = rest.next();
+        }
+    }
+    out
+}
+
+/// Whether `word` is in all capitals: two or more letters, all uppercase.
+pub(crate) fn all_caps(word: &str) -> bool {
+    let mut letters = word.chars().filter(|c| c.is_alphabetic());
+    letters.clone().count() >= 2 && letters.all(char::is_uppercase)
 }
 
 /// `candidate` cased to match `typed`: all capitals if `typed` is (two or
@@ -91,8 +143,7 @@ pub(crate) fn stabilize(prev: &[Suggestion], next: Vec<Suggestion>) -> Vec<Sugge
 /// with one, else as the source gave it (keeping capitals it has, like
 /// "I" or a name).
 fn recase(typed: &str, candidate: &str) -> String {
-    let letters: Vec<char> = typed.chars().filter(|c| c.is_alphabetic()).collect();
-    if letters.len() >= 2 && letters.iter().all(|c| c.is_uppercase()) {
+    if all_caps(typed) {
         return candidate.to_uppercase();
     }
     if typed.chars().next().is_some_and(char::is_uppercase) {
@@ -109,8 +160,8 @@ fn recase(typed: &str, candidate: &str) -> String {
 mod tests {
     use super::*;
 
-    fn q<'a>(word: &'a str, word_after: &'a str) -> Query<'a> {
-        Query {
+    fn q<'a>(word: &'a str, word_after: &'a str) -> WordQuery<'a> {
+        WordQuery {
             word,
             word_after,
             max: 3,
@@ -193,38 +244,61 @@ mod tests {
         suggestions(&q("", ""), cands(words), true)
     }
 
+    /// Each slot's label, `""` for an empty one.
+    fn slots(s: &[Option<Suggestion>]) -> Vec<&str> {
+        s.iter()
+            .map(|s| s.as_ref().map_or("", |s| s.label.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn center_out_starts_in_the_middle() {
+        assert_eq!(center_out(0), Vec::<usize>::new());
+        assert_eq!(center_out(1), [0]);
+        assert_eq!(center_out(2), [0, 1]);
+        assert_eq!(center_out(3), [1, 0, 2]);
+        assert_eq!(center_out(4), [1, 2, 0, 3]);
+        assert_eq!(center_out(5), [2, 1, 3, 0, 4]);
+    }
+
+    #[test]
+    fn stabilize_centres_the_best_word() {
+        let s = stabilize(&[], sugg(&["a", "b", "c"]), 3);
+        assert_eq!(slots(&s), ["b", "a", "c"]);
+        let s = stabilize(&[], sugg(&["a"]), 3);
+        assert_eq!(slots(&s), ["", "a", ""]);
+        let s = stabilize(&[], sugg(&["a", "b"]), 3);
+        assert_eq!(slots(&s), ["b", "a", ""]);
+    }
+
+    #[test]
+    fn stabilize_empty_leaves_the_bar_blank() {
+        let prev = stabilize(&[], sugg(&["a"]), 3);
+        assert!(stabilize(&prev, Vec::new(), 3).is_empty());
+    }
+
     #[test]
     fn stabilize_keeps_words_in_their_slots() {
-        // "that" stays second though it now ranks first; "the" takes the
-        // free slot.
-        let s = stabilize(
-            &sugg(&["this", "that", "they"]),
-            sugg(&["that", "the", "this"]),
-        );
-        assert_eq!(labels(&s), ["this", "that", "the"]);
+        // Shown as [that, this, they]. "that" stays left though it now
+        // ranks first; "the" takes the free middle.
+        let prev = stabilize(&[], sugg(&["this", "that", "they"]), 3);
+        assert_eq!(slots(&prev), ["that", "this", "they"]);
+        let s = stabilize(&prev, sugg(&["that", "the", "then"]), 3);
+        assert_eq!(slots(&s), ["that", "the", "then"]);
+        // A word kept off-centre stays there as the others come and go.
+        let s = stabilize(&s, sugg(&["that"]), 3);
+        assert_eq!(slots(&s), ["that", "", ""]);
+        let s = stabilize(&s, sugg(&["those", "that"]), 3);
+        assert_eq!(slots(&s), ["that", "those", ""]);
     }
 
     #[test]
     fn stabilize_matches_words_in_any_casing() {
-        // "Then" (capitalised now) was "then" in the first slot.
-        let s = stabilize(&sugg(&["then", "than"]), sugg(&["The", "Then"]));
-        assert_eq!(labels(&s), ["Then", "The"]);
-    }
-
-    #[test]
-    fn stabilize_ranks_words_whose_slot_is_gone() {
-        // "then" was third, but only two slots remain: it goes by rank.
-        let s = stabilize(&sugg(&["a", "b", "then"]), sugg(&["the", "then"]));
-        assert_eq!(labels(&s), ["the", "then"]);
-        // A word in the middle slot stays there among new ones.
-        let s = stabilize(&sugg(&["a", "the"]), sugg(&["x", "y", "The"]));
-        assert_eq!(labels(&s), ["x", "The", "y"]);
-    }
-
-    #[test]
-    fn stabilize_with_nothing_before_keeps_the_ranking() {
-        let next = sugg(&["a", "b", "c"]);
-        assert_eq!(stabilize(&[], next.clone()), next);
+        // "Then" (capitalised now) was "then" on the left.
+        let prev = stabilize(&[], sugg(&["than", "then"]), 3);
+        assert_eq!(slots(&prev), ["then", "than", ""]);
+        let s = stabilize(&prev, sugg(&["The", "Then"]), 3);
+        assert_eq!(slots(&s), ["Then", "The", ""]);
     }
 
     #[test]

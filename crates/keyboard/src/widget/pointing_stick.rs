@@ -70,7 +70,8 @@ impl Widget for PointingStickOverlay {
     fn build(b: PointingStickOverlayBuilder, me: Handle<Self>, s: &mut Spawner<'_, Self>) -> Self {
         *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default().absolute().hidden();
         let colors = Colors {
-            cell: key_roles(b.look, KeyKind::Normal, KeyState::Normal),
+            // The pointing stick key's own base colour.
+            cell: key_roles(b.look, KeyKind::Function, KeyState::Normal),
             lit: key_roles(b.look, KeyKind::Normal, KeyState::Latched),
         };
         let ink = s.color(colors.cell.1);

@@ -30,13 +30,22 @@ key_styles:
     strip:    { background: surface-container-highest, foreground: on-surface,           font: geist-mono, font-size: 13 }
     bottom:   { background: surface-container-high,    foreground: on-surface,           font-size: 16 }
     done:     { background: on-secondary-container,    foreground: on-primary-container, font-size: 18 }
+    # The long-press more-keys popup's cells (`latched` is the highlighted one).
+    more_keys: { background: surface-container-highest, foreground: on-surface }
     latched:  { background: primary,                   foreground: on-primary }
     emoji:    { background: surface-container-highest, foreground: primary }
     emoji_tab: { background: surface-container-highest, foreground: on-surface }
     # A tab key for the view being shown.
     current:  { background: secondary-container,       foreground: on-secondary-container }
 
-# Widths are flex weights within a row. AOSP's: a letter key is 10 % of the row;
+# Widths are percentages of the row: a key with the same width is the same
+# size in every row, whatever else the row holds. Each key's share includes
+# the gap around it (half a `gap` on each side), so keys line up in columns:
+# a 20-wide key spans two 10-wide keys and the gap between them. A row adding
+# up to less than 100 is centred, so leaving room shortens it equally at both
+# ends; `[N]` is a blank N wide, for putting room on one side only. A view
+# whose rows all add up to less (the 40-wide number pads) is stretched so its
+# widest row spans the keyboard. AOSP's: a letter key is 10 % of the row;
 # shift, backspace, ?123/ABC and enter are 15 %; space fills the rest.
 outlines:
     default:     { width: 10 }
@@ -44,6 +53,13 @@ outlines:
     space:       { width: 40 }
     space_short: { width: 30 }
     strip:       { width: 12.5 }
+    # The nine emoji category tabs share what ABC (15) leaves of the row.
+    emoji_tab:   { width: 9.44 }
+    # A short key: `height` is a fraction of the row, the key centred in it.
+    # Half a row is 25 px at the design width; 6.2 % of the row less the gap
+    # is 25 px too, so it is square. The home row then adds up to 96.2,
+    # centred with 1.9 to spare at each end.
+    pointing_stick: { width: 6.2, height: 0.5 }
 
 # AOSP LatinIME English pages in the Mecha theme (see NOTICE-aosp.txt).
 # Shift is state, not a page: uppercase is derived from the letter keys.
@@ -54,7 +70,7 @@ views:
         more_keys: letters
         rows:
             - "q w e r t y u i o p"
-            - "a s d f pointing_stick g h j k l"
+            - "a s d f g pointing_stick h j k l"
             - "shift z x c v b n m BackSpace"
             - "to_symbols comma emoji space period Return"
     symbols:
@@ -63,7 +79,7 @@ views:
         more_keys: symbols
         rows:
             - "1 2 3 4 5 6 7 8 9 0"
-            - "[5] @ # $ % & - + ( ) [5]"
+            - "@ # $ % & pointing_stick - + ( )"
             - "to_more_symbols * \" ' : ; ! ? BackSpace"
             - "to_letters comma _ space_short / . Return"
     more_symbols:
@@ -72,7 +88,7 @@ views:
         more_keys: symbols
         rows:
             - "~ ` | • √ π ÷ × ¶ ∆"
-            - "[5] £ ¢ € ¥ ^ ° = { } [5]"
+            - "£ ¢ € ¥ ^ pointing_stick ° = { }"
             - "to_symbols \\ © ® ™ § [ ] BackSpace"
             - "to_letters comma < space_short > . Return"
     # Emoji pages, one per category, all `page: emoji`. Any key here without
@@ -183,7 +199,7 @@ views:
             - "1 2 3 minus"
             - "4 5 6 comma"
             - "7 8 9 BackSpace_pad"
-            - "period 0 space_pad Return_pad"
+            - "period_pad 0 space_pad Return_pad"
     phone:
         family: phone
         more_keys: phone
@@ -226,12 +242,31 @@ views:
         rows:
             - { height: 0.75, keys: "Esc Tab Ctrl Alt ← ↓ ↑ →" }
 
+# Holding a key listed in `keys` offers the `targets` other than the shown
+# view's own family; sliding to one and releasing shows that keyboard's
+# letters page (until the next field is focused). A tap still does the key's
+# own action. A view with no page key gets its bottom-left key listed.
+switcher:
+    keys: [to_symbols, to_more_symbols, to_letters, to_phone_symbols, to_phone, period_pad]
+    targets:
+        - { label: Alpha, family: text }
+        - { label: Term, family: terminal }
+        - { label: Num, family: number }
+
+# Corner mark on keys whose hold opens a longer list: every `switcher` key,
+# and any other key with at least `min-choices` choices (0 = switcher keys
+# only). Letter keys, whose accents are expected, and keys already showing a
+# hint are not marked. An empty label turns the mark off.
+more-hint:
+    label: "•••"
+    min-choices: 0
+
 buttons:
     # Tap: toggle caret / select mode. Hold: a direction pad around the key;
     # slide toward a direction to hold that arrow (Shift+arrow in select mode).
     pointing_stick:
         key_style: strip
-        outline: default
+        outline: pointing_stick
         action: pointing_stick
         icon: pointing-stick-symbolic
     shift:
@@ -288,38 +323,47 @@ buttons:
     # Emoji category tabs.
     tab_faces:
         key_style: emoji_tab
+        outline: emoji_tab
         action: { set_view: emoji }
         emoji: "😀"
     tab_people:
         key_style: emoji_tab
+        outline: emoji_tab
         action: { set_view: emoji_people }
         emoji: "👋"
     tab_hearts:
         key_style: emoji_tab
+        outline: emoji_tab
         action: { set_view: emoji_hearts }
         emoji: "❤️"
     tab_animals:
         key_style: emoji_tab
+        outline: emoji_tab
         action: { set_view: emoji_animals }
         emoji: "🐶"
     tab_food:
         key_style: emoji_tab
+        outline: emoji_tab
         action: { set_view: emoji_food }
         emoji: "🍔"
     tab_activities:
         key_style: emoji_tab
+        outline: emoji_tab
         action: { set_view: emoji_activities }
         emoji: "⚽"
     tab_travel:
         key_style: emoji_tab
+        outline: emoji_tab
         action: { set_view: emoji_travel }
         emoji: "🚗"
     tab_objects:
         key_style: emoji_tab
+        outline: emoji_tab
         action: { set_view: emoji_objects }
         emoji: "💡"
     tab_symbols:
         key_style: emoji_tab
+        outline: emoji_tab
         action: { set_view: emoji_symbols }
         emoji: "🔣"
     space:
@@ -336,6 +380,10 @@ buttons:
     comma:
         label: ","
     period:
+        label: "."
+    # The number pad's `.`: its own token so holding it switches keyboards
+    # (the pad has no page key) without touching the letters' `.` choices.
+    period_pad:
         label: "."
     at:
         label: "@"

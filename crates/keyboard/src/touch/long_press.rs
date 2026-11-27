@@ -40,15 +40,27 @@ impl ChoicesRow {
     /// there is no room), then pushed inside `bounds` as `popup_rect` does.
     /// Cells shrink only when the row is wider than `bounds`. The first
     /// choice is highlighted.
-    pub(crate) fn open(key: Rect, bounds: Rect, gap: f32, choices: Vec<String>) -> ChoicesRow {
+    ///
+    /// Choice `anchor` (past the end: the last) goes over the key instead
+    /// of the first, and is highlighted; a row anchored past its first
+    /// choice keeps its order (never mirrors): the choices left of the
+    /// anchor run left of the key.
+    pub(crate) fn open(
+        key: Rect,
+        bounds: Rect,
+        gap: f32,
+        choices: Vec<String>,
+        anchor: usize,
+    ) -> ChoicesRow {
+        let anchor = anchor.min(choices.len().saturating_sub(1));
         let n = choices.len().max(1) as f32;
         let cell_w = key.size.width.min(bounds.size.width / n);
         let (w, h) = (cell_w * n, key.size.height);
-        let mirrored = key.origin.x + w > bounds.right();
+        let mirrored = anchor == 0 && key.origin.x + w > bounds.right();
         let x = if mirrored {
             key.origin.x + cell_w - w
         } else {
-            key.origin.x
+            key.origin.x - cell_w * anchor as f32
         };
         let y = key.origin.y - gap - h;
         let x = x.min(bounds.right() - w).max(bounds.origin.x);
@@ -59,7 +71,7 @@ impl ChoicesRow {
             key,
             bottom: bounds.bottom(),
             cell_w,
-            highlighted: Some(0),
+            highlighted: Some(anchor),
             mirrored,
         }
     }
@@ -105,7 +117,7 @@ mod tests {
     #[test]
     fn opens_above_key_with_first_highlighted() {
         let key = Rect::new(100.0, 200.0, 50.0, 50.0);
-        let row = ChoicesRow::open(key, BOUNDS, GAP, choices("3 é è ê ë ē"));
+        let row = ChoicesRow::open(key, BOUNDS, GAP, choices("3 é è ê ë ē"), 0);
         assert_eq!(row.highlighted, Some(0));
         assert_eq!(row.cell_w, 50.0);
         assert_eq!(row.rect, Rect::new(100.0, 146.0, 300.0, 50.0));
@@ -116,23 +128,29 @@ mod tests {
     fn edge_key_row_is_pushed_inside_bounds() {
         // `q` at the left edge, top row: the row rises into the headroom.
         let q = Rect::new(0.0, 80.0, 50.0, 50.0);
-        let row = ChoicesRow::open(q, BOUNDS, GAP, choices("1"));
+        let row = ChoicesRow::open(q, BOUNDS, GAP, choices("1"), 0);
         assert_eq!(row.rect, Rect::new(0.0, 26.0, 50.0, 50.0));
         // `p` at the right edge: the choices run left, the first over `p`.
         let p = Rect::new(450.0, 80.0, 50.0, 50.0);
-        let row = ChoicesRow::open(p, BOUNDS, GAP, choices("0 a b"));
+        let row = ChoicesRow::open(p, BOUNDS, GAP, choices("0 a b"), 0);
         assert!(row.mirrored);
         assert_eq!(row.rect, Rect::new(350.0, 26.0, 150.0, 50.0));
         assert_eq!(row.choice_at(2), 0);
         // Too long for either side: pushed inside, cells shrunk to fit.
         let o = Rect::new(400.0, 80.0, 50.0, 50.0);
-        let row = ChoicesRow::open(o, BOUNDS, GAP, choices("a b c d e f g h i j k l m n o p"));
+        let row = ChoicesRow::open(
+            o,
+            BOUNDS,
+            GAP,
+            choices("a b c d e f g h i j k l m n o p"),
+            0,
+        );
         assert!(row.rect.origin.x >= 0.0 && row.rect.right() <= 500.0);
         assert_eq!(row.cell_w, 500.0 / 16.0);
         // Above the headroom: pushed down.
         let high = Rect::new(0.0, 10.0, 50.0, 50.0);
         assert_eq!(
-            ChoicesRow::open(high, BOUNDS, GAP, choices("1"))
+            ChoicesRow::open(high, BOUNDS, GAP, choices("1"), 0)
                 .rect
                 .origin
                 .y,
@@ -143,7 +161,7 @@ mod tests {
     #[test]
     fn sliding_picks_cell_under_finger_and_clamps_at_ends() {
         let key = Rect::new(100.0, 200.0, 50.0, 50.0);
-        let mut row = ChoicesRow::open(key, BOUNDS, GAP, choices("3 é è ê"));
+        let mut row = ChoicesRow::open(key, BOUNDS, GAP, choices("3 é è ê"), 0);
         row.track(Point::new(260.0, 170.0));
         assert_eq!(row.highlighted, Some(3));
         row.track(Point::new(160.0, 220.0));
@@ -154,15 +172,34 @@ mod tests {
         assert_eq!(row.highlighted, Some(3));
         // Mirrored: the cell left of the key is the second choice.
         let p = Rect::new(450.0, 200.0, 50.0, 50.0);
-        let mut row = ChoicesRow::open(p, BOUNDS, GAP, choices("0 a b"));
+        let mut row = ChoicesRow::open(p, BOUNDS, GAP, choices("0 a b"), 0);
         row.track(Point::new(420.0, 170.0));
+        assert_eq!(row.highlighted, Some(1));
+    }
+
+    #[test]
+    fn anchored_row_puts_its_anchor_over_the_key() {
+        let key = Rect::new(200.0, 200.0, 50.0, 50.0);
+        let row = ChoicesRow::open(key, BOUNDS, GAP, choices("a b c d e f"), 3);
+        assert_eq!(row.highlighted, Some(3));
+        assert_eq!(row.rect, Rect::new(50.0, 146.0, 300.0, 50.0));
+        assert!(!row.mirrored);
+        // Near the right edge: pushed inside, in order, not mirrored.
+        let p = Rect::new(450.0, 200.0, 50.0, 50.0);
+        let mut row = ChoicesRow::open(p, BOUNDS, GAP, choices("a b c d e f"), 1);
+        assert!(!row.mirrored);
+        assert_eq!(row.rect.right(), 500.0);
+        row.track(Point::new(490.0, 170.0));
+        assert_eq!(row.highlighted, Some(5));
+        // An anchor past the end is the last choice.
+        let row = ChoicesRow::open(key, BOUNDS, GAP, choices("a b"), 7);
         assert_eq!(row.highlighted, Some(1));
     }
 
     #[test]
     fn sliding_far_below_cancels() {
         let key = Rect::new(100.0, 200.0, 50.0, 50.0);
-        let mut row = ChoicesRow::open(key, BOUNDS, GAP, choices("3 é"));
+        let mut row = ChoicesRow::open(key, BOUNDS, GAP, choices("3 é"), 0);
         // Anywhere on the key, at its bottom edge and in the gap just below
         // it, the finger still picks a cell.
         for y in [205.0, 240.0, 250.0, 262.0, 275.0] {
@@ -184,7 +221,7 @@ mod tests {
         // A bottom-row key 8 px above the keyboard's bottom edge (320): half
         // a key under it (325) is past the edge, so the edge is the line.
         let key = Rect::new(100.0, 262.0, 50.0, 50.0);
-        let mut row = ChoicesRow::open(key, BOUNDS, GAP, choices("3 é"));
+        let mut row = ChoicesRow::open(key, BOUNDS, GAP, choices("3 é"), 0);
         for y in [270.0, 312.0, 320.0] {
             row.track(Point::new(120.0, y));
             assert_eq!(row.highlighted, Some(0), "y = {y}");

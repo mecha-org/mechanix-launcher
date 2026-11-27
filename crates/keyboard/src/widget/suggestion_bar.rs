@@ -1,11 +1,14 @@
-//! The suggestion bar across the top of the keys: suggestions left to
-//! right, a thin vertical line between them, and a thin line under the bar
+//! The suggestion bar across the top of the keys: equal slots left to
+//! right, the best suggestion in the middle one, each word centred in its
+//! slot, a thin vertical line between two shown words, and a thin line under the bar
 //! separating it from the keys. It is the keyboard container's first child,
 //! absolutely positioned over the container's top padding, draw-only: the
 //! input layer hit-tests it ([`SuggestionBar::cell_at`]) and drives it with
 //! [`BarFeedback`].
 
 use mecha_wayland::prelude::*;
+
+use crate::layout::emoji::Emoji;
 
 /// The bar is this many key rows tall.
 pub(crate) const BAR_ROW_SCALE: f32 = 0.8;
@@ -22,13 +25,25 @@ const LINE_ROLE: ColorRole = ColorRole::Outline;
 const INK_ROLE: ColorRole = ColorRole::OnSurface;
 const PRESSED_ROLE: ColorRole = ColorRole::SurfaceContainerHigh;
 
+/// What one slot of the bar shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum BarLabel {
+    /// A word, in the bar's font.
+    Word(String),
+    /// An emoji, drawn in colour from the bundled emoji font.
+    Emoji(String),
+}
+
 /// The input layer's (and the keyboard's) word to the bar.
 #[derive(Clone, Debug)]
 pub(crate) enum BarFeedback {
-    /// Show these labels, in order, none pressed.
-    Show(Vec<String>),
+    /// Show these slots, left to right (`None` an empty slot), none
+    /// pressed.
+    Show(Vec<Option<BarLabel>>),
     /// Light cell `i` as pressed, or none.
     Press(Option<usize>),
+    /// The skin tone changed: redraw the emoji shown in it.
+    Retone,
 }
 impl Event for BarFeedback {}
 
@@ -39,26 +54,38 @@ pub(crate) struct SuggestionBarBuilder {
     pub(crate) height: f32,
     /// Side padding of each cell, logical px.
     pub(crate) padding: f32,
+    /// Whether a thin line separates two shown labels (off for the emoji
+    /// search results).
+    pub(crate) dividers: bool,
 }
 
 impl Build for SuggestionBarBuilder {
     type Widget = SuggestionBar;
 }
 
-/// The bar. Its cells persist: a [`BarFeedback::Show`] relabels them in
-/// place, adding or removing only the difference in count, so a word that
-/// stays in its slot is not redrawn.
+/// The bar. Its cells (one per slot, sharing the width equally) persist: a
+/// [`BarFeedback::Show`] relabels them in place, adding or removing only the
+/// difference in count, so a word that stays in its slot is not redrawn.
 pub(crate) struct SuggestionBar {
     font: FontId,
     font_size: u16,
     /// Side padding of each cell (a rescale updates it).
     pub(crate) padding: f32,
-    /// One per suggestion, in order.
+    /// One per slot, left to right.
     cells: Vec<Handle<Div>>,
     /// Each cell's label.
     texts: Vec<Handle<Text>>,
-    /// The lines between cells.
+    /// Each cell's emoji, spawned the first time the cell shows one and
+    /// hidden while it shows a word.
+    images: Vec<Option<Handle<Image>>>,
+    /// Whether each cell shows a word (an empty one cannot be pressed).
+    filled: Vec<bool>,
+    /// What each cell shows, as last given (an emoji untoned).
+    labels: Vec<Option<BarLabel>>,
+    /// The lines between cells, `dividers[i]` after `cells[i]`.
     dividers: Vec<Handle<Div>>,
+    /// Whether the dividers ever show.
+    show_dividers: bool,
     pressed: Option<usize>,
 }
 
@@ -73,10 +100,18 @@ impl SuggestionBar {
             .inset(Insets::new(px(0.0), px(0.0), auto(), px(0.0)))
     }
 
-    /// The cell index under `point`, given each cell's laid-out rectangle,
-    /// if any.
-    pub(crate) fn cell_at(cells: &[Rect], point: Point) -> Option<usize> {
-        cells.iter().position(|r| r.contains(point))
+    /// The cell index under `point`, given each cell's laid-out rectangle
+    /// and whether it shows a word, if it falls on one that does.
+    pub(crate) fn cell_at(cells: &[Rect], filled: &[bool], point: Point) -> Option<usize> {
+        cells
+            .iter()
+            .position(|r| r.contains(point))
+            .filter(|&i| filled.get(i).copied().unwrap_or(false))
+    }
+
+    /// Whether each cell shows a word, in order.
+    pub(crate) fn filled(&self) -> &[bool] {
+        &self.filled
     }
 
     /// Each cell's handle, in order.
@@ -99,6 +134,10 @@ impl Widget for SuggestionBar {
         s.on::<BarFeedback>(me, |ctx, e| match e {
             BarFeedback::Show(labels) => show(ctx, labels),
             BarFeedback::Press(i) => press(ctx, *i),
+            BarFeedback::Retone => {
+                let labels = ctx.me().labels.clone();
+                show(ctx, &labels);
+            }
         });
         SuggestionBar {
             font: b.font,
@@ -106,7 +145,11 @@ impl Widget for SuggestionBar {
             padding: b.padding,
             cells: Vec::new(),
             texts: Vec::new(),
+            images: Vec::new(),
+            filled: Vec::new(),
+            labels: Vec::new(),
             dividers: Vec::new(),
+            show_dividers: b.dividers,
             pressed: None,
         }
     }
@@ -119,18 +162,15 @@ fn underline(color: Color) -> Quad {
         .border_color(color)
 }
 
-/// Show `labels`, one per cell: relabel the cells there are (unchanged
-/// labels are left alone), spawn any more needed, and remove any extra. A
-/// pressed cell stays lit: the finger is still on it.
-fn show(ctx: &mut Context<'_, SuggestionBar>, labels: &[String]) {
-    let texts = ctx.me().texts.clone();
-    for (text, label) in texts.iter().zip(labels) {
-        ctx.at(*text).unwrap().set_text(label.as_str());
-    }
+/// Show `labels`, one per cell (`None` leaves it empty): spawn any more
+/// cells needed, remove any extra, and label each (an unchanged label is
+/// left alone). A pressed cell stays lit: the finger is still on it.
+fn show(ctx: &mut Context<'_, SuggestionBar>, labels: &[Option<BarLabel>]) {
     while ctx.me().cells.len() > labels.len() {
         let bar = ctx.me();
         let cell = bar.cells.pop().unwrap();
         bar.texts.pop();
+        bar.images.pop();
         // The line before the cell goes with it; the first cell has none.
         let divider = bar.dividers.pop();
         ctx.remove(cell);
@@ -138,15 +178,64 @@ fn show(ctx: &mut Context<'_, SuggestionBar>, labels: &[String]) {
             ctx.remove(divider);
         }
     }
-    let have = ctx.me().cells.len();
-    for label in labels.iter().skip(have) {
-        spawn_cell(ctx, label);
+    while ctx.me().cells.len() < labels.len() {
+        spawn_cell(ctx);
     }
+    for (i, label) in labels.iter().enumerate() {
+        set_label(ctx, i, label.as_ref());
+    }
+    ctx.me().filled = labels.iter().map(Option::is_some).collect();
+    ctx.me().labels = labels.to_vec();
     restyle_cells(ctx);
 }
 
-/// Append a cell labelled `label`, after a divider unless it is the first.
-fn spawn_cell(ctx: &mut Context<'_, SuggestionBar>, label: &str) {
+/// Label cell `i` with `label`: a word in its text, an emoji (in the skin
+/// tone picked, if it takes one) in its image (spawned the first time), the
+/// other hidden or blank. An emoji the font can't draw shows as text.
+fn set_label(ctx: &mut Context<'_, SuggestionBar>, i: usize, label: Option<&BarLabel>) {
+    let (cell, text, shown) = {
+        let bar = ctx.me();
+        (bar.cells[i], bar.texts[i], bar.images[i])
+    };
+    let sprite = match label {
+        Some(BarLabel::Emoji(e)) => {
+            let (mut emoji, mut atlas) = ctx.fetch::<(ResMut<Emoji>, ResMut<Atlas>)>();
+            let toned = emoji.toned(e);
+            emoji.ensure(&mut atlas, &toned)
+        }
+        _ => None,
+    };
+    let word = match (label, sprite) {
+        (Some(BarLabel::Word(w) | BarLabel::Emoji(w)), None) => w.as_str(),
+        _ => "",
+    };
+    ctx.at(text).unwrap().set_text(word);
+    match (sprite, shown) {
+        (Some(e), Some(handle)) => {
+            let mut at = ctx.at(handle).unwrap();
+            at.set_sprite(e.sprite);
+            at.set_style(emoji_style(e.width, e.height));
+        }
+        (Some(e), None) => {
+            let image = ctx.spawn(cell, image(e.sprite).style(emoji_style(e.width, e.height)));
+            ctx.me().images[i] = Some(image);
+        }
+        (None, Some(handle)) => {
+            ctx.at(handle).unwrap().set_display(Display::Hidden);
+        }
+        (None, None) => {}
+    }
+}
+
+/// The layout style of an emoji `width` by `height` logical px.
+fn emoji_style(width: f32, height: f32) -> LayoutStyle {
+    LayoutStyle::default()
+        .size(px(width), px(height))
+        .shrink(0.0)
+}
+
+/// Append an empty cell, after a divider unless it is the first.
+fn spawn_cell(ctx: &mut Context<'_, SuggestionBar>) {
     let me = ctx.handle();
     let (font, font_size, padding, first) = {
         let bar = ctx.me();
@@ -163,15 +252,19 @@ fn spawn_cell(ctx: &mut Context<'_, SuggestionBar>, label: &str) {
         );
         ctx.me().dividers.push(divider);
     }
-    // Cells take their text's width, shrinking (with an ellipsis) only when
-    // the labels do not fit.
+    // Cells share the bar's width equally, whatever their words, so a slot
+    // stays put; a word too long for its slot ends in an ellipsis.
     let cell = ctx.spawn(
         me,
         div().style(
             LayoutStyle::default()
                 .row()
                 .align_items(Align::Center)
+                .justify(Justify::Center)
                 .height(percent(100.0))
+                .flex_basis(px(0.0))
+                .grow(1.0)
+                .shrink(1.0)
                 .min_width(px(0.0))
                 .padding(Insets::new(px(0.0), px(padding), px(0.0), px(padding))),
         ),
@@ -179,7 +272,7 @@ fn spawn_cell(ctx: &mut Context<'_, SuggestionBar>, label: &str) {
     let ink = ctx.color(INK_ROLE);
     let text = ctx.spawn(
         cell,
-        text(font, label)
+        text(font, "")
             .color(ink)
             .size(font_size)
             .overflow(TextOverflow::Ellipsis)
@@ -188,6 +281,7 @@ fn spawn_cell(ctx: &mut Context<'_, SuggestionBar>, label: &str) {
     let bar = ctx.me();
     bar.cells.push(cell);
     bar.texts.push(text);
+    bar.images.push(None);
 }
 
 /// Light cell `i` as pressed (and unlight the one before).
@@ -197,17 +291,19 @@ fn press(ctx: &mut Context<'_, SuggestionBar>, i: Option<usize>) {
 }
 
 /// Paint every cell, label and divider for the pressed state and the
-/// current theme.
+/// current theme. A divider shows only between two shown words.
 fn restyle_cells(ctx: &mut Context<'_, SuggestionBar>) {
     let fill = ctx.color(PRESSED_ROLE);
     let line = ctx.color(LINE_ROLE);
     let ink = ctx.color(INK_ROLE);
-    let (cells, texts, dividers, pressed) = {
+    let (cells, texts, filled, dividers, show_dividers, pressed) = {
         let bar = ctx.me();
         (
             bar.cells.clone(),
             bar.texts.clone(),
+            bar.filled.clone(),
             bar.dividers.clone(),
+            bar.show_dividers,
             bar.pressed,
         )
     };
@@ -222,10 +318,16 @@ fn restyle_cells(ctx: &mut Context<'_, SuggestionBar>) {
         };
         ctx.at(cell).unwrap().set_paint(paint);
     }
-    for divider in dividers {
-        ctx.at(divider)
-            .unwrap()
-            .set_paint(Paint::Quad(Quad::new(line)));
+    for (i, divider) in dividers.into_iter().enumerate() {
+        let between_words = show_dividers
+            && filled.get(i).copied().unwrap_or(false)
+            && filled.get(i + 1).copied().unwrap_or(false);
+        let paint = if between_words {
+            Paint::Quad(Quad::new(line))
+        } else {
+            Paint::None
+        };
+        ctx.at(divider).unwrap().set_paint(paint);
     }
 }
 
@@ -239,17 +341,23 @@ mod tests {
             Rect::new(0.0, 0.0, 80.0, 40.0),
             Rect::new(81.0, 0.0, 60.0, 40.0),
         ];
+        let filled = [true, true];
         assert_eq!(
-            SuggestionBar::cell_at(&cells, Point::new(10.0, 20.0)),
+            SuggestionBar::cell_at(&cells, &filled, Point::new(10.0, 20.0)),
             Some(0)
         );
         assert_eq!(
-            SuggestionBar::cell_at(&cells, Point::new(100.0, 20.0)),
+            SuggestionBar::cell_at(&cells, &filled, Point::new(100.0, 20.0)),
             Some(1)
         );
         // Past the last cell: blank bar, nothing.
         assert_eq!(
-            SuggestionBar::cell_at(&cells, Point::new(300.0, 20.0)),
+            SuggestionBar::cell_at(&cells, &filled, Point::new(300.0, 20.0)),
+            None
+        );
+        // An empty slot is nothing either.
+        assert_eq!(
+            SuggestionBar::cell_at(&cells, &[false, true], Point::new(10.0, 20.0)),
             None
         );
     }

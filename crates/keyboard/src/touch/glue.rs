@@ -23,17 +23,23 @@ use super::long_press::{ChoicesRow, LONG_PRESS};
 use super::pointing_stick::{POINTING_STICK_HOLD, PointingStickPad};
 use super::resolve::KeyGeom;
 use super::tracker::{TouchOut, TouchTracker};
+use crate::complete::{Completion, Kind};
+use crate::emoji_search;
 use crate::feedbackd;
 use crate::field::Field;
 use crate::input::{
-    accept_suggestion, dispatch, dispatch_choice, hold, hold_direction, release, repeats,
-    tap_direction,
+    accept_emoji_suggestion, accept_suggestion, commit_emoji, dispatch, dispatch_choice, hold,
+    hold_direction, release, repeats, tap_direction,
 };
 use crate::layout::KeyAction;
+use crate::layout::emoji::Emoji;
 use crate::modifiers::shift::{self, Shift};
 use crate::predict::{LetterPrior, Prediction, TypingContext};
+use crate::skin_tone;
 use crate::visibility::KeyboardVisibilityExt;
+use crate::widget::emoji_search_bar::{EmojiSearchBar, SearchBarFeedback, SearchPart};
 use crate::widget::keyboard::Keyboard;
+use crate::widget::keyboard::TopBar;
 use crate::widget::more_keys::ChoicesFeedback;
 use crate::widget::pointing_stick::PointingStickFeedback;
 use crate::widget::suggestion_bar::{BarFeedback, SuggestionBar};
@@ -49,9 +55,55 @@ pub(crate) struct TouchState {
     popup: bool,
     /// Deferral and per-contact prior.
     flow: Flow,
-    /// The contact that went down on the suggestion bar, and the
-    /// suggestion it is over. It never reaches the keys.
-    bar: Option<(ContactId, Option<usize>)>,
+    /// The contact that went down on a bar over the keys, and what it is
+    /// over. It never reaches the keys.
+    bar: Option<(ContactId, BarTarget)>,
+    /// The skin tone row the bar contact opened by holding an emoji that
+    /// takes one; it then picks from the row, not the bar.
+    bar_row: Option<ChoicesRow>,
+}
+
+impl TouchState {
+    /// The skin tone row a bar contact has open, if any.
+    #[cfg(test)]
+    pub(crate) fn bar_row(&self) -> Option<&ChoicesRow> {
+        self.bar_row.as_ref()
+    }
+}
+
+/// Which bar a contact is on, and what on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BarTarget {
+    /// The suggestion bar, over this suggestion if any.
+    Suggestion(Option<usize>),
+    /// The emoji search results, over this result if any.
+    Result(Option<usize>),
+    /// The emoji search bar, over this part if any.
+    Search(Option<SearchPart>),
+}
+
+impl BarTarget {
+    /// The same bar, over `other`'s part if `other` is on it too, else
+    /// over nothing: a contact stays on the bar it went down on.
+    fn moved_to(self, other: Option<BarTarget>) -> BarTarget {
+        use BarTarget::*;
+        match (self, other) {
+            (Suggestion(_), Some(Suggestion(i))) => Suggestion(i),
+            (Result(_), Some(Result(i))) => Result(i),
+            (Search(_), Some(Search(p))) => Search(p),
+            (Suggestion(_), _) => Suggestion(None),
+            (Result(_), _) => Result(None),
+            (Search(_), _) => Search(None),
+        }
+    }
+
+    /// Whether it is over something a release acts on.
+    fn on_item(self) -> bool {
+        match self {
+            BarTarget::Suggestion(i) | BarTarget::Result(i) => i.is_some(),
+            BarTarget::Search(p) => p.is_some(),
+        }
+    }
 }
 
 /// The keyboard as the [`flow`] sees it.
@@ -76,17 +128,30 @@ impl Board for Kb<'_, '_> {
     }
     fn choices_row(&mut self, index: usize) -> Option<ChoicesRow> {
         let me = self.0.me();
-        let choices = me.keys[me.current_view].get(index)?.choices.clone();
+        let entry = me.keys[me.current_view].get(index)?;
+        let choices = entry.choices.clone();
         if choices.is_empty() {
             return None;
         }
+        let tones = entry.skin_tone_base.is_some();
         let gap = me.popup_gap;
         let key = *key_geoms(self.0).get(index)?;
         let bounds = overlay_bounds(self.0)?;
-        Some(ChoicesRow::open(key.rect, bounds, gap, choices))
+        // A skin-tone row opens with the tone the key shows over it.
+        let anchor = if tones {
+            skin_tone::choice_of(self.0.resource::<Emoji>().skin_tone())
+        } else {
+            0
+        };
+        Some(ChoicesRow::open(key.rect, bounds, gap, choices, anchor))
     }
     fn is_pointing_stick(&mut self, index: usize) -> bool {
         let me = self.0.me();
+        // While an emoji search is typed it is a plain key that does
+        // nothing: no direction pad.
+        if me.search.is_some() {
+            return false;
+        }
         matches!(
             me.keys[me.current_view].get(index).map(|k| &k.action),
             Some(KeyAction::PointingStick)
@@ -127,8 +192,8 @@ impl Board for Kb<'_, '_> {
 /// gets no handler, so taps there stay dead.
 pub(crate) fn attach(s: &mut Spawner<'_, Keyboard>, me: Handle<Keyboard>) {
     s.on::<Press>(me, |ctx, e| {
-        if let Some(cell) = bar_hit(ctx, e.position) {
-            bar_press(ctx, e.contact, cell);
+        if let Some(target) = bar_hit(ctx, e.position) {
+            bar_press(ctx, e.contact, target);
             return;
         }
         ctx.me().touch.last_time.insert(e.contact, e.time);
@@ -141,9 +206,13 @@ pub(crate) fn attach(s: &mut Spawner<'_, Keyboard>, me: Handle<Keyboard>) {
     });
 
     s.on::<PressMoved>(me, |ctx, e| {
-        if is_bar_contact(ctx, e.contact) {
-            let cell = bar_hit(ctx, e.position).flatten();
-            bar_press(ctx, e.contact, cell);
+        if let Some(target) = bar_contact(ctx, e.contact) {
+            if ctx.me().touch.bar_row.is_some() {
+                bar_row_moved(ctx, e.position);
+                return;
+            }
+            let over = bar_hit(ctx, e.position);
+            bar_press(ctx, e.contact, target.moved_to(over));
             return;
         }
         ctx.me().touch.last_time.insert(e.contact, e.time);
@@ -151,9 +220,21 @@ pub(crate) fn attach(s: &mut Spawner<'_, Keyboard>, me: Handle<Keyboard>) {
     });
 
     s.on::<Release>(me, |ctx, e| {
-        if is_bar_contact(ctx, e.contact) {
-            if let Some(i) = bar_end(ctx) {
-                accept_suggestion(ctx, i);
+        if bar_contact(ctx, e.contact).is_some() {
+            if let Some(row) = ctx.me().touch.bar_row.clone() {
+                let target = bar_end(ctx);
+                if let (Some(target), Some(choice)) = (target, row.highlighted) {
+                    bar_pick_tone(ctx, target, &row, choice);
+                }
+                return;
+            }
+            match bar_end(ctx) {
+                Some(BarTarget::Suggestion(Some(i))) => accept_suggestion(ctx, i),
+                Some(BarTarget::Result(Some(i))) => emoji_search::pick(ctx, i),
+                Some(BarTarget::Search(Some(SearchPart::Field))) => emoji_search::enter(ctx),
+                Some(BarTarget::Search(Some(SearchPart::Back))) => emoji_search::exit(ctx),
+                Some(BarTarget::Search(Some(SearchPart::Clear))) => emoji_search::clear(ctx),
+                _ => {}
             }
             return;
         }
@@ -164,7 +245,7 @@ pub(crate) fn attach(s: &mut Spawner<'_, Keyboard>, me: Handle<Keyboard>) {
     });
 
     s.on::<PressCancelled>(me, |ctx, e| {
-        if is_bar_contact(ctx, e.contact) {
+        if bar_contact(ctx, e.contact).is_some() {
             bar_end(ctx);
             return;
         }
@@ -187,56 +268,250 @@ pub(crate) fn abort(ctx: &mut Context<'_, Keyboard>) {
     flow::abort(&mut Kb(ctx), time);
 }
 
-/// Where `p` (window coordinates) falls on the suggestion bar: `None` off
-/// it (or while it is hidden), else the suggestion under `p`, if any.
-fn bar_hit(ctx: &mut Context<'_, Keyboard>, p: Point) -> Option<Option<usize>> {
-    if !ctx.me().bar_shown {
+/// What bar over the keys `p` (window coordinates) falls on, and what on
+/// it: `None` off every bar that shows.
+fn bar_hit(ctx: &mut Context<'_, Keyboard>, p: Point) -> Option<BarTarget> {
+    let (top, bar, results, search) = {
+        let me = ctx.me();
+        (me.top, me.bar, me.results_bar, me.search_bar)
+    };
+    match top {
+        TopBar::None => None,
+        TopBar::Suggestions => cell_hit(ctx, bar, p).map(BarTarget::Suggestion),
+        TopBar::Picker => search_hit(ctx, search, p).map(BarTarget::Search),
+        TopBar::Searching => cell_hit(ctx, results, p)
+            .map(BarTarget::Result)
+            .or_else(|| search_hit(ctx, search, p).map(BarTarget::Search)),
+    }
+}
+
+/// The laid-out rectangle of `node`.
+fn rect_of<V: Widget>(ctx: &mut Context<'_, Keyboard>, node: Handle<V>) -> Option<Rect> {
+    ctx.at(node)?.component::<ComputedLayout>().map(|l| l.rect)
+}
+
+/// Where `p` falls on the cells of `bar`: `None` off it, else the filled
+/// cell under `p`, if any.
+fn cell_hit(
+    ctx: &mut Context<'_, Keyboard>,
+    bar: Handle<SuggestionBar>,
+    p: Point,
+) -> Option<Option<usize>> {
+    if !rect_of(ctx, bar)?.contains(p) {
         return None;
     }
-    let bar = ctx.me().bar;
-    let rect = ctx.at(bar)?.component::<ComputedLayout>()?.rect;
-    if !rect.contains(p) {
-        return None;
-    }
-    let cells = ctx.widget::<SuggestionBar>(bar)?.cells().to_vec();
+    let (cells, filled) = {
+        let w = ctx.widget::<SuggestionBar>(bar)?;
+        (w.cells().to_vec(), w.filled().to_vec())
+    };
     let rects: Vec<Rect> = cells
         .into_iter()
-        .map(|c| {
-            ctx.at(c)
-                .and_then(|c| c.component::<ComputedLayout>().map(|l| l.rect))
-                .unwrap_or_default()
-        })
+        .map(|c| rect_of(ctx, c).unwrap_or_default())
         .collect();
-    Some(SuggestionBar::cell_at(&rects, p))
+    Some(SuggestionBar::cell_at(&rects, &filled, p))
 }
 
-/// Whether `contact` went down on the suggestion bar.
-fn is_bar_contact(ctx: &mut Context<'_, Keyboard>, contact: ContactId) -> bool {
-    ctx.me().touch.bar.is_some_and(|(c, _)| c == contact)
+/// Where `p` falls on the emoji search bar: `None` off it, else the part
+/// under `p`, if any.
+fn search_hit(
+    ctx: &mut Context<'_, Keyboard>,
+    bar: Handle<EmojiSearchBar>,
+    p: Point,
+) -> Option<Option<SearchPart>> {
+    if !rect_of(ctx, bar)?.contains(p) {
+        return None;
+    }
+    let (back, clear, field) = {
+        let w = ctx.widget::<EmojiSearchBar>(bar)?;
+        (w.back(), w.clear(), w.field())
+    };
+    let back = back.and_then(|b| rect_of(ctx, b));
+    let clear = clear.and_then(|c| rect_of(ctx, c));
+    let field = rect_of(ctx, field).unwrap_or_default();
+    Some(EmojiSearchBar::part_at(back, clear, field, p))
 }
 
-/// `contact` is on the bar, over suggestion `cell`: light it, with a tick
-/// of feedback when it lands on a new one.
-fn bar_press(ctx: &mut Context<'_, Keyboard>, contact: ContactId, cell: Option<usize>) {
-    let before = ctx.me().touch.bar.replace((contact, cell));
-    let changed = before.map(|(_, c)| c) != Some(cell);
-    if !changed {
+/// What the bar `contact` went down on is over, if it went down on one.
+fn bar_contact(ctx: &mut Context<'_, Keyboard>, contact: ContactId) -> Option<BarTarget> {
+    ctx.me()
+        .touch
+        .bar
+        .filter(|(c, _)| *c == contact)
+        .map(|(_, t)| t)
+}
+
+/// `contact` is on a bar, over `target`: light it, with a tick of feedback
+/// when it lands on a new item.
+fn bar_press(ctx: &mut Context<'_, Keyboard>, contact: ContactId, target: BarTarget) {
+    let before = ctx.me().touch.bar.replace((contact, target));
+    if before.map(|(_, t)| t) == Some(target) {
         return;
     }
-    if cell.is_some() {
+    if target.on_item() {
         feedbackd::key_pressed(ctx);
     }
-    let bar = ctx.me().bar.id();
-    ctx.emit(BarFeedback::Press(cell), [bar]);
+    light(ctx, target);
+    // Holding an emoji that takes a skin tone opens its tones; moving onto
+    // another item restarts the wait.
+    let timer = ctx.me().bar_long_press_timer;
+    ctx.cancel_timer(timer);
+    if bar_tones(ctx, target).is_some() {
+        ctx.start_timer_for(timer, LONG_PRESS);
+    }
 }
 
-/// The bar contact, if any, ended: unlight the bar and return the
-/// suggestion it ended over.
-fn bar_end(ctx: &mut Context<'_, Keyboard>) -> Option<usize> {
-    let (_, cell) = ctx.me().touch.bar.take()?;
-    let bar = ctx.me().bar.id();
-    ctx.emit(BarFeedback::Press(None), [bar]);
-    cell
+/// Light what `target` is over on its bar (nothing if it is over nothing).
+fn light(ctx: &mut Context<'_, Keyboard>, target: BarTarget) {
+    let (bar, results, search) = {
+        let me = ctx.me();
+        (me.bar.id(), me.results_bar.id(), me.search_bar.id())
+    };
+    match target {
+        BarTarget::Suggestion(i) => ctx.emit(BarFeedback::Press(i), [bar]),
+        BarTarget::Result(i) => ctx.emit(BarFeedback::Press(i), [results]),
+        BarTarget::Search(p) => ctx.emit(SearchBarFeedback::Press(p), [search]),
+    }
+}
+
+/// The bar contact, if any, ended: unlight its bar and return what it
+/// ended over.
+fn bar_end(ctx: &mut Context<'_, Keyboard>) -> Option<BarTarget> {
+    let (_, target) = ctx.me().touch.bar.take()?;
+    let timer = ctx.me().bar_long_press_timer;
+    ctx.cancel_timer(timer);
+    if ctx.me().touch.bar_row.take().is_some() {
+        show_choices(ctx, ChoicesFeedback::Close);
+    }
+    light(ctx, target.moved_to(None));
+    Some(target)
+}
+
+/// The emoji a bar item `target` is over, untoned, and its skin tone
+/// choices (it untoned, then light to dark), if it takes a tone.
+fn bar_tones(ctx: &mut Context<'_, Keyboard>, target: BarTarget) -> Option<(String, Vec<String>)> {
+    let base = match target {
+        BarTarget::Suggestion(Some(i)) => {
+            let s = ctx.resource::<Completion>().get(i)?.clone();
+            (s.kind == Kind::Emoji).then_some(s.edit.insert)?
+        }
+        BarTarget::Result(Some(i)) => ctx.me().search.as_ref()?.results.get(i)?.clone(),
+        _ => return None,
+    };
+    let tones = ctx.resource_mut::<Emoji>().tones(&base)?;
+    let choices = std::iter::once(base.clone()).chain(tones).collect();
+    Some((base, choices))
+}
+
+/// The bar long-press timer fired: open the skin tone row over the held
+/// bar emoji, the tone picked last over it.
+pub(crate) fn bar_long_pressed(ctx: &mut Context<'_, Keyboard>) {
+    let Some((_, target)) = ctx.me().touch.bar else {
+        return;
+    };
+    let (Some((_, choices)), Some(cell)) = (bar_tones(ctx, target), bar_cell_rect(ctx, target))
+    else {
+        return;
+    };
+    let Some(bounds) = overlay_bounds(ctx) else {
+        return;
+    };
+    // One emoji-sized (square) cell per choice, the anchor centred over
+    // the held item; the row rises into the headroom above the bar.
+    let side = cell.size.height;
+    let anchor_rect = Rect::new(
+        cell.origin.x + (cell.size.width - side) / 2.0,
+        cell.origin.y,
+        side,
+        side,
+    );
+    let gap = ctx.me().popup_gap;
+    let anchor = skin_tone::choice_of(ctx.resource::<Emoji>().skin_tone());
+    let row = ChoicesRow::open(anchor_rect, bounds, gap, choices, anchor);
+    ctx.me().touch.bar_row = Some(row.clone());
+    show_emoji_row(ctx, &row);
+}
+
+/// The laid-out rectangle of the bar cell `target` is over.
+fn bar_cell_rect(ctx: &mut Context<'_, Keyboard>, target: BarTarget) -> Option<Rect> {
+    let (bar, i) = match target {
+        BarTarget::Suggestion(Some(i)) => (ctx.me().bar, i),
+        BarTarget::Result(Some(i)) => (ctx.me().results_bar, i),
+        _ => return None,
+    };
+    let cell = *ctx.widget::<SuggestionBar>(bar)?.cells().get(i)?;
+    rect_of(ctx, cell)
+}
+
+/// The bar contact moved to `p` with its skin tone row open: light the
+/// choice under it, if any.
+fn bar_row_moved(ctx: &mut Context<'_, Keyboard>, p: Point) {
+    let Some(row) = ctx.me().touch.bar_row.as_mut() else {
+        return;
+    };
+    let before = row.highlighted;
+    row.track(p);
+    let now = row.highlighted;
+    let slot = now.map(|c| row.choice_at(c));
+    if now != before {
+        show_choices(ctx, ChoicesFeedback::Highlight(slot));
+    }
+}
+
+/// The bar contact let go on choice `choice` of its skin tone row, held
+/// on bar item `target`: type that form of the emoji as the item would,
+/// and pick its tone for every emoji.
+fn bar_pick_tone(
+    ctx: &mut Context<'_, Keyboard>,
+    target: BarTarget,
+    row: &ChoicesRow,
+    choice: usize,
+) {
+    let Some(emoji) = row.choices.get(choice).cloned() else {
+        return;
+    };
+    match target {
+        BarTarget::Suggestion(Some(i)) => accept_emoji_suggestion(ctx, i, &emoji),
+        BarTarget::Result(Some(_)) => commit_emoji(ctx, &emoji),
+        _ => return,
+    }
+    let me = ctx.handle().id();
+    ctx.emit(skin_tone::PickSkinTone(skin_tone::tone_of(choice)), [me]);
+}
+
+/// Show `row`, a row of emoji (its sprites loaded first).
+fn show_emoji_row(ctx: &mut Context<'_, Keyboard>, row: &ChoicesRow) {
+    let Some(container) = ctx.component::<ComputedLayout>().map(|l| l.rect) else {
+        return;
+    };
+    {
+        let (mut emoji, mut atlas) = ctx.fetch::<(ResMut<Emoji>, ResMut<Atlas>)>();
+        for cell in &row.choices {
+            emoji.ensure(&mut atlas, cell);
+        }
+    }
+    let rect = Rect::new(
+        row.rect.origin.x - container.origin.x,
+        row.rect.origin.y - container.origin.y,
+        row.rect.size.width,
+        row.rect.size.height,
+    );
+    show_choices(
+        ctx,
+        ChoicesFeedback::Open {
+            rect,
+            cells: (0..row.choices.len())
+                .map(|slot| row.choices[row.choice_at(slot)].clone())
+                .collect(),
+            highlighted: row.highlighted.map(|c| row.choice_at(c)),
+            emoji: true,
+        },
+    );
+}
+
+/// The bars over the keys changed: drop any contact on them, acting on
+/// nothing.
+pub(crate) fn end_bar(ctx: &mut Context<'_, Keyboard>) {
+    bar_end(ctx);
 }
 
 /// The long-press timer fired: open the held key's choices row.
@@ -276,16 +551,20 @@ fn predict(ctx: &Context<'_, Keyboard>) -> (LetterPrior, f32, bool) {
 /// The current view's keys, with their laid-out rectangles.
 fn key_geoms(ctx: &mut Context<'_, Keyboard>) -> Vec<KeyGeom> {
     let view = ctx.me().current_view;
-    let keys: Vec<(Handle<_>, Option<char>)> = ctx.me().keys[view]
+    let keys: Vec<(Handle<_>, Option<char>, bool)> = ctx.me().keys[view]
         .iter()
-        .map(|k| (k.node, k.letter))
+        .map(|k| (k.node, k.letter, k.hidden))
         .collect();
     keys.into_iter()
-        .map(|(node, letter)| {
-            let rect = ctx
-                .at(node)
-                .and_then(|c| c.component::<ComputedLayout>().map(|l| l.rect))
-                .unwrap_or_default();
+        .map(|(node, letter, hidden)| {
+            // A hidden key's layout may be stale: put it where no touch is.
+            let rect = if hidden {
+                Rect::new(f32::MIN, f32::MIN, 0.0, 0.0)
+            } else {
+                ctx.at(node)
+                    .and_then(|c| c.component::<ComputedLayout>().map(|l| l.rect))
+                    .unwrap_or_default()
+            };
             KeyGeom { rect, letter }
         })
         .collect()
@@ -382,9 +661,20 @@ fn apply(ctx: &mut Context<'_, Keyboard>, view: usize, out: Vec<TouchOut>, time:
             TouchOut::CommitChoice { key, choice } => {
                 show_choices(ctx, ChoicesFeedback::Close);
                 let entry = ctx.me().keys[view].get(key);
+                // A choice with its own action (a keyboard switch) runs it;
+                // any other types its text.
+                let action = entry.and_then(|k| k.choice_actions.get(choice).cloned());
                 let picked = entry.and_then(|k| Some((k.choices.get(choice)?.clone(), k.letter)));
-                if let Some((text, letter)) = picked {
+                // A skin-tone choice also becomes the tone of every emoji.
+                let tones = entry.is_some_and(|k| k.skin_tone_base.is_some());
+                if let Some(action) = action {
+                    dispatch(ctx, &action, time);
+                } else if let Some((text, letter)) = picked {
                     dispatch_choice(ctx, &text, letter, time);
+                }
+                if tones {
+                    let me = ctx.handle().id();
+                    ctx.emit(skin_tone::PickSkinTone(skin_tone::tone_of(choice)), [me]);
                 }
             }
             TouchOut::CloseChoices => show_choices(ctx, ChoicesFeedback::Close),
@@ -443,10 +733,26 @@ fn open_choices(ctx: &mut Context<'_, Keyboard>, view: usize, i: usize) {
     let Some(container) = ctx.component::<ComputedLayout>().map(|l| l.rect) else {
         return;
     };
+    let emoji = ctx.me().keys[view]
+        .get(i)
+        .is_some_and(|k| k.skin_tone_base.is_some());
     let state = ctx.resource::<Shift>().state();
-    let cells = (0..row.choices.len())
-        .map(|slot| shift::cased_choice(&row.choices[row.choice_at(slot)], state))
+    let cells: Vec<String> = (0..row.choices.len())
+        .map(|slot| {
+            let choice = &row.choices[row.choice_at(slot)];
+            if emoji {
+                choice.clone()
+            } else {
+                shift::cased_choice(choice, state)
+            }
+        })
         .collect();
+    if emoji {
+        let (mut sprites, mut atlas) = ctx.fetch::<(ResMut<Emoji>, ResMut<Atlas>)>();
+        for cell in &cells {
+            sprites.ensure(&mut atlas, cell);
+        }
+    }
     let rect = Rect::new(
         row.rect.origin.x - container.origin.x,
         row.rect.origin.y - container.origin.y,
@@ -460,6 +766,7 @@ fn open_choices(ctx: &mut Context<'_, Keyboard>, view: usize, i: usize) {
             rect,
             cells,
             highlighted,
+            emoji,
         },
     );
 }
@@ -576,6 +883,7 @@ mod tests {
             Rect::new(0.0, 0.0, 400.0, 200.0),
             4.0,
             vec!["1".into()],
+            0,
         );
         t.long_pressed(A, row);
         assert_eq!(

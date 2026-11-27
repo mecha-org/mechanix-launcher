@@ -188,12 +188,31 @@ impl TypingContext {
         word
     }
 
+    /// The `len` bytes right before the cursor, which an edit deleting that
+    /// many replaces: from the known text before the cursor, or, when that
+    /// is too short or `len` splits a character there, the word's prefix.
+    pub(crate) fn text_before(&self, len: u32) -> String {
+        let len = len as usize;
+        match self.before.len().checked_sub(len) {
+            Some(start) if self.before.is_char_boundary(start) => self.before[start..].to_string(),
+            _ => self.prefix(),
+        }
+    }
+
     /// A suggestion replaced the whole word around the cursor with
     /// `insert`: record that, returning the words it finished.
+    #[cfg(test)]
     pub(crate) fn replaced_word(&mut self, insert: &str) -> Vec<String> {
         // The part of the word before the cursor was deleted.
         let prefix = self.prefix();
-        match self.before.strip_suffix(prefix.as_str()) {
+        self.replaced_before(&prefix, insert)
+    }
+
+    /// An edit deleted `deleted`, which ended at the cursor, and anything of
+    /// the word after the cursor, then inserted `insert`: record that,
+    /// returning the words it finished.
+    pub(crate) fn replaced_before(&mut self, deleted: &str, insert: &str) -> Vec<String> {
+        match self.before.strip_suffix(deleted) {
             Some(rest) => self.before.truncate(rest.len()),
             None => self.before.clear(),
         }
@@ -359,6 +378,20 @@ mod tests {
     }
 
     #[test]
+    fn text_before_is_what_an_edit_deletes() {
+        let mut c = TypingContext::default();
+        c.committed("hi :smil");
+        assert_eq!(c.prefix(), "smil");
+        assert_eq!(c.text_before(5), ":smil");
+        assert_eq!(c.text_before(4), "smil");
+        // Nothing known that far back: the word, as before.
+        assert_eq!(c.text_before(50), "smil");
+        c.replaced_before(":smil", "😄");
+        assert_eq!(c.before(), "hi 😄");
+        assert_eq!(c.prefix(), "");
+    }
+
+    #[test]
     fn replacing_the_word_finishes_the_new_one() {
         let mut c = TypingContext::default();
         c.set_surrounding("documen", 7);
@@ -443,6 +476,16 @@ mod tests {
         assert_eq!(c.before(), "say the ");
         c.clear();
         assert_eq!(c.before(), "");
+    }
+
+    #[test]
+    fn replacing_text_before_the_cursor_follows_before() {
+        let mut c = TypingContext::default();
+        c.committed("say the ");
+        // An autocorrection undone: "the " back to "teh ".
+        assert_eq!(c.replaced_before("the ", "teh "), vec!["teh".to_string()]);
+        assert_eq!(c.before(), "say teh ");
+        assert_eq!(c.prefix(), "");
     }
 
     #[test]

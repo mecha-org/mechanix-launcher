@@ -14,6 +14,9 @@ pub struct Keymap {
     /// The long-press choices row's look: the `normal` style for its cells
     /// and the `latched` style for the highlighted one.
     pub choices_look: KeyLook,
+    /// The look of the `pointing_stick` key, which its direction pad's cells
+    /// share.
+    pub pointing_stick_look: KeyLook,
 }
 
 /// One selectable arrangement of keys (e.g. `base`, `symbols`).
@@ -100,6 +103,16 @@ pub enum Cell {
     Spacer(f32),
 }
 
+impl Cell {
+    /// The cell's width, in outline units.
+    pub fn width(&self) -> f32 {
+        match self {
+            Cell::Key(k) => k.width,
+            Cell::Spacer(w) => *w,
+        }
+    }
+}
+
 /// What a key draws in its cell: a text label, a symbolic icon or a colour
 /// emoji, only one. The icon is its name (an SVG's file stem under
 /// `resources/icons`); the `Key` widget looks up the rasterized sprite in the
@@ -146,6 +159,9 @@ pub enum KeyAction {
     LatchModifier(Modifier),
     /// Show a page of the current family.
     Page(Page),
+    /// Make this the current family (until the next field focus) and show
+    /// its letters page.
+    Family(Family),
     /// Toggle shift (tap) / caps lock (double tap).
     Shift,
     /// The pointing stick: a tap toggles caret / select mode; a hold opens a
@@ -165,6 +181,8 @@ pub struct Key {
     pub action: KeyAction,
     /// The key's outline width (logical units).
     pub width: f32,
+    /// Fraction of the row height the key occupies (1.0 = fills the row).
+    pub height: f32,
     /// Colours per [`super::style::KeyState`], from the button's `key_style:` (or
     /// `normal`) and the `latched` style.
     pub look: KeyLook,
@@ -172,6 +190,9 @@ pub struct Key {
     pub hint: Option<String>,
     /// Long-press choices, first is the default highlight. Lowercase.
     pub choices: Vec<String>,
+    /// What each choice does, in step with `choices`; empty when the choices
+    /// type their own text.
+    pub choice_actions: Vec<KeyAction>,
 }
 
 impl Row {
@@ -192,9 +213,11 @@ impl Key {
             face: KeyFace::Text(token.to_string()),
             action: KeyAction::EmitText(token.to_string()),
             width: 1.0,
+            height: 1.0,
             look: KeyLook::default(),
             hint: None,
             choices: Vec::new(),
+            choice_actions: Vec::new(),
         }
     }
 }

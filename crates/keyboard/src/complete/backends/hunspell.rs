@@ -5,7 +5,7 @@
 
 use hunspell_rs::{CheckResult, Hunspell};
 
-use crate::complete::{Candidate, Completer, Kind, Query};
+use crate::complete::{Candidate, Completer, Kind, WordQuery};
 
 /// Where system hunspell dictionaries live.
 const DICT_DIR: &str = "/usr/share/hunspell";
@@ -41,7 +41,7 @@ impl HunspellCompleter {
 }
 
 impl Completer for HunspellCompleter {
-    fn suggest(&mut self, q: &Query) -> Vec<Candidate> {
+    fn suggest(&mut self, q: &WordQuery) -> Vec<Candidate> {
         let word = format!("{}{}", q.word, q.word_after);
         if word.chars().count() < MIN_LEN {
             return Vec::new();
@@ -68,6 +68,10 @@ impl Completer for HunspellCompleter {
         found
     }
 
+    fn accepts(&mut self, word: &str) -> bool {
+        matches!(self.speller.check(word), CheckResult::FoundInDictionary)
+    }
+
     fn learn(&mut self, word: &str) {
         // Words the user typed and kept are not misspellings: stop
         // correcting them this session.
@@ -80,8 +84,8 @@ impl Completer for HunspellCompleter {
 mod tests {
     use super::*;
 
-    fn q(word: &str) -> Query<'_> {
-        Query {
+    fn q(word: &str) -> WordQuery<'_> {
+        WordQuery {
             word,
             word_after: "",
             max: 3,
@@ -103,6 +107,7 @@ mod tests {
         assert!(s.iter().all(|c| c.kind == Kind::Correction));
         assert!(h.suggest(&q("receive")).is_empty());
         assert!(h.suggest(&q("x")).is_empty());
+        assert!(h.accepts("receive") && !h.accepts("recieve"));
     }
 
     #[test]

@@ -32,6 +32,7 @@ fn kind_of(action: &KeyAction) -> KeyKind {
         KeyAction::LatchModifier(_)
         | KeyAction::SetView(_)
         | KeyAction::Page(_)
+        | KeyAction::Family(_)
         | KeyAction::Shift
         | KeyAction::PointingStick
         | KeyAction::Unhandled(_) => KeyKind::Function,
@@ -70,7 +71,7 @@ pub(crate) enum Label {
     Text(Handle<Text>),
     Icon(Handle<Icon>),
     /// A colour emoji: keeps its own colours whatever the key state.
-    Image,
+    Image(Handle<Image>),
 }
 
 /// Recolour a key's label, whichever kind it is.
@@ -78,7 +79,7 @@ pub(crate) fn set_label_color<W: Widget>(ctx: &mut Context<'_, W>, label: Label,
     match label {
         Label::Text(h) => ctx.at(h).unwrap().set_color(fg),
         Label::Icon(h) => ctx.at(h).unwrap().set_color(fg),
-        Label::Image => {}
+        Label::Image(_) => {}
     }
 }
 
@@ -119,15 +120,21 @@ impl Widget for Key {
         let (bg_role, fg_role) = key_roles(look, kind, KeyState::Normal);
         let radius = b.radius;
 
-        *s.component_mut::<LayoutStyle>(me).unwrap() = LayoutStyle::default()
+        let mut layout = LayoutStyle::default()
             .center()
-            // Outline width is the flex-grow weight; only ratios within a row
-            // matter. Kept unscaled so a row's weights never sum below 1, which
-            // would leave part of the row's free space unfilled. A zero basis
-            // and no padding make the weights exact proportions, whatever the
-            // label's width (padding would add to every key's basis).
-            .grow(b.key.width)
-            .flex_basis(px(0.0));
+            // Fills its cell, which the keyboard sizes from the outline width
+            // (see `cell_style`); a zero basis and minimum keep a wide label
+            // from widening it.
+            .grow(1.0)
+            .flex_basis(px(0.0))
+            .min_width(px(0.0));
+        if b.key.height < 1.0 {
+            // A short key: a fraction of the row, centred vertically.
+            layout = layout
+                .height(percent(b.key.height * 100.0))
+                .align_self(Align::Center);
+        }
+        *s.component_mut::<LayoutStyle>(me).unwrap() = layout;
 
         *s.component_mut::<Paint>(me).unwrap() =
             Paint::Quad(Quad::new(s.color(bg_role)).radius(radius));
@@ -147,8 +154,7 @@ impl Widget for Key {
             KeyFace::Emoji(e) => match s.resource::<Emoji>().get(e) {
                 Some(e) => {
                     let style = LayoutStyle::default().size(px(e.width), px(e.height));
-                    s.spawn(me, image(e.sprite).style(style));
-                    Label::Image
+                    Label::Image(s.spawn(me, image(e.sprite).style(style)))
                 }
                 None => Label::Text(s.spawn(me, text(b.font, "").color(fg).size(b.font_size))),
             },
@@ -251,6 +257,7 @@ mod tests {
     use crate::layout::tokens::{Font, Fonts};
     use crate::layout::{Cell, load_keymap};
     use crate::modifiers::latch::LatchedState;
+    use crate::widget::keyboard::{cell_style, row_style, view_span};
 
     struct Leaf;
     impl Build for Leaf {
@@ -263,9 +270,10 @@ mod tests {
         }
     }
 
-    /// The base view's rows laid out 540 wide with an 8 px gap, as the
-    /// keyboard lays them out: each key's width, by token.
-    fn base_row_widths() -> Vec<Vec<(String, f32)>> {
+    /// The base view's rows laid out as the keyboard lays them out, at the
+    /// design width (540, so rows 532 wide between the 4 px side padding)
+    /// with an 8 px gap and 50 px rows: each key's (width, height), by token.
+    fn base_row_sizes() -> Vec<Vec<(String, f32, f32)>> {
         let keymap = load_keymap();
         let mut app = App::new();
         app.add_module(LayoutModule)
@@ -281,32 +289,22 @@ mod tests {
         app.insert_resource(PointingStickMode::default());
 
         let view = keymap.views.iter().find(|v| v.name == "base").unwrap();
+        let span = view_span(view);
         let mut rows = Vec::new();
         for row in &view.rows {
             let root = app.root();
             let row_node = app.spawn_with(
                 root,
                 Leaf,
-                (
-                    LayoutRoot(true),
-                    LayoutStyle::default()
-                        .row()
-                        .size(px(540.0), px(50.0))
-                        .gap(px(8.0)),
-                ),
+                (LayoutRoot(true), row_style().size(px(532.0), px(50.0))),
             );
             let mut keys = Vec::new();
             for cell in &row.cells {
-                let key = match cell {
-                    Cell::Spacer(w) => {
-                        let spacer = LayoutStyle::default().grow(*w).flex_basis(px(0.0));
-                        app.spawn_with(row_node, Leaf, (spacer,));
-                        continue;
-                    }
-                    Cell::Key(key) => key,
-                };
+                let cell_node =
+                    app.spawn_with(row_node, Leaf, (cell_style(cell.width(), span, 8.0),));
+                let Cell::Key(key) = cell else { continue };
                 let h = app.spawn(
-                    row_node,
+                    cell_node,
                     KeyBuilder {
                         font: fonts.id(Font::Geist),
                         font_size: 20,
@@ -323,9 +321,19 @@ mod tests {
         rows.into_iter()
             .map(|keys| {
                 keys.into_iter()
-                    .map(|(t, h)| (t, app.component::<ComputedLayout>(h).unwrap().rect.width()))
+                    .map(|(t, h)| {
+                        let r = app.component::<ComputedLayout>(h).unwrap().rect;
+                        (t, r.width(), r.height())
+                    })
                     .collect()
             })
+            .collect()
+    }
+
+    fn base_row_widths() -> Vec<Vec<(String, f32)>> {
+        base_row_sizes()
+            .into_iter()
+            .map(|row| row.into_iter().map(|(t, w, _)| (t, w)).collect())
             .collect()
     }
 
@@ -333,32 +341,42 @@ mod tests {
         row.iter().find(|(t, _)| t == token).unwrap().1
     }
 
-    /// Key widths are the outline units' proportions, whatever the label:
-    /// `i` and `w` are equally wide, and space is four letters.
+    /// Key widths follow the outline units, whatever the label or the row:
+    /// every 10-wide key is as wide as `q`, in any row, and a wider key spans
+    /// that many letters plus the gaps between them.
     #[test]
     fn key_widths_follow_outline_units_not_labels() {
         let rows = base_row_widths();
         let letter = width(&rows[0], "q");
-        for (token, w) in rows[0].iter().chain(&rows[1]) {
-            assert!((w - letter).abs() <= 1.0, "{token} is {w}, q is {letter}");
+        // 10 % of 532, less the 8 px gap.
+        assert!((letter - 45.2).abs() <= 1.0, "q is {letter}");
+        for (token, w) in rows.iter().flatten() {
+            let w = *w;
+            match token.as_str() {
+                "pointing_stick" => assert!(w < letter, "stick {w}, q {letter}"),
+                "shift" | "BackSpace" | "to_symbols" | "Return" => {
+                    // 15 wide: one and a half letters plus half a gap.
+                    let want = 1.5 * letter + 4.0;
+                    assert!((w - want).abs() <= 1.0, "{token} is {w}, want {want}");
+                }
+                "space" => {
+                    let want = 4.0 * letter + 3.0 * 8.0;
+                    assert!((w - want).abs() <= 1.0, "space {w}, want {want}");
+                }
+                _ => assert!((w - letter).abs() <= 1.0, "{token} is {w}, q is {letter}"),
+            }
         }
-        let bottom = &rows[3];
-        let unit = width(bottom, "comma");
-        assert!((width(bottom, "period") - unit).abs() <= 1.0);
-        for wide in ["to_symbols", "Return"] {
-            let w = width(bottom, wide);
-            assert!((w - 1.5 * unit).abs() <= 1.0, "{wide} is {w}, comma {unit}");
-        }
-        let space = width(bottom, "space");
-        assert!(
-            (space - 4.0 * unit).abs() <= 1.5,
-            "space {space}, comma {unit}"
-        );
-        let third = &rows[2];
-        let z = width(third, "z");
-        for wide in ["shift", "BackSpace"] {
-            let w = width(third, wide);
-            assert!((w - 1.5 * z).abs() <= 1.0, "{wide} is {w}, z {z}");
-        }
+    }
+
+    /// The pointing stick is a square, centred in its row.
+    #[test]
+    fn pointing_stick_is_square() {
+        let rows = base_row_sizes();
+        let (_, w, h) = rows[1]
+            .iter()
+            .find(|(t, _, _)| t == "pointing_stick")
+            .cloned()
+            .unwrap();
+        assert!((w - h).abs() <= 1.0, "stick is {w} x {h}");
     }
 }

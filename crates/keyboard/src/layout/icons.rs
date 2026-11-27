@@ -26,6 +26,7 @@ const BUNDLED: &[(&str, &[u8])] = &[
     include_icon!("key-shift-symbolic"),
     include_icon!("pointing-stick-symbolic"),
     include_icon!("preferences-system-symbolic"),
+    include_icon!("system-search-symbolic"),
     include_icon!("view-reserve-bottom-symbolic"),
 ];
 

@@ -12,6 +12,7 @@
 
 mod complete;
 mod dictionaries;
+mod emoji_search;
 mod feedbackd;
 mod field;
 mod input;
@@ -22,6 +23,7 @@ mod module;
 mod predict;
 mod protocol;
 mod scale;
+mod skin_tone;
 mod touch;
 mod view;
 mod visibility;

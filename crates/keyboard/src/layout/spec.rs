@@ -20,6 +20,37 @@ pub(crate) struct Layout {
     pub(crate) views: HashMap<String, ViewSpec>,
     #[serde(default)]
     pub(crate) buttons: HashMap<String, Button>,
+    /// Long-press keyboard switching on the view-switching keys.
+    #[serde(default)]
+    pub(crate) switcher: SwitcherSpec,
+    /// Corner mark on keys whose hold opens a longer list.
+    #[serde(default, rename = "more-hint")]
+    pub(crate) more_hint: MoreHintSpec,
+}
+
+/// The `more-hint:` block; absent fields keep their defaults.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct MoreHintSpec {
+    pub(crate) label: Option<String>,
+    #[serde(rename = "min-choices")]
+    pub(crate) min_choices: Option<usize>,
+}
+
+/// The `switcher:` block: holding one of `keys` offers every target but the
+/// view's own family; sliding to one shows that family's letters page.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct SwitcherSpec {
+    #[serde(default)]
+    pub(crate) keys: Vec<String>,
+    #[serde(default)]
+    pub(crate) targets: Vec<SwitchTargetSpec>,
+}
+
+/// One keyboard the switcher offers: its cell label and its family.
+#[derive(Debug, Deserialize)]
+pub(crate) struct SwitchTargetSpec {
+    pub(crate) label: String,
+    pub(crate) family: String,
 }
 
 /// A view: a plain list of rows, or a map with family/page/extends metadata.
@@ -80,12 +111,15 @@ pub(crate) struct PredictionSpec {
     pub(crate) popup: Option<bool>,
 }
 
-/// A button's size. Only the width is used — it sets the key's flex-grow weight
-/// within its row. Rows split the keyboard height evenly, so an outline's
-/// `height:` in the YAML is accepted but ignored.
+/// A button's size. `width` is the key's flex-grow weight within its row.
+/// `height` is optional: a fraction (0 < h < 1) of the row height, the key then
+/// being centred vertically in its row; absent or out of range, the key fills
+/// the row.
 #[derive(Debug, Clone, Copy, Deserialize)]
 pub(crate) struct Outline {
     pub(crate) width: f32,
+    #[serde(default)]
+    pub(crate) height: Option<f32>,
 }
 
 /// A squeekboard button's `action:` value — either a bare name (`erase`,

@@ -6,18 +6,24 @@
 use mecha_wayland::prelude::*;
 
 use crate::complete::{self, CARET_SETTLE, CaretMoved, Completion, SuggestionsChanged};
+use crate::emoji_search::{self, EmojiSearch};
+use crate::layout::emoji::Emoji;
 use crate::layout::style::KeyState;
 use crate::layout::tokens::{Font, Fonts};
-use crate::layout::{Cell, Family, KeyAction, Keymap, Modifier, Page};
+use crate::layout::{
+    Cell, Family, KeyAction, KeyFace, KeyboardStyle, Keymap, Modifier, Page, Row, View,
+};
 use crate::modifiers::pointing_stick;
 use crate::modifiers::shift::{self, HOLD_LOCK, Shift};
 use crate::predict::TypingContext;
 use crate::protocol::input_method::InputMethodState;
 use crate::scale::KeyboardGeometry;
+use crate::skin_tone::{self, PickSkinTone};
 use crate::touch::long_press::LONG_PRESS;
 use crate::touch::{self, KeyEntry, TouchState, TouchTracker, letter_views};
 use crate::view::{BASE_VIEW, SwitchView, switch_view, view_for};
 use crate::visibility::{ApplyKeyboardVisibility, KeyboardVisibilityExt};
+use crate::widget::emoji_search_bar::{EmojiSearchBar, EmojiSearchBarBuilder};
 use crate::widget::key::{Key, KeyBuilder};
 use crate::widget::more_keys::{MoreKeys, MoreKeysBuilder};
 use crate::widget::pointing_stick::{PointingStickOverlay, PointingStickOverlayBuilder};
@@ -36,8 +42,9 @@ pub(crate) struct ViewNode {
     pub(crate) height: f32,
     /// Each row's height weight, for re-laying the view out.
     pub(crate) weights: Vec<f32>,
-    /// Each row's node, whose gap follows the output scale.
-    pub(crate) rows: Vec<Handle<Div>>,
+    /// Every cell (key or spacer) node, whose half-gap inset follows the
+    /// output scale.
+    pub(crate) cells: Vec<Handle<Div>>,
 }
 
 /// The on-screen keyboard: every view, the index of the one currently shown,
@@ -78,6 +85,9 @@ pub(crate) struct Keyboard {
     /// The long-press timer, started while a key with choices or the
     /// pointing stick is pressed.
     pub(crate) long_press_timer: TimerId,
+    /// The long-press timer of a contact on a bar, started while it is on
+    /// an emoji that takes a skin tone.
+    pub(crate) bar_long_press_timer: TimerId,
     /// Height of the strip above the keys the pop-up and choices row may
     /// rise into.
     pub(crate) headroom: f32,
@@ -85,10 +95,76 @@ pub(crate) struct Keyboard {
     pub(crate) popup_gap: f32,
     /// The suggestion bar over the top of the keys.
     pub(crate) bar: Handle<SuggestionBar>,
-    /// The bar's height at the current scale; 0 when completion is off.
+    /// The emoji search's results, over the search bar while searching.
+    pub(crate) results_bar: Handle<SuggestionBar>,
+    /// The emoji search bar, in the suggestion bar's place over an emoji
+    /// page and under the results while searching.
+    pub(crate) search_bar: Handle<EmojiSearchBar>,
+    /// The height of one bar at the current scale; 0 when completion is
+    /// off (and so there are no bars).
     pub(crate) bar_height: f32,
-    /// Whether the bar shows (and so takes its height above the view).
-    pub(crate) bar_shown: bool,
+    /// Whether completion wants the suggestion bar for the focused field.
+    pub(crate) suggestions_shown: bool,
+    /// Whether emoji can be searched (completion has an emoji list).
+    pub(crate) emoji_search: bool,
+    /// The emoji search being typed, if any.
+    pub(crate) search: Option<EmojiSearch>,
+    /// The bars shown over the view now.
+    pub(crate) top: TopBar,
+    /// Every emoji page key, to hide while emoji can't be typed.
+    pub(crate) emoji_keys: Vec<EmojiKey>,
+    /// Whether emoji can be typed (the input method is active): the emoji
+    /// key and pages show only then.
+    pub(crate) emoji_typeable: bool,
+}
+
+/// A key that opens the emoji pages, and the space bar of its row, which
+/// takes its room while it is hidden.
+pub(crate) struct EmojiKey {
+    /// Its view's index.
+    pub(crate) view: usize,
+    /// Its index among the view's keys.
+    pub(crate) key: usize,
+    /// Its cell.
+    pub(crate) cell: Handle<Div>,
+    /// Its share of the row, as a percentage of the container.
+    pub(crate) width: f32,
+    /// The space bar's cell in the same row and its share, if there is one.
+    pub(crate) space: Option<(Handle<Div>, f32)>,
+}
+
+/// What shows over the view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TopBar {
+    /// Nothing.
+    None,
+    /// The suggestion bar.
+    Suggestions,
+    /// The emoji search bar, over an emoji page.
+    Picker,
+    /// The search results over the emoji search bar, over the letters.
+    Searching,
+}
+
+impl TopBar {
+    /// How many bars' heights it takes.
+    pub(crate) fn rows(self) -> f32 {
+        match self {
+            TopBar::None => 0.0,
+            TopBar::Suggestions | TopBar::Picker => 1.0,
+            TopBar::Searching => 2.0,
+        }
+    }
+
+    /// Where the emoji search bar sits, below the container's top: under
+    /// the results while searching.
+    pub(crate) fn search_bar_top(self, bar_height: f32) -> f32 {
+        if self == TopBar::Searching {
+            bar_height
+        } else {
+            0.0
+        }
+    }
 }
 
 impl Keyboard {
@@ -98,23 +174,89 @@ impl Keyboard {
         self.views.iter().position(|v| v.name == name)
     }
 
-    /// The height the keyboard takes now: the shown view, and the bar if it
-    /// shows.
+    /// The height the keyboard takes now: the shown view, and the bars
+    /// that show.
     pub(crate) fn shown_height(&self) -> f32 {
-        let bar = if self.bar_shown { self.bar_height } else { 0.0 };
-        self.views[self.current_view].height + bar
+        self.views[self.current_view].height + self.bars_height()
     }
 
-    /// The container's padding: the style's all round, with the bar's
-    /// height added on top while it shows.
-    pub(crate) fn padding(&self, padding: f32) -> Insets<Val> {
-        let top = if self.bar_shown {
-            padding + self.bar_height
-        } else {
-            padding
-        };
-        Insets::new(px(top), px(padding), px(padding), px(padding))
+    /// The height of the bars shown over the view.
+    pub(crate) fn bars_height(&self) -> f32 {
+        self.top.rows() * self.bar_height
     }
+
+    /// The container's padding: [`container_padding`], with the shown
+    /// bars' height added on top.
+    pub(crate) fn padding(&self, style: &KeyboardStyle) -> Insets<Val> {
+        container_padding(style, self.bars_height())
+    }
+
+    /// What should show over the view now: the search while one is typed,
+    /// the emoji search bar over an emoji page, else the suggestion bar if
+    /// completion wants it. The emoji search bar needs the suggestions too:
+    /// they mean the input method is active, which typing an emoji takes.
+    pub(crate) fn wanted_top(&self) -> TopBar {
+        if self.bar_height <= 0.0 {
+            TopBar::None
+        } else if self.search.is_some() {
+            TopBar::Searching
+        } else if !self.suggestions_shown {
+            TopBar::None
+        } else if self.emoji_search && self.views[self.current_view].page == Page::Emoji {
+            TopBar::Picker
+        } else {
+            TopBar::Suggestions
+        }
+    }
+}
+
+/// The keyboard container's padding, `extra_top` added on top. Each cell
+/// insets its key by half a gap, so the sides take half a gap less: the
+/// outermost keys then sit `padding` from the edges, as the top and bottom
+/// rows do.
+pub(crate) fn container_padding(style: &KeyboardStyle, extra_top: f32) -> Insets<Val> {
+    let side = (style.padding - style.gap / 2.0).max(0.0);
+    Insets::new(
+        px(style.padding + extra_top),
+        px(side),
+        px(style.padding),
+        px(side),
+    )
+}
+
+/// A row of cells, centred: a row adding up to less than its view's widest
+/// leaves the same room at both ends.
+pub(crate) fn row_style() -> LayoutStyle {
+    LayoutStyle::default().row().justify(Justify::Center)
+}
+
+/// What a view's rows are measured against: 100, or its widest row if that
+/// is wider or every row is narrower (a 40-wide pad fills the keyboard).
+pub(crate) fn view_span(view: &View) -> f32 {
+    let widest = view.rows.iter().map(row_span).fold(0.0, f32::max);
+    if widest > 0.0 { widest } else { 100.0 }
+}
+
+/// What a row's cells add up to.
+pub(crate) fn row_span(row: &Row) -> f32 {
+    row.cells.iter().map(Cell::width).sum()
+}
+
+/// A cell (key or spacer) `width` of `span` of the row, its key inset by half
+/// a `gap` on each side. The gap is inside the cell, so a cell's share of the
+/// row never depends on how many others the row has: equal widths are equal
+/// sizes in every row.
+pub(crate) fn cell_style(width: f32, span: f32, gap: f32) -> LayoutStyle {
+    LayoutStyle::default()
+        .row()
+        .width(percent(width / span * 100.0))
+        .shrink(0.0)
+        .padding(cell_padding(gap))
+}
+
+/// A cell's inset: half a gap at each side.
+pub(crate) fn cell_padding(gap: f32) -> Insets<Val> {
+    Insets::new(px(0.0), px(gap / 2.0), px(0.0), px(gap / 2.0))
 }
 
 pub(crate) struct KeyboardBuilder {
@@ -122,6 +264,8 @@ pub(crate) struct KeyboardBuilder {
     pub(crate) keymap: Keymap,
     /// The suggestion bar's height; 0 when completion is off.
     pub(crate) bar_height: f32,
+    /// Whether emoji can be searched (completion has an emoji list).
+    pub(crate) emoji_search: bool,
 }
 
 impl Build for KeyboardBuilder {
@@ -143,7 +287,7 @@ impl Widget for Keyboard {
             .width(percent(100.0))
             .shrink(0.0)
             .gap(px(style.row_gap))
-            .padding_all(px(style.padding));
+            .padding(container_padding(&style, 0.0));
         let bg_role = b.keymap.keyboard.background_color;
         *s.component_mut::<Paint>(me).unwrap() = Paint::Quad(Quad::new(s.color(bg_role)));
 
@@ -168,6 +312,26 @@ impl Widget for Keyboard {
                 font_size: style.font_size,
                 height: b.bar_height,
                 padding: style.padding * 2.0,
+                dividers: true,
+            },
+        );
+        let results_bar = s.spawn(
+            me,
+            SuggestionBarBuilder {
+                font: b.fonts.id(style.font),
+                font_size: style.font_size,
+                height: b.bar_height,
+                padding: style.padding,
+                dividers: false,
+            },
+        );
+        let search_bar = s.spawn(
+            me,
+            EmojiSearchBarBuilder {
+                font: b.fonts.id(style.font),
+                font_size: style.font_size,
+                height: b.bar_height,
+                padding: style.padding * 2.0,
             },
         );
 
@@ -177,6 +341,7 @@ impl Widget for Keyboard {
         let mut shift_keys = Vec::new();
         let mut pointing_stick_keys = Vec::new();
         let mut keys = Vec::with_capacity(b.keymap.views.len());
+        let mut emoji_keys = Vec::new();
 
         for (vi, view) in b.keymap.views.iter().enumerate() {
             let weights = row_weights(view);
@@ -198,42 +363,47 @@ impl Widget for Keyboard {
                 node: view_div,
                 height,
                 weights: weights.clone(),
-                rows: Vec::with_capacity(view.rows.len()),
+                cells: Vec::new(),
             });
+            let span = view_span(view);
             let mut view_keys = Vec::new();
 
             for (row, &weight) in view.rows.iter().zip(&weights) {
+                // This row's emoji key (index, cell, share), and space bar.
+                let mut emoji_key = None;
+                let mut space = None;
                 // Rows share the view's height by weight.
                 let row_div = s.spawn(
                     view_div,
                     div().style(
-                        LayoutStyle::default()
-                            .row()
+                        row_style()
                             .width(percent(100.0))
                             .flex_basis(px(0.0))
-                            .grow(weight)
-                            .gap(px(style.gap)),
+                            .grow(weight),
                     ),
                 );
-                views.last_mut().unwrap().rows.push(row_div);
 
                 for cell in &row.cells {
-                    // A spacer is blank width; it spawns no key, so it is
+                    let cell_div = s.spawn(
+                        row_div,
+                        div().style(cell_style(cell.width(), span, style.gap)),
+                    );
+                    views.last_mut().unwrap().cells.push(cell_div);
+                    // A spacer is a blank cell; it spawns no key, so it is
                     // never in `view_keys` and never hit.
-                    let key = match cell {
-                        Cell::Spacer(w) => {
-                            s.spawn(
-                                row_div,
-                                div().style(LayoutStyle::default().grow(*w).flex_basis(px(0.0))),
-                            );
-                            continue;
+                    let Cell::Key(key) = cell else { continue };
+                    let share = cell.width() / span * 100.0;
+                    match &key.action {
+                        KeyAction::Page(Page::Emoji) => {
+                            emoji_key = Some((view_keys.len(), cell_div, share));
                         }
-                        Cell::Key(key) => key,
-                    };
+                        KeyAction::EmitText(t) if t == " " => space = Some((cell_div, share)),
+                        _ => {}
+                    }
                     // The label keeps its normal font while latched.
                     let label_style = key.look.style(KeyState::Normal);
                     let key_handle = s.spawn(
-                        row_div,
+                        cell_div,
                         KeyBuilder {
                             font: b.fonts.id(label_style.font.unwrap_or(style.font)),
                             font_size: label_style.font_size.unwrap_or(style.font_size),
@@ -250,11 +420,43 @@ impl Widget for Keyboard {
                         _ => {}
                     }
 
-                    view_keys.push(KeyEntry::new(
-                        key_handle,
-                        key.action.clone(),
-                        key.choices.clone(),
-                    ));
+                    let mut entry =
+                        KeyEntry::new(key_handle, key.action.clone(), key.choices.clone())
+                            .with_choice_actions(key.choice_actions.clone());
+                    // An emoji key that takes a skin tone offers its tones.
+                    // A button drawn with one (the people tab's 👋) only
+                    // shows the tone picked, keeping its own action.
+                    if let KeyFace::Emoji(e) = &key.face
+                        && let Some(tones) = s.resource_mut::<Emoji>().tones(e)
+                    {
+                        entry = if matches!(&key.action, KeyAction::EmitText(t) if t == e) {
+                            entry.with_skin_tones(e, tones)
+                        } else {
+                            entry.with_toned_face(e)
+                        };
+                    }
+                    view_keys.push(entry);
+                }
+                // The keyboard starts with no field active, so with no way
+                // to type emoji: the key starts hidden (see
+                // `set_emoji_typeable`).
+                if let Some((key, cell, width)) = emoji_key {
+                    view_keys[key].hidden = true;
+                    if let Some(mut style) = s.component_mut::<LayoutStyle>(cell) {
+                        *style = style.clone().hidden();
+                    }
+                    if let Some((space, share)) = space
+                        && let Some(mut style) = s.component_mut::<LayoutStyle>(space)
+                    {
+                        *style = style.clone().width(percent(share + width));
+                    }
+                    emoji_keys.push(EmojiKey {
+                        view: vi,
+                        key,
+                        cell,
+                        width,
+                        space,
+                    });
                 }
             }
             keys.push(view_keys);
@@ -289,12 +491,13 @@ impl Widget for Keyboard {
             me,
             PointingStickOverlayBuilder {
                 radius: style.radius,
-                look: b.keymap.choices_look,
+                look: b.keymap.pointing_stick_look,
             },
         );
 
         let shift_timer = s.add_timeout(HOLD_LOCK, |ctx, _| shift::held(ctx));
         let long_press_timer = s.add_timeout(LONG_PRESS, |ctx, _| touch::long_pressed(ctx));
+        let bar_long_press_timer = s.add_timeout(LONG_PRESS, |ctx, _| touch::bar_long_pressed(ctx));
 
         touch::attach(s, me);
         // A field was focused: cancel any touch first (even on the same
@@ -308,13 +511,19 @@ impl Widget for Keyboard {
             ctx.resource_mut::<Shift>().reset();
             shift::refresh(ctx);
             pointing_stick::reset(ctx);
+            emoji_search::cancel(ctx);
             ctx.me().family = event.field.family;
             let me = ctx.me();
             if let Some(idx) = view_for(&me.views, event.field.family, Page::Letters) {
                 let name = me.views[idx].name.clone();
                 switch_view(ctx, &name);
             }
+            // The same view: the search's bars still go.
+            apply_top_bar(ctx);
         });
+
+        // A skin tone was picked from an emoji's row.
+        s.on::<PickSkinTone>(me, |ctx, e| skin_tone::pick(ctx, e.0));
 
         // The suggestions changed: fill the bar, and show or hide it.
         s.on::<SuggestionsChanged>(me, show_suggestions);
@@ -351,6 +560,10 @@ impl Widget for Keyboard {
             ctx.resource_mut::<Shift>().reset();
             shift::refresh(ctx);
             pointing_stick::reset(ctx);
+            if emoji_search::active(ctx) {
+                emoji_search::cancel(ctx);
+                apply_top_bar(ctx);
+            }
         });
 
         Keyboard {
@@ -370,41 +583,499 @@ impl Widget for Keyboard {
             choices_row,
             pointing_stick,
             long_press_timer,
+            bar_long_press_timer,
             headroom: popup_headroom(&style, popup_gap),
             popup_gap,
             bar,
+            results_bar,
+            search_bar,
             bar_height: b.bar_height,
-            bar_shown: false,
+            suggestions_shown: false,
+            emoji_search: b.emoji_search,
+            search: None,
+            top: TopBar::None,
+            emoji_keys,
+            emoji_typeable: false,
         }
     }
 }
 
-/// Fill the suggestion bar, showing or hiding it (which changes the
-/// keyboard's height) as `e` says.
+/// Fill the suggestion bar (kept filled while another bar shows in its
+/// place), showing or hiding it (which changes the keyboard's height) as
+/// `e` says. Any touch is dropped first if the bars change under it.
 fn show_suggestions(ctx: &mut Context<'_, Keyboard>, e: &SuggestionsChanged) {
-    if e.shown != ctx.me().bar_shown && ctx.me().bar_height > 0.0 {
-        set_bar_shown(ctx, e.shown);
+    set_emoji_typeable(ctx, e.emoji);
+    if e.shown != ctx.me().suggestions_shown {
+        ctx.me().suggestions_shown = e.shown;
+        if ctx.me().wanted_top() != ctx.me().top {
+            touch::abort(ctx);
+            apply_top_bar(ctx);
+        }
     }
     let bar = ctx.me().bar.id();
     ctx.emit(BarFeedback::Show(e.labels.clone()), [bar]);
 }
 
-/// Show or hide the suggestion bar: the container's top padding makes or
-/// gives back its room, and the surface's zone and input region follow the
-/// new height. A contact on the bar is dropped first.
-fn set_bar_shown(ctx: &mut Context<'_, Keyboard>, shown: bool) {
-    touch::abort(ctx);
-    ctx.me().bar_shown = shown;
-    let bar = ctx.me().bar;
-    ctx.at(bar).unwrap().set_display(if shown {
-        Display::Flex
-    } else {
-        Display::Hidden
-    });
-    let padding = ctx.resource::<KeyboardGeometry>().style().padding;
-    let insets = ctx.me().padding(padding);
+/// Show or hide the emoji key and pages: emoji can only be typed through
+/// the input method (the virtual keyboard's keymap has none), so with no
+/// field active, as when the keyboard is shown by hand over an app without
+/// one, the emoji key goes, its row's space bar taking its room, and an
+/// emoji page or search showing gives way to the letters.
+pub(crate) fn set_emoji_typeable(ctx: &mut Context<'_, Keyboard>, typeable: bool) {
+    if ctx.me().emoji_typeable == typeable {
+        return;
+    }
+    ctx.me().emoji_typeable = typeable;
+    let slots: Vec<_> = ctx
+        .me()
+        .emoji_keys
+        .iter()
+        .map(|k| (k.view, k.key, k.cell, k.width, k.space))
+        .collect();
+    for (view, key, cell, width, space) in slots {
+        if let Some(entry) = ctx.me().keys[view].get_mut(key) {
+            entry.hidden = !typeable;
+        }
+        restyle_node(ctx, cell, |s| {
+            s.display(if typeable {
+                Display::Flex
+            } else {
+                Display::Hidden
+            })
+        });
+        if let Some((space, share)) = space {
+            let share = if typeable { share } else { share + width };
+            restyle_node(ctx, space, |s| s.width(percent(share)));
+        }
+    }
+    if typeable {
+        return;
+    }
+    let on_emoji = {
+        let me = ctx.me();
+        me.search.is_some() || me.views[me.current_view].page == Page::Emoji
+    };
+    if on_emoji {
+        touch::abort(ctx);
+        emoji_search::cancel(ctx);
+        let me = ctx.me();
+        match view_for(&me.views, me.family, Page::Letters) {
+            Some(idx) => {
+                let name = me.views[idx].name.clone();
+                switch_view(ctx, &name);
+            }
+            None => apply_top_bar(ctx),
+        }
+    }
+    tracing::info!(typeable, "emoji key");
+}
+
+/// Replace the layout style of `node` with `f` of it.
+fn restyle_node(
+    ctx: &mut Context<'_, Keyboard>,
+    node: Handle<Div>,
+    f: impl FnOnce(LayoutStyle) -> LayoutStyle,
+) {
+    let Some(mut at) = ctx.at(node) else { return };
+    if let Some(style) = at.component::<LayoutStyle>().cloned() {
+        at.set_style(f(style));
+    }
+}
+
+/// Show the bars [`Keyboard::wanted_top`] asks for over the current view:
+/// the container's top padding makes or gives back their room, and the
+/// surface's zone and input region follow the keyboard's height. Called on
+/// every view switch too, the height having changed either way. A contact
+/// on a bar that goes away is dropped.
+pub(crate) fn apply_top_bar(ctx: &mut Context<'_, Keyboard>) {
+    let top = ctx.me().wanted_top();
+    if top != ctx.me().top {
+        touch::end_bar(ctx);
+        ctx.me().top = top;
+    }
+    let (bar, results, search, bar_h) = {
+        let me = ctx.me();
+        (me.bar, me.results_bar, me.search_bar, me.bar_height)
+    };
+    let display = |shown: bool| {
+        if shown {
+            Display::Flex
+        } else {
+            Display::Hidden
+        }
+    };
+    ctx.at(bar)
+        .unwrap()
+        .set_display(display(top == TopBar::Suggestions));
+    ctx.at(results)
+        .unwrap()
+        .set_display(display(top == TopBar::Searching));
+    let search_shown = matches!(top, TopBar::Picker | TopBar::Searching);
+    ctx.at(search).unwrap().set_style(
+        EmojiSearchBar::style(bar_h, top.search_bar_top(bar_h)).display(display(search_shown)),
+    );
+    let style = ctx.resource::<KeyboardGeometry>().style();
+    let insets = ctx.me().padding(&style);
     if let Some(style) = ctx.component::<LayoutStyle>().cloned() {
         ctx.set_style(style.padding(insets));
     }
     crate::widget::surface::view_shown(ctx);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::touch::long_press::ChoicesRow;
+    use crate::widget::suggestion_bar::BarLabel;
+
+    /// The keyboard spawned headless, as the launcher's atlas test does.
+    fn app() -> (App, NodeId) {
+        let mut app = App::new();
+        app.add_module(LayoutModule)
+            .add_module(PaintModule)
+            .add_module(WindowModule)
+            .add_module(InteractivityModule)
+            .add_module(RingModule::default())
+            .add_module(TimerModule)
+            .insert_resource(Atlas::new());
+        app.add_module(MechanixTheme::dark());
+        app.register_component::<Role>();
+        crate::spawn_ui(&mut app, 20.0);
+        app.tick();
+        let kb = app.widgets::<Keyboard>().map(|(id, _)| id).next().unwrap();
+        (app, kb)
+    }
+
+    /// The input method's activity changed, as completion tells it.
+    fn im_active(app: &mut App, kb: NodeId, active: bool) {
+        let e = SuggestionsChanged {
+            shown: active,
+            labels: Vec::new(),
+            emoji: active,
+        };
+        app.emit(e, [kb]);
+        app.tick();
+    }
+
+    /// The base view's emoji key: hidden for touches, its cell hidden, and
+    /// its row's space bar's share.
+    fn emoji_key(app: &App, kb: NodeId) -> (bool, Display, Val) {
+        let me = app.widget::<Keyboard>(kb).unwrap();
+        let k = me
+            .emoji_keys
+            .iter()
+            .find(|k| me.views[k.view].name == "base")
+            .expect("base has an emoji key");
+        let hidden = me.keys[k.view][k.key].hidden;
+        let display = app.component::<LayoutStyle>(k.cell).unwrap().display;
+        let space = app
+            .component::<LayoutStyle>(k.space.unwrap().0)
+            .unwrap()
+            .width;
+        (hidden, display, space)
+    }
+
+    #[test]
+    fn the_emoji_key_shows_only_while_emoji_can_be_typed() {
+        let (mut app, kb) = app();
+        let (share, emoji_share) = {
+            let me = app.widget::<Keyboard>(kb).unwrap();
+            let k = me
+                .emoji_keys
+                .iter()
+                .find(|k| me.views[k.view].name == "base");
+            let k = k.unwrap();
+            (k.space.unwrap().1, k.width)
+        };
+        // No field yet: hidden, the space bar taking its room.
+        assert_eq!(
+            emoji_key(&app, kb),
+            (true, Display::Hidden, percent(share + emoji_share))
+        );
+        im_active(&mut app, kb, true);
+        assert_eq!(emoji_key(&app, kb), (false, Display::Flex, percent(share)));
+        im_active(&mut app, kb, false);
+        assert_eq!(
+            emoji_key(&app, kb),
+            (true, Display::Hidden, percent(share + emoji_share))
+        );
+    }
+
+    #[test]
+    fn an_emoji_page_gives_way_to_the_letters_when_emoji_cannot_be_typed() {
+        let (mut app, kb) = app();
+        im_active(&mut app, kb, true);
+        let base = {
+            let me = app.widget_mut::<Keyboard>(kb).unwrap();
+            let base = me.current_view;
+            me.current_view = me.index_of("emoji_food").unwrap();
+            me.search = Some(EmojiSearch::new(me.current_view));
+            base
+        };
+        im_active(&mut app, kb, false);
+        let me = app.widget::<Keyboard>(kb).unwrap();
+        assert_eq!(me.current_view, base);
+        assert!(me.search.is_none());
+        assert_eq!(me.top, TopBar::None);
+    }
+
+    /// Show view `name` as the current one, laid out.
+    fn show_view(app: &mut App, kb: NodeId, name: &str) -> usize {
+        let (old, new) = {
+            let me = app.widget_mut::<Keyboard>(kb).unwrap();
+            let new = me.index_of(name).unwrap();
+            let old = std::mem::replace(&mut me.current_view, new);
+            (me.views[old].node, me.views[new].node)
+        };
+        for (node, display) in [(old, Display::Hidden), (new, Display::Flex)] {
+            let style = app.component::<LayoutStyle>(node).unwrap().clone();
+            *app.component_mut::<LayoutStyle>(node).unwrap() = style.display(display);
+        }
+        app.tick();
+        app.widget::<Keyboard>(kb).unwrap().current_view
+    }
+
+    /// The index in the current view of the key that types `text`.
+    fn key_typing(app: &App, kb: NodeId, text: &str) -> usize {
+        let me = app.widget::<Keyboard>(kb).unwrap();
+        me.keys[me.current_view]
+            .iter()
+            .position(|k| matches!(&k.action, KeyAction::EmitText(t) if t == text))
+            .unwrap_or_else(|| panic!("no key typing {text:?}"))
+    }
+
+    /// What key `i` of view `v` types.
+    fn types(app: &App, kb: NodeId, v: usize, i: usize) -> String {
+        match &app.widget::<Keyboard>(kb).unwrap().keys[v][i].action {
+            KeyAction::EmitText(t) => t.clone(),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Hold key `i` of the current view until its choices row opens; the
+    /// row, if it did.
+    fn long_press(app: &mut App, kb: NodeId, i: usize, time: u32) -> Option<ChoicesRow> {
+        let r = {
+            let me = app.widget::<Keyboard>(kb).unwrap();
+            let node = me.keys[me.current_view][i].node;
+            app.component::<ComputedLayout>(node).unwrap().rect
+        };
+        let position = Point::new(
+            r.origin.x + r.size.width / 2.0,
+            r.origin.y + r.size.height / 2.0,
+        );
+        let contact = ContactId::Touch(time);
+        app.emit(
+            Press {
+                contact,
+                position,
+                time,
+            },
+            [kb],
+        );
+        let timer = app.widget::<Keyboard>(kb).unwrap().long_press_timer;
+        app.emit(Timeout { id: timer }, [kb]);
+        app.tick();
+        let row = app
+            .widget::<Keyboard>(kb)
+            .unwrap()
+            .tracker
+            .choices()
+            .cloned();
+        app.emit(PressCancelled { contact, position }, [kb]);
+        app.tick();
+        row
+    }
+
+    /// An emoji that takes a skin tone offers itself untoned and in the
+    /// five tones, the tone picked last over the key; one that takes none
+    /// offers nothing.
+    #[test]
+    fn toneable_emoji_offer_their_skin_tones() {
+        let (mut app, kb) = app();
+        app.insert_resource(InputMethodState::default());
+        im_active(&mut app, kb, true);
+        let v = show_view(&mut app, kb, "emoji_people");
+        let thumbs = key_typing(&app, kb, "👍");
+        let brain = key_typing(&app, kb, "🧠");
+        {
+            let me = app.widget::<Keyboard>(kb).unwrap();
+            let k = &me.keys[v][thumbs];
+            assert_eq!(k.skin_tone_base.as_deref(), Some("👍"));
+            assert_eq!(k.choices, ["👍", "👍🏻", "👍🏼", "👍🏽", "👍🏾", "👍🏿"]);
+            assert!(me.keys[v][brain].skin_tone_base.is_none(), "🧠 takes none");
+            assert!(me.keys[v][brain].choices.is_empty());
+        }
+        let row = long_press(&mut app, kb, thumbs, 1000).expect("the row opens");
+        assert_eq!(row.highlighted, Some(0), "untoned, over the key");
+        assert!(long_press(&mut app, kb, brain, 2000).is_none());
+
+        app.resource_mut::<Emoji>().set_skin_tone(Some(2));
+        // Mid-row, so the row is not pushed inside the keyboard's edge.
+        let horns = key_typing(&app, kb, "🤘");
+        let row = long_press(&mut app, kb, horns, 3000).unwrap();
+        assert_eq!(row.highlighted, Some(3), "🏽 over the key");
+        let key = row.key;
+        assert!((row.rect.origin.x - (key.origin.x - 3.0 * row.cell_w)).abs() < 0.5);
+        // Its cells are drawn from the emoji's sprites.
+        assert!(app.resource::<Emoji>().get("🤘🏿").is_some());
+    }
+
+    /// Picking a skin tone gives it to every emoji key that takes one, in
+    /// every view: what it types and what it shows.
+    #[test]
+    fn picking_a_skin_tone_retones_every_key() {
+        let (mut app, kb) = app();
+        let v = show_view(&mut app, kb, "emoji_people");
+        let (thumbs, down, brain) = (
+            key_typing(&app, kb, "👍"),
+            key_typing(&app, kb, "👎"),
+            key_typing(&app, kb, "🧠"),
+        );
+        app.emit(PickSkinTone(Some(2)), [kb]);
+        app.tick();
+        assert_eq!(app.resource::<Emoji>().skin_tone(), Some(2));
+        assert_eq!(types(&app, kb, v, thumbs), "👍🏽");
+        assert_eq!(types(&app, kb, v, down), "👎🏽");
+        assert_eq!(types(&app, kb, v, brain), "🧠");
+        assert!(
+            app.resource::<Emoji>().get("👎🏽").is_some(),
+            "its face loaded"
+        );
+        let me = app.widget::<Keyboard>(kb).unwrap();
+        // The choices stay the same, untoned first.
+        assert_eq!(me.keys[v][down].choices[0], "👎");
+
+        app.emit(PickSkinTone(None), [kb]);
+        app.tick();
+        assert_eq!(types(&app, kb, v, thumbs), "👍");
+    }
+
+    /// A button drawn with a toneable emoji (the people tab's 👋) is no
+    /// emoji key: it offers no tones and keeps switching views whatever
+    /// tone is picked, though its face follows the tone.
+    #[test]
+    fn emoji_faced_buttons_keep_their_action() {
+        let (mut app, kb) = app();
+        let tabs = |app: &App| -> Vec<(bool, bool, bool)> {
+            let me = app.widget::<Keyboard>(kb).unwrap();
+            me.keys
+                .iter()
+                .flatten()
+                .filter(|k| matches!(&k.action, KeyAction::SetView(n) if n == "emoji_people"))
+                .map(|k| {
+                    let face = k.toned_face.as_deref() == Some("👋");
+                    (k.skin_tone_base.is_none(), k.choices.is_empty(), face)
+                })
+                .collect()
+        };
+        assert!(!tabs(&app).is_empty(), "the emoji pages have a people tab");
+        assert!(tabs(&app).iter().all(|&t| t == (true, true, true)));
+        app.emit(PickSkinTone(Some(1)), [kb]);
+        app.tick();
+        assert!(tabs(&app).iter().all(|&t| t == (true, true, true)));
+        // Its face was redrawn in the tone.
+        assert!(app.resource::<Emoji>().get("👋🏼").is_some());
+    }
+
+    /// Holding an emoji search result that takes a skin tone opens its
+    /// tones over the results bar, the picked tone over it; one that takes
+    /// none opens nothing, and letting go off the row closes it.
+    #[test]
+    fn holding_a_toneable_search_result_opens_its_tones() {
+        let (mut app, kb) = app();
+        // Touches read the field. Completion then reports the (unbound)
+        // input method inactive once, before the search is set up.
+        app.insert_resource(InputMethodState::default());
+        app.tick();
+        app.resource_mut::<Emoji>().set_skin_tone(Some(4));
+        // A search showing 😀 and 👋: the bars show once emoji can be typed.
+        let results = vec!["😀".to_string(), "👋".to_string()];
+        {
+            let me = app.widget_mut::<Keyboard>(kb).unwrap();
+            let mut search = EmojiSearch::new(me.current_view);
+            search.results = results.clone();
+            me.search = Some(search);
+        }
+        im_active(&mut app, kb, true);
+        let (results_bar, row_node, timer) = {
+            let me = app.widget::<Keyboard>(kb).unwrap();
+            assert_eq!(me.top, TopBar::Searching);
+            (me.results_bar, me.choices_row, me.bar_long_press_timer)
+        };
+        let labels = results
+            .into_iter()
+            .map(|e| Some(BarLabel::Emoji(e)))
+            .collect();
+        app.emit(BarFeedback::Show(labels), [results_bar.id()]);
+        app.tick();
+        let cell = |app: &App, i: usize| {
+            let c = app.widget::<SuggestionBar>(results_bar).unwrap().cells()[i];
+            app.component::<ComputedLayout>(c).unwrap().rect
+        };
+        let shown = |app: &App| app.component::<LayoutStyle>(row_node).unwrap().display;
+        let row = |app: &App| app.widget::<Keyboard>(kb).unwrap().touch.bar_row().cloned();
+
+        // 😀 takes no tone: holding it opens nothing.
+        let r = cell(&app, 0);
+        let position = Point::new(r.origin.x + r.size.width / 2.0, r.origin.y + 5.0);
+        let contact = ContactId::Touch(1);
+        app.emit(
+            Press {
+                contact,
+                position,
+                time: 0,
+            },
+            [kb],
+        );
+        app.emit(Timeout { id: timer }, [kb]);
+        app.tick();
+        assert!(row(&app).is_none());
+        app.emit(PressCancelled { contact, position }, [kb]);
+        app.tick();
+
+        // 👋 does: its row opens above the bar, 🏿 over it.
+        let r = cell(&app, 1);
+        let position = Point::new(r.origin.x + r.size.width / 2.0, r.origin.y + 5.0);
+        let contact = ContactId::Touch(2);
+        app.emit(
+            Press {
+                contact,
+                position,
+                time: 100,
+            },
+            [kb],
+        );
+        app.emit(Timeout { id: timer }, [kb]);
+        app.tick();
+        let open = row(&app).expect("the row opens");
+        assert_eq!(open.choices, ["👋", "👋🏻", "👋🏼", "👋🏽", "👋🏾", "👋🏿"]);
+        assert_eq!(open.highlighted, Some(5));
+        assert!(open.rect.bottom() < r.origin.y, "above the bar");
+        assert_eq!(shown(&app), Display::Flex);
+        assert!(app.resource::<Emoji>().get("👋🏻").is_some());
+
+        // Sliding far below the bar and letting go picks nothing.
+        let below = Point::new(position.x, r.bottom() + r.size.height);
+        app.emit(
+            PressMoved {
+                contact,
+                position: below,
+                time: 600,
+            },
+            [kb],
+        );
+        app.emit(
+            Release {
+                contact,
+                position: below,
+                time: 650,
+            },
+            [kb],
+        );
+        app.tick();
+        assert!(row(&app).is_none());
+        assert_eq!(shown(&app), Display::Hidden);
+        assert_eq!(app.resource::<Emoji>().skin_tone(), Some(4), "unchanged");
+    }
 }

@@ -12,7 +12,10 @@ use super::{KeyboardStyle, Keymap, PredictionConfig};
 
 /// Size used when a button names an outline that isn't defined (and no
 /// `default` outline exists to fall back to). Keeps conversion total.
-const FALLBACK_OUTLINE: Outline = Outline { width: 50.0 };
+const FALLBACK_OUTLINE: Outline = Outline {
+    width: 50.0,
+    height: None,
+};
 
 /// A row after `extends`/`replace` expansion: tokens still unresolved.
 struct RawRow {
@@ -166,6 +169,8 @@ impl View {
                 None => warn!("view {name:?}: more_keys set {set_name:?} is not defined"),
             }
         }
+        attach_switcher(layout, &mut view);
+        attach_more_hint(layout, &mut view);
         view
     }
 }
@@ -173,6 +178,7 @@ impl View {
 fn resolve_key(layout: &Layout, styles: &HashMap<String, KeyStyle>, token: &str) -> Key {
     let button = layout.buttons.get(token);
     let action = resolve_action(token, button);
+    let outline = resolve_outline(layout, button);
     let look = KeyLook::for_button(
         styles,
         token,
@@ -183,11 +189,84 @@ fn resolve_key(layout: &Layout, styles: &HashMap<String, KeyStyle>, token: &str)
         token: token.to_string(),
         face: resolve_face(token, button),
         action,
-        width: resolve_outline(layout, button).width,
+        width: outline.width,
+        height: outline
+            .height
+            .filter(|h| h.is_finite() && *h > 0.0 && *h < 1.0)
+            .unwrap_or(1.0),
         look,
         hint: None,
         choices: Vec::new(),
+        choice_actions: Vec::new(),
     }
+}
+
+/// Give every switcher key of `view` the targets other than the view's own
+/// family as long-press choices that switch to them. Unknown families warn
+/// and are skipped.
+fn attach_switcher(layout: &Layout, view: &mut View) {
+    let sw = &layout.switcher;
+    let targets: Vec<(String, KeyAction)> = sw
+        .targets
+        .iter()
+        .filter_map(|t| match Family::from_name(&t.family) {
+            Some(f) => Some((t.label.clone(), KeyAction::Family(f))),
+            None => {
+                warn!(
+                    "switcher target {:?}: unknown family {:?}",
+                    t.label, t.family
+                );
+                None
+            }
+        })
+        .filter(|(_, a)| !matches!(a, KeyAction::Family(f) if *f == view.family))
+        .collect();
+    if targets.is_empty() {
+        return;
+    }
+    for key in view.rows.iter_mut().flat_map(Row::keys_mut) {
+        if sw.keys.contains(&key.token) {
+            key.hint = None;
+            (key.choices, key.choice_actions) = targets.iter().cloned().unzip();
+        }
+    }
+}
+
+/// The default `more-hint` mark and the fewest choices that earn it.
+const MORE_HINT: &str = "…";
+const MORE_HINT_MIN_CHOICES: usize = 4;
+
+/// Mark keys whose hold opens a longer list with the `more-hint` label in
+/// the hint corner: every key whose choices switch keyboards, and every
+/// other key with at least `min-choices` choices. Letter keys (their
+/// accents are expected) and keys already showing a hint are left alone.
+fn attach_more_hint(layout: &Layout, view: &mut View) {
+    let spec = &layout.more_hint;
+    let label = spec.label.as_deref().unwrap_or(MORE_HINT);
+    if label.is_empty() {
+        return;
+    }
+    let min = spec.min_choices.unwrap_or(MORE_HINT_MIN_CHOICES);
+    for key in view.rows.iter_mut().flat_map(Row::keys_mut) {
+        let marked = !key.choice_actions.is_empty()
+            || (min > 0 && key.choices.len() >= min && !types_letter(&key.action));
+        if marked && key.hint.is_none() && matches!(key.face, KeyFace::Text(_)) {
+            key.hint = Some(label.to_string());
+        }
+    }
+}
+
+/// Whether `action` types a single letter (one that has a case).
+fn types_letter(action: &KeyAction) -> bool {
+    let c = match action {
+        KeyAction::EmitKeysym(ks) => char::from_u32(xkb::keysym_to_utf32(*ks)),
+        KeyAction::EmitText(text) => {
+            let mut chars = text.chars();
+            chars.next().filter(|_| chars.next().is_none())
+        }
+        _ => None,
+    };
+    c.is_some_and(char::is_alphabetic)
 }
 
 impl Keymap {
@@ -206,7 +285,16 @@ impl Keymap {
             views,
             keyboard,
             prediction,
-            choices_look: KeyLook::for_button(&styles, "", None, false),
+            choices_look: KeyLook::for_button(&styles, "", Some(style::MORE_KEYS), false),
+            pointing_stick_look: KeyLook::for_button(
+                &styles,
+                "pointing_stick",
+                layout
+                    .buttons
+                    .get("pointing_stick")
+                    .and_then(|b| b.key_style.as_deref()),
+                false,
+            ),
         }
     }
 }
@@ -246,6 +334,7 @@ fn types_digit(action: &KeyAction) -> bool {
         KeyAction::SetView(_)
         | KeyAction::LatchModifier(_)
         | KeyAction::Page(_)
+        | KeyAction::Family(_)
         | KeyAction::Shift
         | KeyAction::PointingStick
         | KeyAction::Unhandled(_) => None,
@@ -932,16 +1021,29 @@ mod tests {
             "terminal_symbols",
             "terminal_more_symbols",
         ] {
-            for (i, row) in km.view(name).unwrap().rows.iter().enumerate() {
-                let sum: f32 = row
-                    .cells
-                    .iter()
-                    .map(|c| match c {
-                        Cell::Key(k) => k.width,
-                        Cell::Spacer(w) => *w,
-                    })
-                    .sum();
-                assert!((sum - 100.0).abs() < 0.01, "{name} row {i} sums to {sum}");
+            // Widths are percentages of the row: the widest row spans it,
+            // and a shorter one (the home row, with the narrow pointing
+            // stick) is centred.
+            let rows = &km.view(name).unwrap().rows;
+            for (i, row) in rows.iter().enumerate() {
+                let sum: f32 = row.cells.iter().map(Cell::width).sum();
+                assert!(sum <= 100.01, "{name} row {i} sums to {sum}");
+            }
+            let widest = rows
+                .iter()
+                .map(|r| r.cells.iter().map(Cell::width).sum::<f32>())
+                .fold(0.0, f32::max);
+            assert!((widest - 100.0).abs() < 0.01, "{name} is {widest} wide");
+        }
+    }
+
+    /// No view has a row wider than 100, which would shrink every key in it.
+    #[test]
+    fn no_row_is_wider_than_the_keyboard() {
+        for view in &bundled().views {
+            for (i, row) in view.rows.iter().enumerate() {
+                let sum: f32 = row.cells.iter().map(Cell::width).sum();
+                assert!(sum <= 100.01, "{} row {i} sums to {sum}", view.name);
             }
         }
     }
@@ -975,6 +1077,87 @@ mod tests {
         assert_eq!(find("symbols", ".").choices, ["…"]);
         assert_eq!(find("number", "minus").choices, ["+"]);
         assert!(find("phone", "2").choices.is_empty());
+    }
+
+    /// Holding a page key (or the number pad's `.`) offers the other
+    /// keyboards, each choice switching to its family.
+    #[test]
+    fn page_keys_offer_the_other_keyboards() {
+        let km = bundled();
+        let offers = |view: &str, token: &str| {
+            let key = km
+                .view(view)
+                .unwrap()
+                .keys()
+                .find(|k| k.token == token)
+                .unwrap_or_else(|| panic!("{view} has no {token}"));
+            let families: Vec<Family> = key
+                .choice_actions
+                .iter()
+                .map(|a| match a {
+                    KeyAction::Family(f) => *f,
+                    other => panic!("{view}/{token}: choice runs {other:?}"),
+                })
+                .collect();
+            assert_eq!(key.choices.len(), families.len());
+            (key.choices.clone(), families)
+        };
+        use Family::{Number, Terminal, Text};
+        assert_eq!(
+            offers("base", "to_symbols"),
+            (vec!["Term".into(), "Num".into()], vec![Terminal, Number])
+        );
+        assert_eq!(offers("symbols", "to_letters").1, [Terminal, Number]);
+        assert_eq!(offers("more_symbols", "to_symbols").1, [Terminal, Number]);
+        assert_eq!(offers("terminal", "to_symbols").1, [Text, Number]);
+        assert_eq!(
+            offers("terminal_symbols", "to_more_symbols").1,
+            [Text, Number]
+        );
+        assert_eq!(offers("email", "to_symbols").1, [Text, Terminal, Number]);
+        assert_eq!(offers("emoji", "to_letters").1, [Terminal, Number]);
+        assert_eq!(
+            offers("phone", "to_phone_symbols").1,
+            [Text, Terminal, Number]
+        );
+        assert_eq!(
+            offers("number", "period_pad"),
+            (vec!["Alpha".into(), "Term".into()], vec![Text, Terminal])
+        );
+        // The number pad's `.` still types a period; the letters' `.` keeps
+        // its punctuation choices.
+        let pad = km
+            .view("number")
+            .unwrap()
+            .keys()
+            .find(|k| k.token == "period_pad")
+            .unwrap();
+        assert!(is_keysym(&pad.action, "period"));
+        let period = km
+            .view("base")
+            .unwrap()
+            .keys()
+            .find(|k| k.token == "period")
+            .unwrap();
+        assert!(period.choice_actions.is_empty() && period.choices.len() == 16);
+    }
+
+    /// By default every view-switching key (the `switcher` keys) carries the
+    /// `more-hint` label in its corner, wherever it appears.
+    #[test]
+    fn view_switching_keys_are_marked_with_an_ellipsis() {
+        let km = bundled();
+        let layout: Layout = yaml_serde::from_str(FALLBACK_LAYOUT).unwrap();
+        let dots = Some(layout.more_hint.label.unwrap_or(MORE_HINT.into()));
+        assert!(!layout.switcher.keys.is_empty(), "no switcher keys");
+        let mut seen = 0;
+        for key in km.keys() {
+            if layout.switcher.keys.contains(&key.token) {
+                assert_eq!(key.hint, dots, "{}", key.token);
+                seen += 1;
+            }
+        }
+        assert!(seen > 0, "no switcher key found in any view");
     }
 
     #[test]

@@ -22,7 +22,7 @@ use crate::layout::{KeyAction, KeyFace, Keymap};
 use crate::protocol::virtual_keyboard::keysym_text;
 use crate::widget::key::Key;
 
-pub(crate) use glue::{TouchState, abort, attach, long_pressed};
+pub(crate) use glue::{TouchState, abort, attach, bar_long_pressed, end_bar, long_pressed};
 pub(crate) use tracker::TouchTracker;
 
 /// The input layer's word to the UI: a key gained or lost the pressed state.
@@ -45,6 +45,20 @@ pub(crate) struct KeyEntry {
     pub letter: Option<char>,
     /// The key's long-press choices (lowercase), if any.
     pub choices: Vec<String>,
+    /// What each choice does, in step with `choices`; empty when the choices
+    /// type their own text.
+    pub choice_actions: Vec<KeyAction>,
+    /// Whether the key is hidden (the emoji key while emoji can't be
+    /// typed): no touch lands on it.
+    pub hidden: bool,
+    /// For an emoji key that takes a skin tone, its untoned emoji: its
+    /// choices are then that and its five toned forms, and picking one sets
+    /// the skin tone of every such emoji.
+    pub skin_tone_base: Option<String>,
+    /// For any key drawn with an emoji that takes a skin tone, that emoji
+    /// untoned: its face follows the tone picked. A key that does not type
+    /// it (the people tab's 👋) only shows the tone; it offers none.
+    pub toned_face: Option<String>,
 }
 
 impl KeyEntry {
@@ -56,7 +70,34 @@ impl KeyEntry {
             action,
             letter,
             choices,
+            choice_actions: Vec::new(),
+            hidden: false,
+            skin_tone_base: None,
+            toned_face: None,
         }
+    }
+
+    /// The same entry for an emoji key that takes a skin tone: `base`
+    /// untoned, `tones` its five toned forms, which with it are its choices.
+    pub(crate) fn with_skin_tones(mut self, base: &str, tones: [String; 5]) -> Self {
+        self.choices = std::iter::once(base.to_owned()).chain(tones).collect();
+        self.choice_actions = Vec::new();
+        self.skin_tone_base = Some(base.to_owned());
+        self.toned_face = Some(base.to_owned());
+        self
+    }
+
+    /// The same entry for a key drawn with `face`, an emoji that takes a
+    /// skin tone, but not typing it: its face follows the tone picked.
+    pub(crate) fn with_toned_face(mut self, face: &str) -> Self {
+        self.toned_face = Some(face.to_owned());
+        self
+    }
+
+    /// The same entry, its choices running `actions` instead of typing.
+    pub(crate) fn with_choice_actions(mut self, actions: Vec<KeyAction>) -> Self {
+        self.choice_actions = actions;
+        self
     }
 }
 
