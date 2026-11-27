@@ -214,9 +214,8 @@ impl Widget for EmojiSearchBar {
                     .padding(Insets::new(px(0.0), px(b.padding), px(0.0), px(b.padding))),
             ),
         );
-        let field_icon = field_sprite.map(|sp| {
-            s.spawn(field, icon(sp).color(ink).style(icon_style.clone()))
-        });
+        let field_icon =
+            field_sprite.map(|sp| s.spawn(field, icon(sp).color(ink).style(icon_style.clone())));
         let font_size = (f32::from(b.font_size) * FONT_SCALE).round() as u16;
         let text = s.spawn(
             field,

@@ -1,9 +1,9 @@
 //! The keyboard's widget tree: the [`key`] button, the [`keyboard`] view
 //! manager, and the [`surface`] layer shell that hosts them.
 
+pub(crate) mod emoji_search_bar;
 pub(crate) mod key;
 pub(crate) mod keyboard;
-pub(crate) mod emoji_search_bar;
 pub(crate) mod more_keys;
 pub(crate) mod pointing_stick;
 pub(crate) mod popup;

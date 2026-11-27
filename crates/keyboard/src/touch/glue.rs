@@ -23,12 +23,13 @@ use super::long_press::{ChoicesRow, LONG_PRESS};
 use super::pointing_stick::{POINTING_STICK_HOLD, PointingStickPad};
 use super::resolve::KeyGeom;
 use super::tracker::{TouchOut, TouchTracker};
+use crate::complete::{Completion, Kind};
+use crate::emoji_search;
 use crate::feedbackd;
 use crate::field::Field;
-use crate::complete::{Completion, Kind};
 use crate::input::{
-    accept_emoji_suggestion, accept_suggestion, commit_emoji, dispatch, dispatch_choice, hold, hold_direction, release, repeats,
-    tap_direction,
+    accept_emoji_suggestion, accept_suggestion, commit_emoji, dispatch, dispatch_choice, hold,
+    hold_direction, release, repeats, tap_direction,
 };
 use crate::layout::KeyAction;
 use crate::layout::emoji::Emoji;
@@ -36,12 +37,11 @@ use crate::modifiers::shift::{self, Shift};
 use crate::predict::{LetterPrior, Prediction, TypingContext};
 use crate::skin_tone;
 use crate::visibility::KeyboardVisibilityExt;
+use crate::widget::emoji_search_bar::{EmojiSearchBar, SearchBarFeedback, SearchPart};
 use crate::widget::keyboard::Keyboard;
+use crate::widget::keyboard::TopBar;
 use crate::widget::more_keys::ChoicesFeedback;
 use crate::widget::pointing_stick::PointingStickFeedback;
-use crate::emoji_search;
-use crate::widget::emoji_search_bar::{EmojiSearchBar, SearchBarFeedback, SearchPart};
-use crate::widget::keyboard::TopBar;
 use crate::widget::suggestion_bar::{BarFeedback, SuggestionBar};
 
 /// Bookkeeping the input layer keeps besides the tracker.

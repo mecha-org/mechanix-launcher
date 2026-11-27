@@ -107,7 +107,10 @@ pub(crate) fn enter(ctx: &mut Context<'_, Keyboard>) {
     }
     let (letters, here) = {
         let me = ctx.me();
-        (view_for(&me.views, me.family, Page::Letters), me.current_view)
+        (
+            view_for(&me.views, me.family, Page::Letters),
+            me.current_view,
+        )
     };
     let Some(letters) = letters else {
         tracing::warn!("no letters view to search emoji with");
@@ -127,7 +130,11 @@ pub(crate) fn exit(ctx: &mut Context<'_, Keyboard>) {
     let Some(search) = ctx.me().search.take() else {
         return;
     };
-    let name = ctx.me().views.get(search.return_view).map(|v| v.name.clone());
+    let name = ctx
+        .me()
+        .views
+        .get(search.return_view)
+        .map(|v| v.name.clone());
     match name {
         Some(name) if ctx.me().current_view != search.return_view => switch_view(ctx, &name),
         // Already there: the bars still change.
@@ -212,12 +219,7 @@ pub(crate) fn refresh(ctx: &mut Context<'_, Keyboard>) {
 
 /// Show the query and its caret in the search bar.
 fn show_query(ctx: &mut Context<'_, Keyboard>) {
-    let Some((query, caret)) = ctx
-        .me()
-        .search
-        .as_ref()
-        .map(|s| (s.query.clone(), s.caret))
-    else {
+    let Some((query, caret)) = ctx.me().search.as_ref().map(|s| (s.query.clone(), s.caret)) else {
         return;
     };
     let bar = ctx.me().search_bar.id();

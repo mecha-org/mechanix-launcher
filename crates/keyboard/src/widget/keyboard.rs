@@ -23,8 +23,8 @@ use crate::touch::long_press::LONG_PRESS;
 use crate::touch::{self, KeyEntry, TouchState, TouchTracker, letter_views};
 use crate::view::{BASE_VIEW, SwitchView, switch_view, view_for};
 use crate::visibility::{ApplyKeyboardVisibility, KeyboardVisibilityExt};
-use crate::widget::key::{Key, KeyBuilder};
 use crate::widget::emoji_search_bar::{EmojiSearchBar, EmojiSearchBarBuilder};
+use crate::widget::key::{Key, KeyBuilder};
 use crate::widget::more_keys::{MoreKeys, MoreKeysBuilder};
 use crate::widget::pointing_stick::{PointingStickOverlay, PointingStickOverlayBuilder};
 use crate::widget::popup::{KeyPopup, KeyPopupBuilder};
@@ -780,7 +780,10 @@ mod tests {
         let (mut app, kb) = app();
         let (share, emoji_share) = {
             let me = app.widget::<Keyboard>(kb).unwrap();
-            let k = me.emoji_keys.iter().find(|k| me.views[k.view].name == "base");
+            let k = me
+                .emoji_keys
+                .iter()
+                .find(|k| me.views[k.view].name == "base");
             let k = k.unwrap();
             (k.space.unwrap().1, k.width)
         };

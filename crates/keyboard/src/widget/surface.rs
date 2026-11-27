@@ -15,8 +15,8 @@ use crate::lent::Keys;
 use crate::scale::KeyboardGeometry;
 use crate::view::BASE_VIEW;
 use crate::visibility::{ApplyKeyboardVisibility, KeyboardVisibilityExt};
-use crate::widget::key::Key;
 use crate::widget::emoji_search_bar::EmojiSearchBar;
+use crate::widget::key::Key;
 use crate::widget::keyboard::{Keyboard, KeyboardBuilder, cell_padding};
 use crate::widget::more_keys::MoreKeys;
 use crate::widget::pointing_stick::PointingStickOverlay;
@@ -437,7 +437,9 @@ pub(crate) fn relayout(app: &mut App) {
     restyle(app, kb, |s| s.gap(px(style.row_gap)).padding(padding));
     // The bars keep whether they show; only their size follows the scale.
     restyle(app, bar, |s| SuggestionBar::style(bar_h).display(s.display));
-    restyle(app, results, |s| SuggestionBar::style(bar_h).display(s.display));
+    restyle(app, results, |s| {
+        SuggestionBar::style(bar_h).display(s.display)
+    });
     restyle(app, search, |s| {
         EmojiSearchBar::style(bar_h, top.search_bar_top(bar_h)).display(s.display)
     });
