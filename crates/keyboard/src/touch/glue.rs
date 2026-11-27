@@ -384,16 +384,20 @@ fn predict(ctx: &Context<'_, Keyboard>) -> (LetterPrior, f32, bool) {
 /// The current view's keys, with their laid-out rectangles.
 fn key_geoms(ctx: &mut Context<'_, Keyboard>) -> Vec<KeyGeom> {
     let view = ctx.me().current_view;
-    let keys: Vec<(Handle<_>, Option<char>)> = ctx.me().keys[view]
+    let keys: Vec<(Handle<_>, Option<char>, bool)> = ctx.me().keys[view]
         .iter()
-        .map(|k| (k.node, k.letter))
+        .map(|k| (k.node, k.letter, k.hidden))
         .collect();
     keys.into_iter()
-        .map(|(node, letter)| {
-            let rect = ctx
-                .at(node)
-                .and_then(|c| c.component::<ComputedLayout>().map(|l| l.rect))
-                .unwrap_or_default();
+        .map(|(node, letter, hidden)| {
+            // A hidden key's layout may be stale: put it where no touch is.
+            let rect = if hidden {
+                Rect::new(f32::MIN, f32::MIN, 0.0, 0.0)
+            } else {
+                ctx.at(node)
+                    .and_then(|c| c.component::<ComputedLayout>().map(|l| l.rect))
+                    .unwrap_or_default()
+            };
             KeyGeom { rect, letter }
         })
         .collect()

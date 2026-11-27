@@ -383,6 +383,9 @@ pub(crate) struct SuggestionsChanged {
     /// Each slot's label, left to right (`None` an empty slot); empty
     /// leaves the bar blank.
     pub(crate) labels: Vec<Option<BarLabel>>,
+    /// Whether emoji can be typed: the input method is active. The virtual
+    /// keyboard's fallback keymap has no emoji.
+    pub(crate) emoji: bool,
 }
 impl Event for SuggestionsChanged {}
 
@@ -416,6 +419,7 @@ fn recompute(
     completion.current = edit::stabilize(&completion.current, next, completion.cfg.max);
     SuggestionsChanged {
         shown: policy.is_some(),
+        emoji: active,
         labels: completion
             .current
             .iter()

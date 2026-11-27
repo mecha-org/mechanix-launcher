@@ -104,6 +104,26 @@ pub(crate) struct Keyboard {
     pub(crate) search: Option<EmojiSearch>,
     /// The bars shown over the view now.
     pub(crate) top: TopBar,
+    /// Every emoji page key, to hide while emoji can't be typed.
+    pub(crate) emoji_keys: Vec<EmojiKey>,
+    /// Whether emoji can be typed (the input method is active): the emoji
+    /// key and pages show only then.
+    pub(crate) emoji_typeable: bool,
+}
+
+/// A key that opens the emoji pages, and the space bar of its row, which
+/// takes its room while it is hidden.
+pub(crate) struct EmojiKey {
+    /// Its view's index.
+    pub(crate) view: usize,
+    /// Its index among the view's keys.
+    pub(crate) key: usize,
+    /// Its cell.
+    pub(crate) cell: Handle<Div>,
+    /// Its share of the row, as a percentage of the container.
+    pub(crate) width: f32,
+    /// The space bar's cell in the same row and its share, if there is one.
+    pub(crate) space: Option<(Handle<Div>, f32)>,
 }
 
 /// What shows over the view.
@@ -314,6 +334,7 @@ impl Widget for Keyboard {
         let mut shift_keys = Vec::new();
         let mut pointing_stick_keys = Vec::new();
         let mut keys = Vec::with_capacity(b.keymap.views.len());
+        let mut emoji_keys = Vec::new();
 
         for (vi, view) in b.keymap.views.iter().enumerate() {
             let weights = row_weights(view);
@@ -341,6 +362,9 @@ impl Widget for Keyboard {
             let mut view_keys = Vec::new();
 
             for (row, &weight) in view.rows.iter().zip(&weights) {
+                // This row's emoji key (index, cell, share), and space bar.
+                let mut emoji_key = None;
+                let mut space = None;
                 // Rows share the view's height by weight.
                 let row_div = s.spawn(
                     view_div,
@@ -361,6 +385,14 @@ impl Widget for Keyboard {
                     // A spacer is a blank cell; it spawns no key, so it is
                     // never in `view_keys` and never hit.
                     let Cell::Key(key) = cell else { continue };
+                    let share = cell.width() / span * 100.0;
+                    match &key.action {
+                        KeyAction::Page(Page::Emoji) => {
+                            emoji_key = Some((view_keys.len(), cell_div, share));
+                        }
+                        KeyAction::EmitText(t) if t == " " => space = Some((cell_div, share)),
+                        _ => {}
+                    }
                     // The label keeps its normal font while latched.
                     let label_style = key.look.style(KeyState::Normal);
                     let key_handle = s.spawn(
@@ -385,6 +417,27 @@ impl Widget for Keyboard {
                         KeyEntry::new(key_handle, key.action.clone(), key.choices.clone())
                             .with_choice_actions(key.choice_actions.clone()),
                     );
+                }
+                // The keyboard starts with no field active, so with no way
+                // to type emoji: the key starts hidden (see
+                // `set_emoji_typeable`).
+                if let Some((key, cell, width)) = emoji_key {
+                    view_keys[key].hidden = true;
+                    if let Some(mut style) = s.component_mut::<LayoutStyle>(cell) {
+                        *style = style.clone().hidden();
+                    }
+                    if let Some((space, share)) = space
+                        && let Some(mut style) = s.component_mut::<LayoutStyle>(space)
+                    {
+                        *style = style.clone().width(percent(share + width));
+                    }
+                    emoji_keys.push(EmojiKey {
+                        view: vi,
+                        key,
+                        cell,
+                        width,
+                        space,
+                    });
                 }
             }
             keys.push(view_keys);
@@ -517,6 +570,8 @@ impl Widget for Keyboard {
             emoji_search: b.emoji_search,
             search: None,
             top: TopBar::None,
+            emoji_keys,
+            emoji_typeable: false,
         }
     }
 }
@@ -525,6 +580,7 @@ impl Widget for Keyboard {
 /// place), showing or hiding it (which changes the keyboard's height) as
 /// `e` says. Any touch is dropped first if the bars change under it.
 fn show_suggestions(ctx: &mut Context<'_, Keyboard>, e: &SuggestionsChanged) {
+    set_emoji_typeable(ctx, e.emoji);
     if e.shown != ctx.me().suggestions_shown {
         ctx.me().suggestions_shown = e.shown;
         if ctx.me().wanted_top() != ctx.me().top {
@@ -534,6 +590,72 @@ fn show_suggestions(ctx: &mut Context<'_, Keyboard>, e: &SuggestionsChanged) {
     }
     let bar = ctx.me().bar.id();
     ctx.emit(BarFeedback::Show(e.labels.clone()), [bar]);
+}
+
+/// Show or hide the emoji key and pages: emoji can only be typed through
+/// the input method (the virtual keyboard's keymap has none), so with no
+/// field active, as when the keyboard is shown by hand over an app without
+/// one, the emoji key goes, its row's space bar taking its room, and an
+/// emoji page or search showing gives way to the letters.
+pub(crate) fn set_emoji_typeable(ctx: &mut Context<'_, Keyboard>, typeable: bool) {
+    if ctx.me().emoji_typeable == typeable {
+        return;
+    }
+    ctx.me().emoji_typeable = typeable;
+    let slots: Vec<_> = ctx
+        .me()
+        .emoji_keys
+        .iter()
+        .map(|k| (k.view, k.key, k.cell, k.width, k.space))
+        .collect();
+    for (view, key, cell, width, space) in slots {
+        if let Some(entry) = ctx.me().keys[view].get_mut(key) {
+            entry.hidden = !typeable;
+        }
+        restyle_node(ctx, cell, |s| {
+            s.display(if typeable {
+                Display::Flex
+            } else {
+                Display::Hidden
+            })
+        });
+        if let Some((space, share)) = space {
+            let share = if typeable { share } else { share + width };
+            restyle_node(ctx, space, |s| s.width(percent(share)));
+        }
+    }
+    if typeable {
+        return;
+    }
+    let on_emoji = {
+        let me = ctx.me();
+        me.search.is_some() || me.views[me.current_view].page == Page::Emoji
+    };
+    if on_emoji {
+        touch::abort(ctx);
+        emoji_search::cancel(ctx);
+        let me = ctx.me();
+        match view_for(&me.views, me.family, Page::Letters) {
+            Some(idx) => {
+                let name = me.views[idx].name.clone();
+                switch_view(ctx, &name);
+            }
+            None => apply_top_bar(ctx),
+        }
+    }
+    tracing::info!(typeable, "emoji key");
+}
+
+/// Replace the layout style of `node` with `f` of it.
+fn restyle_node(
+    ctx: &mut Context<'_, Keyboard>,
+    node: Handle<Div>,
+    f: impl FnOnce(LayoutStyle) -> LayoutStyle,
+) {
+    let Some(mut at) = ctx.at(node) else { return };
+    if let Some(style) = at.component::<LayoutStyle>().cloned() {
+        at.set_style(f(style));
+    }
 }
 
 /// Show the bars [`Keyboard::wanted_top`] asks for over the current view:
@@ -574,4 +696,97 @@ pub(crate) fn apply_top_bar(ctx: &mut Context<'_, Keyboard>) {
         ctx.set_style(style.padding(insets));
     }
     crate::widget::surface::view_shown(ctx);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The keyboard spawned headless, as the launcher's atlas test does.
+    fn app() -> (App, NodeId) {
+        let mut app = App::new();
+        app.add_module(LayoutModule)
+            .add_module(PaintModule)
+            .add_module(WindowModule)
+            .add_module(InteractivityModule)
+            .add_module(RingModule::default())
+            .add_module(TimerModule)
+            .insert_resource(Atlas::new());
+        app.add_module(MechanixTheme::dark());
+        app.register_component::<Role>();
+        crate::spawn_ui(&mut app, 20.0);
+        app.tick();
+        let kb = app.widgets::<Keyboard>().map(|(id, _)| id).next().unwrap();
+        (app, kb)
+    }
+
+    /// The input method's activity changed, as completion tells it.
+    fn im_active(app: &mut App, kb: NodeId, active: bool) {
+        let e = SuggestionsChanged {
+            shown: active,
+            labels: Vec::new(),
+            emoji: active,
+        };
+        app.emit(e, [kb]);
+        app.tick();
+    }
+
+    /// The base view's emoji key: hidden for touches, its cell hidden, and
+    /// its row's space bar's share.
+    fn emoji_key(app: &App, kb: NodeId) -> (bool, Display, Val) {
+        let me = app.widget::<Keyboard>(kb).unwrap();
+        let k = me
+            .emoji_keys
+            .iter()
+            .find(|k| me.views[k.view].name == "base")
+            .expect("base has an emoji key");
+        let hidden = me.keys[k.view][k.key].hidden;
+        let display = app.component::<LayoutStyle>(k.cell).unwrap().display;
+        let space = app
+            .component::<LayoutStyle>(k.space.unwrap().0)
+            .unwrap()
+            .width;
+        (hidden, display, space)
+    }
+
+    #[test]
+    fn the_emoji_key_shows_only_while_emoji_can_be_typed() {
+        let (mut app, kb) = app();
+        let (share, emoji_share) = {
+            let me = app.widget::<Keyboard>(kb).unwrap();
+            let k = me.emoji_keys.iter().find(|k| me.views[k.view].name == "base");
+            let k = k.unwrap();
+            (k.space.unwrap().1, k.width)
+        };
+        // No field yet: hidden, the space bar taking its room.
+        assert_eq!(
+            emoji_key(&app, kb),
+            (true, Display::Hidden, percent(share + emoji_share))
+        );
+        im_active(&mut app, kb, true);
+        assert_eq!(emoji_key(&app, kb), (false, Display::Flex, percent(share)));
+        im_active(&mut app, kb, false);
+        assert_eq!(
+            emoji_key(&app, kb),
+            (true, Display::Hidden, percent(share + emoji_share))
+        );
+    }
+
+    #[test]
+    fn an_emoji_page_gives_way_to_the_letters_when_emoji_cannot_be_typed() {
+        let (mut app, kb) = app();
+        im_active(&mut app, kb, true);
+        let base = {
+            let me = app.widget_mut::<Keyboard>(kb).unwrap();
+            let base = me.current_view;
+            me.current_view = me.index_of("emoji_food").unwrap();
+            me.search = Some(EmojiSearch::new(me.current_view));
+            base
+        };
+        im_active(&mut app, kb, false);
+        let me = app.widget::<Keyboard>(kb).unwrap();
+        assert_eq!(me.current_view, base);
+        assert!(me.search.is_none());
+        assert_eq!(me.top, TopBar::None);
+    }
 }

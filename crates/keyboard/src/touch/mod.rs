@@ -48,6 +48,9 @@ pub(crate) struct KeyEntry {
     /// What each choice does, in step with `choices`; empty when the choices
     /// type their own text.
     pub choice_actions: Vec<KeyAction>,
+    /// Whether the key is hidden (the emoji key while emoji can't be
+    /// typed): no touch lands on it.
+    pub hidden: bool,
 }
 
 impl KeyEntry {
@@ -60,6 +63,7 @@ impl KeyEntry {
             letter,
             choices,
             choice_actions: Vec::new(),
+            hidden: false,
         }
     }
 
