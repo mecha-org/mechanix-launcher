@@ -2,13 +2,14 @@ use std::collections::HashMap;
 
 use mecha_wayland::prelude::*;
 
-use super::interface::{MPRIS_PATH, PLAYER_INTERFACE, get_mpris_dbus_interface};
+use super::interface::{MPRIS_PATH, PLAYER_INTERFACE, POSITION, get_mpris_dbus_interface};
 use super::types::PlayerId;
 
 #[derive(Debug)]
 pub enum PendingCall {
     ListNames,
     GetAll(PlayerId),
+    Position(PlayerId),
 }
 
 pub struct MprisDiscovery {
@@ -50,6 +51,17 @@ impl MprisDiscovery {
         app.resource_mut::<DBus>()
             .session()
             .remove_match(subscription);
+    }
+
+    pub(super) fn request_position(app: &mut App, id: &PlayerId) {
+        let call = app
+            .resource_mut::<DBus>()
+            .session()
+            .object(id.0.clone(), MPRIS_PATH)
+            .get_property(PLAYER_INTERFACE, POSITION);
+        app.resource_mut::<MprisDiscovery>()
+            .pending_replies
+            .insert(call, PendingCall::Position(id.clone()));
     }
 
     pub(super) fn is_subscribed(&self, name: &BusName) -> bool {

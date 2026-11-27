@@ -1,7 +1,8 @@
 use mecha_wayland::prelude::*;
 
 use super::interface::{METADATA, PLAYBACK_STATUS};
-use super::types::{MediaPlayer, PlaybackStatus, PlayerId, Track};
+use super::types::{MediaPlayer, PlaybackPosition, PlaybackStatus, PlayerId, Track};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Default)]
 pub struct MprisPlayers {
@@ -33,6 +34,10 @@ impl MprisPlayers {
         };
         let mut updated = false;
         if changed.contains_key(PLAYBACK_STATUS) {
+            player.position = PlaybackPosition {
+                at: player.position_now(),
+                since: Instant::now(),
+            };
             player.status = PlaybackStatus::from(changed);
             updated = true;
         }
@@ -41,5 +46,42 @@ impl MprisPlayers {
             updated = true;
         }
         updated
+    }
+
+    pub(super) fn set_position(&mut self, id: &PlayerId, at: Duration) -> bool {
+        let Some(player) = self.players.iter_mut().find(|p| p.id == *id) else {
+            return false;
+        };
+        player.position = PlaybackPosition {
+            at,
+            since: Instant::now(),
+        };
+        true
+    }
+}
+
+impl MediaPlayer {
+    pub fn position_now(&self) -> Duration {
+        let PlaybackPosition { at, since } = self.position;
+        let pos = match self.status {
+            PlaybackStatus::Playing => at.saturating_add(since.elapsed()),
+            _ => at,
+        };
+        let Some(length) = self.track.track_length else {
+            return pos;
+        };
+        pos.min(length)
+    }
+
+    pub fn time_to_next_second(&self) -> Option<Duration> {
+        if self.status != PlaybackStatus::Playing {
+            return None;
+        }
+        let pos = self.position_now();
+        if self.track.track_length.is_some_and(|length| pos >= length) {
+            return None;
+        }
+        let left = 1_000_000_000 - pos.subsec_nanos();
+        Some(Duration::from_nanos(u64::from(left)))
     }
 }

@@ -2,11 +2,11 @@ use mecha_wayland::prelude::*;
 
 use super::bus::MprisDiscovery;
 use super::event::MprisEvent;
-use super::interface::{MPRIS_PATH, MPRIS_PREFIX, PAUSE, PLAY_PAUSE, PLAYER_INTERFACE};
+use super::interface::{METADATA, MPRIS_PATH, MPRIS_PREFIX, PAUSE, PLAY_PAUSE, PLAYER_INTERFACE};
 use super::media_command::MediaCommand;
 use super::media_signal::MediaSignals;
 use super::players::MprisPlayers;
-use super::types::{MediaPlayer, PlaybackStatus, PlayerId, Track};
+use super::types::{MediaPlayer, PlaybackPosition, PlaybackStatus, PlayerId, Track};
 
 pub fn on_reply(app: &mut App, e: &MethodReply) {
     let Some(event) = MprisEvent::from_reply(app, e) else {
@@ -39,6 +39,7 @@ fn handle(app: &mut App, event: MprisEvent) {
             let player = MediaPlayer {
                 id: id.clone(),
                 status: PlaybackStatus::from(&props),
+                position: PlaybackPosition::from(&props),
                 track: Track::from(&props),
             };
             app.resource_mut::<MprisPlayers>().add_player(player);
@@ -55,8 +56,18 @@ fn handle(app: &mut App, event: MprisEvent) {
             let updated = app
                 .resource_mut::<MprisPlayers>()
                 .player_data_changed(&id, &changed);
+
+            if changed.contains_key(METADATA) {
+                MprisDiscovery::request_position(app, &id);
+            }
             if updated {
                 app.signal(MediaSignals::PlayerChanged(id));
+            }
+        }
+        MprisEvent::Position(id, at) => {
+            let updated = app.resource_mut::<MprisPlayers>().set_position(&id, at);
+            if updated {
+                app.signal(MediaSignals::PositionChanged(id));
             }
         }
     }

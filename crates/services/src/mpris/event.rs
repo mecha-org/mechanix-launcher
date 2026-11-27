@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use mecha_wayland::prelude::*;
 
 use super::bus::{MprisDiscovery, PendingCall};
@@ -10,6 +12,7 @@ pub(super) enum MprisEvent {
     PlayerAppeared(BusName),
     PlayerLeft(BusName),
     PlayerUpdated(PlayerId, PropMap),
+    Position(PlayerId, Duration),
 }
 
 impl MprisEvent {
@@ -40,6 +43,18 @@ impl MprisEvent {
                     return None;
                 };
                 Some(Self::PlayerData(id, props))
+            }
+            PendingCall::Position(id) => {
+                let Ok((value,)) = msg.body::<(Value,)>() else {
+                    eprintln!("[mpris] Position {}: unexpected reply", id.0.as_str());
+                    return None;
+                };
+                let Ok(micros) = value.get::<i64>() else {
+                    eprintln!("[mpris] Position {}: not an i64", id.0.as_str());
+                    return None;
+                };
+                let micros = u64::try_from(micros).ok()?;
+                Some(Self::Position(id, Duration::from_micros(micros)))
             }
         }
     }

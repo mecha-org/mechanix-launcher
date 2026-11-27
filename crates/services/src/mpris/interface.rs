@@ -13,6 +13,7 @@ pub(super) const PLAY_PAUSE: &str = "PlayPause";
 
 pub(super) const PLAYBACK_STATUS: &str = "PlaybackStatus";
 pub(super) const METADATA: &str = "Metadata";
+pub(super) const POSITION: &str = "Position";
 
 pub(super) const PLAYING: &str = "Playing";
 pub(super) const PAUSED: &str = "Paused";
@@ -20,6 +21,7 @@ pub(super) const PAUSED: &str = "Paused";
 pub(super) const TITLE: &str = "xesam:title";
 pub(super) const ARTIST: &str = "xesam:artist";
 pub(super) const ART_URL: &str = "mpris:artUrl";
+pub(super) const LENGTH: &str = "mpris:length";
 
 pub fn get_mpris_dbus_interface() -> MatchRule {
     MatchRule::signal()
