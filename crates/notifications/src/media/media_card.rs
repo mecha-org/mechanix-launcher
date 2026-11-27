@@ -3,11 +3,15 @@ use services::mpris::{MediaPlayer, MprisPlayers, PlaybackStatus, PlayerId, Track
 
 use super::album_art::{AlbumArtBuilder, AlbumArtExt};
 use super::play_button::{PlayButtonBuilder, PlayButtonExt};
+use super::progress::{ProgressBuilder, ProgressExt};
 use super::track_info::{TrackInfoBuilder, TrackInfoExt};
 use crate::style::space;
 
 pub struct PlayerUpdated(pub PlayerId);
 impl Event for PlayerUpdated {}
+
+pub struct PositionUpdated(pub PlayerId);
+impl Event for PositionUpdated {}
 
 pub struct MediaCard;
 
@@ -72,6 +76,8 @@ impl Widget for MediaCard {
             },
         );
 
+        let progress = s.spawn(middle, ProgressBuilder { id: b.id.clone() });
+
         let play = s.spawn(
             me,
             PlayButtonBuilder {
@@ -96,6 +102,16 @@ impl Widget for MediaCard {
             }
             if let Some(mut n) = ctx.at(play) {
                 n.set_status(status);
+            }
+            if let Some(mut n) = ctx.at(progress) {
+                n.refresh();
+            }
+        });
+
+        // Only the position moved: refresh just the progress.
+        s.on::<PositionUpdated>(me, move |ctx, _| {
+            if let Some(mut n) = ctx.at(progress) {
+                n.refresh();
             }
         });
 

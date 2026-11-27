@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use mecha_wayland::prelude::*;
 use services::mpris::{MprisPlayers, PlayerId};
 
-use super::media_card::{MediaCard, MediaCardBuilder, PlayerUpdated};
+use super::media_card::{MediaCard, MediaCardBuilder, PlayerUpdated, PositionUpdated};
 use crate::style::space;
 
 pub struct ShowPlayer(pub PlayerId);
@@ -53,6 +53,13 @@ impl Widget for MediaList {
                 return;
             };
             ctx.emit(PlayerUpdated(e.0.clone()), card);
+        });
+
+        s.on::<PositionUpdated>(me, move |ctx, e| {
+            let Some(&card) = ctx.me().cards.get(&e.0) else {
+                return;
+            };
+            ctx.emit(PositionUpdated(e.0.clone()), card);
         });
 
         s.on::<RemovePlayer>(me, move |ctx, e| {
