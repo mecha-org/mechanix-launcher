@@ -1,12 +1,20 @@
-//! Word-frequency lists, shared by everything that knows about words: the
-//! next-letter predictor ([`crate::predict`]) and word completion
-//! ([`crate::complete`]). Each list is loaded once, by spec, through the
-//! [`Dictionaries`] cache.
+//! Word lists, shared by everything that knows about words, each loaded
+//! once, by spec, through the [`Dictionaries`] cache. Two kinds:
+//!
+//! - [`Dictionary`]: lowercase `[a-z']` words with counts, for the
+//!   next-letter predictor ([`crate::predict`]), which needs only letters.
+//! - [`Wordlist`]: words as written, with frequencies, flags and
+//!   replacements (AOSP LatinIME's format), for word completion and
+//!   autocorrection ([`crate::complete`]).
+
+mod wordlist;
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use mecha_wayland::prelude::*;
+
+pub(crate) use wordlist::{Word, Wordlist};
 
 /// A word list: lowercase `[a-z']` words with their frequency counts, sorted
 /// by word.
@@ -86,6 +94,7 @@ impl Dictionary {
     }
 
     /// The count of `word` (already normalised), if it is in the list.
+    #[cfg(test)]
     pub(crate) fn count(&self, word: &str) -> Option<u32> {
         self.words
             .binary_search_by(|(w, _)| (**w).cmp(word))
@@ -99,11 +108,12 @@ pub(crate) fn is_normalised(s: &str) -> bool {
     s.bytes().all(|b| b.is_ascii_lowercase() || b == b'\'')
 }
 
-/// Every dictionary loaded so far, by the spec it was loaded from, so a list
-/// used by several features is parsed once.
+/// Every list loaded so far, by the spec it was loaded from, so a list used
+/// by several features is parsed once.
 #[derive(Default)]
 pub(crate) struct Dictionaries {
     loaded: HashMap<String, Arc<Dictionary>>,
+    wordlists: HashMap<String, Loading<Wordlist>>,
 }
 impl Resource for Dictionaries {}
 
@@ -115,6 +125,83 @@ impl Dictionaries {
             .entry(spec.to_string())
             .or_insert_with(|| Arc::new(Dictionary::load(spec)))
             .clone()
+    }
+
+    /// The word list for `spec` (a bundled locale or a path). A bundled
+    /// list was compiled at build time and is ready at once; one from a path
+    /// is compiled in the background on first use, which takes long enough
+    /// (half a second on the device) that startup should not wait for it.
+    pub(crate) fn wordlist(&mut self, spec: &str) -> Loading<Wordlist> {
+        self.wordlists
+            .entry(spec.to_string())
+            .or_insert_with(|| match Wordlist::bundled(spec) {
+                Some(list) => Loading::ready(list),
+                None => {
+                    let spec = spec.to_string();
+                    Loading::spawn(move || Wordlist::load(&spec))
+                }
+            })
+            .clone()
+    }
+}
+
+/// A value being made on a background thread, shared by every clone.
+pub(crate) struct Loading<T>(Arc<OnceLock<T>>);
+
+impl<T> Clone for Loading<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<T: Send + Sync + 'static> Loading<T> {
+    /// Start making the value with `make`; if no thread can be started,
+    /// make it now.
+    pub(crate) fn spawn<F: FnOnce() -> T + Send + 'static>(make: F) -> Self {
+        let cell = Arc::new(OnceLock::new());
+        // Shared so the job can still run here if the thread cannot start.
+        let job = Arc::new(Mutex::new(Some(make)));
+        let run = {
+            let cell = cell.clone();
+            move |job: &Mutex<Option<F>>| {
+                let make = job.lock().unwrap_or_else(|e| e.into_inner()).take();
+                if let Some(make) = make {
+                    let _ = cell.set(make());
+                }
+            }
+        };
+        let started = {
+            let (job, run) = (job.clone(), run.clone());
+            std::thread::Builder::new()
+                .name("word-list".into())
+                .spawn(move || run(&job))
+        };
+        if let Err(e) = started {
+            tracing::warn!("cannot load in the background ({e}); loading now");
+            run(&job);
+        }
+        Self(cell)
+    }
+
+    /// A value that is ready already.
+    pub(crate) fn ready(value: T) -> Self {
+        Self(Arc::new(OnceLock::from(value)))
+    }
+
+    /// The value, once it is made.
+    pub(crate) fn get(&self) -> Option<&T> {
+        self.0.get()
+    }
+
+    /// The value, waiting for it.
+    #[cfg(test)]
+    pub(crate) fn wait(&self) -> &T {
+        loop {
+            if let Some(v) = self.get() {
+                return v;
+            }
+            std::thread::yield_now();
+        }
     }
 }
 
@@ -168,6 +255,14 @@ mod tests {
         assert_eq!(d.count("the"), Some(100));
         assert_eq!(d.count("th"), None);
         assert_eq!(d.count("zoos"), None);
+    }
+
+    #[test]
+    fn loading_becomes_ready() {
+        let l = Loading::spawn(|| 7);
+        assert_eq!(l.wait(), &7);
+        assert_eq!(l.clone().get(), Some(&7));
+        assert_eq!(Loading::ready(3).get(), Some(&3));
     }
 
     #[test]

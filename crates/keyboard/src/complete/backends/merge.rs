@@ -5,9 +5,9 @@ use crate::complete::{Candidate, Completer, Kind, WordQuery};
 
 /// Interleaves its sources' candidates (each source's best, in source
 /// order, then each one's second, ...), skipping repeats. A source's
-/// autocorrection stands only if no source takes the typed word as spelled
-/// right (one list may lack a word another has). Every source learns every
-/// word.
+/// autocorrection stands only if no other source takes the typed word as
+/// spelled right (one list may lack a word another has). Every source learns
+/// every word.
 pub(crate) struct Merge(Vec<Box<dyn Completer>>);
 
 impl Merge {
@@ -21,12 +21,17 @@ impl Completer for Merge {
         let lists: Vec<Vec<Candidate>> = self.0.iter_mut().map(|s| s.suggest(q)).collect();
         let mut iters: Vec<_> = lists.into_iter().map(Vec::into_iter).collect();
         let mut out: Vec<Candidate> = Vec::new();
+        // Where the first autocorrection is in `out`, and which source gave it.
+        let mut auto: Option<(usize, usize)> = None;
         loop {
             let mut any = false;
-            for it in &mut iters {
+            for (source, it) in iters.iter_mut().enumerate() {
                 if let Some(c) = it.next() {
                     any = true;
                     if !out.iter().any(|o| o.text.eq_ignore_ascii_case(&c.text)) {
+                        if auto.is_none() && c.kind == Kind::Autocorrection {
+                            auto = Some((out.len(), source));
+                        }
                         out.push(c);
                     }
                 }
@@ -36,10 +41,15 @@ impl Completer for Merge {
             }
         }
         let word = format!("{}{}", q.word, q.word_after);
-        if let Some(auto) = out.iter_mut().find(|c| c.kind == Kind::Autocorrection)
-            && self.accepts(&word)
-        {
-            auto.kind = Kind::Correction;
+        if let Some((at, source)) = auto {
+            let vetoed = self
+                .0
+                .iter_mut()
+                .enumerate()
+                .any(|(i, s)| i != source && s.accepts(&word));
+            if vetoed {
+                out[at].kind = Kind::Correction;
+            }
         }
         out
     }
@@ -105,6 +115,33 @@ mod tests {
         assert_eq!(m.suggest(&q("mecha"))[0].kind, Kind::Correction);
         assert_eq!(m.suggest(&q("mechq"))[0].kind, Kind::Autocorrection);
         assert!(m.accepts("mecha") && !m.accepts("mechq"));
+    }
+
+    /// Autocorrects "ill" to "I'll", though it knows "ill" too.
+    struct Contracts;
+    impl Completer for Contracts {
+        fn suggest(&mut self, _q: &WordQuery) -> Vec<Candidate> {
+            vec![Candidate {
+                text: "I'll".into(),
+                kind: Kind::Autocorrection,
+            }]
+        }
+        fn accepts(&mut self, word: &str) -> bool {
+            word == "ill"
+        }
+    }
+
+    #[test]
+    fn only_another_source_vetoes() {
+        let q = WordQuery {
+            word: "ill",
+            word_after: "",
+            max: 3,
+        };
+        let mut alone = Merge::new(vec![Box::new(Contracts)]);
+        assert_eq!(alone.suggest(&q)[0].kind, Kind::Autocorrection);
+        let mut both = Merge::new(vec![Box::new(Contracts), Box::new(Knows("ill"))]);
+        assert_eq!(both.suggest(&q)[0].kind, Kind::Correction);
     }
 
     fn texts(c: &[Candidate]) -> Vec<&str> {

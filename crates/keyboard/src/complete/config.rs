@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use super::Completer;
-use super::backends::{DictionaryCompleter, Merge};
+use super::backends::{Merge, WordlistCompleter};
 use crate::dictionaries::Dictionaries;
 use crate::field::Field;
 use crate::layout::Family;
@@ -14,9 +14,10 @@ use crate::layout::Family;
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)] // every variant is a choice for `hardcoded`, not all are used at once
 pub(crate) enum Backend {
-    /// A frequency word list (bundled name or path, as for prediction):
-    /// completions by frequency, and corrections one edit away.
-    Dictionary(String),
+    /// A word list in AOSP LatinIME's format (bundled locale, e.g. `en_US`,
+    /// or a path to a `.combined` or `.combined.gz` file): completions by
+    /// frequency, corrections one edit away, the list's replacements.
+    Wordlist(String),
     /// Hunspell spell-checking with the named dictionary (`en_US` loads
     /// `/usr/share/hunspell/en_US.{aff,dic}`): corrections of misspelled
     /// words. Needs the `hunspell` feature.
@@ -37,10 +38,6 @@ pub(crate) const APPEND_SPACE: bool = false;
 /// Whether a word that is almost certainly misspelled is corrected by itself
 /// when a space or punctuation ends it (in text fields; never in addresses).
 pub(crate) const AUTOCORRECT: bool = true;
-
-/// Words shorter than this (in chars) are never autocorrected: too short to
-/// be sure of.
-pub(crate) const AUTOCORRECT_MIN_LEN: usize = 3;
 
 /// Punctuation that ends a word and so autocorrects it, as whitespace does.
 /// Not `'` (inside words), nor `-`, `/`, `@`, `_` and the like, which join
@@ -74,7 +71,7 @@ pub(crate) struct CompletionConfig {
 impl CompletionConfig {
     /// The completion settings in use. Replace with the config system.
     pub(crate) fn hardcoded() -> Self {
-        let words = Backend::Dictionary("en".into());
+        let words = Backend::Wordlist("en_US".into());
         let backend = if cfg!(feature = "hunspell") {
             Backend::Merge(vec![words, Backend::Hunspell("en_US".into())])
         } else {
@@ -126,7 +123,7 @@ pub(crate) fn policy(field: Field, cfg: &CompletionConfig) -> Option<Policy> {
 /// feature is off, its files are missing) is warned about and left out.
 pub(crate) fn build(backend: &Backend, dicts: &mut Dictionaries) -> Box<dyn Completer> {
     match backend {
-        Backend::Dictionary(spec) => Box::new(DictionaryCompleter::new(dicts.get(spec))),
+        Backend::Wordlist(spec) => Box::new(WordlistCompleter::new(dicts.wordlist(spec))),
         Backend::Hunspell(lang) => hunspell(lang),
         Backend::Merge(all) => Box::new(Merge::new(all.iter().map(|b| build(b, dicts)).collect())),
     }

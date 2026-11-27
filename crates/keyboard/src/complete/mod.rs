@@ -62,9 +62,21 @@ pub(crate) enum Kind {
     Correction,
     /// The typed word is almost certainly misspelled and this is almost
     /// certainly the intended word: it replaces the typed one by itself when
-    /// the word ends. At most one per word, and only for a word no source
-    /// takes as spelled right (see [`Completer::accepts`]).
+    /// the word ends, unless another source takes the typed word as spelled
+    /// right (see [`Completer::accepts`]). At most one per word.
     Autocorrection,
+    /// A word list's own fix for an entry it marks as no word ("im" →
+    /// "I'm"): applied like an [`Autocorrection`](Kind::Autocorrection),
+    /// whatever other sources say.
+    Replacement,
+}
+
+impl Kind {
+    /// Whether the suggestion replaces the typed word by itself as the
+    /// word ends.
+    pub(crate) fn applies_itself(self) -> bool {
+        matches!(self, Kind::Autocorrection | Kind::Replacement)
+    }
 }
 
 /// A word a source suggests, in the source's own casing.
@@ -81,7 +93,8 @@ pub(crate) trait Completer {
     fn suggest(&mut self, q: &WordQuery) -> Vec<Candidate>;
 
     /// Whether this source takes `word` (in its typed casing) as spelled
-    /// right, which vetoes another source's [`Kind::Autocorrection`] of it.
+    /// right, which vetoes another source's [`Kind::Autocorrection`] of it
+    /// (not a [`Kind::Replacement`]).
     /// A source that cannot tell says `false`.
     fn accepts(&mut self, _word: &str) -> bool {
         false
@@ -204,10 +217,10 @@ impl Completion {
     /// before the cursor: replacing that word with its correction, followed
     /// by `text`. Only when `text` ends a word ([`config::ends_word`]), the
     /// field autocorrects, the word was just typed here (not reached by
-    /// moving the caret) and does not go on after the cursor, is long
-    /// enough, not all capitals (likely an acronym), not one the user kept
-    /// by undoing its correction, and a source is sure of the correction
-    /// ([`Kind::Autocorrection`]).
+    /// moving the caret) and does not go on after the cursor, is not all
+    /// capitals (likely an acronym), not one the user kept by undoing its
+    /// correction, and a source is sure of the correction
+    /// ([`Kind::applies_itself`]).
     pub(crate) fn autocorrection(
         &mut self,
         ctx: &TypingContext,
@@ -236,10 +249,7 @@ impl Completion {
             return None;
         }
         let word = ctx.prefix();
-        if word.chars().count() < config::AUTOCORRECT_MIN_LEN
-            || edit::all_caps(&word)
-            || self.kept.contains(&word.to_lowercase())
-        {
+        if word.is_empty() || edit::all_caps(&word) || self.kept.contains(&word.to_lowercase()) {
             return None;
         }
         let policy = Policy {
@@ -249,7 +259,7 @@ impl Completion {
         let fix = self
             .suggest(ctx, policy)
             .into_iter()
-            .find(|s| s.kind == Kind::Autocorrection)?;
+            .find(|s| s.kind.applies_itself())?;
         Some(TextEdit {
             insert: format!("{}{text}", fix.edit.insert),
             ..fix.edit
@@ -430,8 +440,15 @@ mod tests {
     use super::*;
     use crate::layout::Family;
 
+    /// Completion as configured, its word list loaded.
     fn completion() -> Completion {
-        Completion::new(CompletionConfig::hardcoded(), &mut Dictionaries::default())
+        completion_with(CompletionConfig::hardcoded())
+    }
+
+    fn completion_with(cfg: CompletionConfig) -> Completion {
+        let mut dicts = Dictionaries::default();
+        dicts.wordlist("en_US").wait();
+        Completion::new(cfg, &mut dicts)
     }
 
     fn text() -> Field {
@@ -635,7 +652,7 @@ mod tests {
             autocorrect: false,
             ..CompletionConfig::hardcoded()
         };
-        let mut off = Completion::new(cfg, &mut Dictionaries::default());
+        let mut off = completion_with(cfg);
         assert!(autocorrect(&mut off, &ctx, " ").is_none());
     }
 

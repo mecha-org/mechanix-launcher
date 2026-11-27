@@ -601,6 +601,7 @@ name = "keyboard"
 version = "0.1.0"
 dependencies = [
  "assets",
+ "flate2",
  "gestures",
  "hunspell-rs",
  "mecha-wayland",

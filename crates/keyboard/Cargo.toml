@@ -15,6 +15,8 @@ xkbcommon = { version = "0.9.0", features = ["wayland"] }
 rustix = { version = "1.1.4", features = ["fs"] }
 # Reads Noto Color Emoji's PNG glyph bitmaps (fontdue draws outlines only).
 ttf-parser = "0.25"
+# Inflates word lists loaded from a `.combined.gz` path.
+flate2 = "1.1"
 
 # Hunspell bindings for the `hunspell` feature, linking the system's
 # libhunspell via pkg-config (not the crate's bundled copy). Building needs
@@ -23,6 +25,11 @@ hunspell-rs = { version = "0.4", default-features = false, optional = true }
 
 # Only for the standalone `mechanix-osk` binary.
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+
+[build-dependencies]
+# build.rs inflates the bundled AOSP word lists (kept as upstream's .gz) to
+# compile them.
+flate2 = "1.1"
 
 [features]
 default = ["hunspell"]

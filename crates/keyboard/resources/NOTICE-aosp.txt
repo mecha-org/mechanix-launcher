@@ -1,7 +1,8 @@
 Portions of layout.yaml and more_keys.yaml are derived from AOSP LatinIME
-(packages/inputmethods/LatinIME), Copyright (C) 2008 The Android Open Source
-Project, licensed under the Apache License, Version 2.0
-(http://www.apache.org/licenses/LICENSE-2.0).
+(packages/inputmethods/LatinIME), and dict/en_US_wordlist.combined.gz is
+copied from it unmodified (see dict/en_US_wordlist.LICENSE.txt), Copyright
+(C) 2008 The Android Open Source Project, licensed under the Apache License,
+Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0).
 
 ------------------------------------------------------------------------------
 
