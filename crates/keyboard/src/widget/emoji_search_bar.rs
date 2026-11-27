@@ -12,9 +12,8 @@ use mecha_wayland::prelude::*;
 
 use crate::layout::icons::Icons;
 
-/// The field's icon. A placeholder until a search icon is bundled: change
-/// the name (and add its svg to `resources/icons`) to swap it.
-const FIELD_ICON: &str = "face-smile-symbolic";
+/// The field's icon.
+const FIELD_ICON: &str = "system-search-symbolic";
 /// The back button's icon.
 const BACK_ICON: &str = "go-previous-symbolic";
 /// The clear button's icon (the backspace key's).
