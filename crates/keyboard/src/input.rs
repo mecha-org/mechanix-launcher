@@ -13,6 +13,7 @@ use mecha_wayland::prelude::*;
 use xkbcommon::xkb::Keysym;
 
 use crate::complete::{Completion, TextEdit};
+use crate::emoji_search;
 use crate::field::Field;
 use crate::layout::{KeyAction, Modifier, Page};
 use crate::modifiers::latch::{LatchedState, consume_latch, toggle_latch};
@@ -32,6 +33,9 @@ pub(crate) fn dispatch(ctx: &mut Context<'_, Keyboard>, action: &KeyAction, time
     // Using any other key ends the pointing stick's select mode.
     if !matches!(action, KeyAction::PointingStick) {
         pointing_stick::reset(ctx);
+    }
+    if emoji_search::active(ctx) && search_key(ctx, action) {
+        return;
     }
     match action {
         KeyAction::SetView(name) => {
@@ -115,6 +119,38 @@ pub(crate) fn dispatch(ctx: &mut Context<'_, Keyboard>, action: &KeyAction, time
             tracing::info!(action = %name, "tapped key with no wired action");
         }
     }
+}
+
+/// While an emoji search is typed, act on a tapped key's `action` there if
+/// it is one the search takes; returns whether it was. Printable keys type
+/// into the query, cased as usual (a letter spends a one-shot shift); the
+/// emoji key goes back to the emoji page; the pointing stick does nothing.
+/// Page and view switches, Shift and the latches work as ever.
+fn search_key(ctx: &mut Context<'_, Keyboard>, action: &KeyAction) -> bool {
+    let state = ctx.resource::<Shift>().state();
+    let (text, letter) = match action {
+        KeyAction::EmitKeysym(ks) => {
+            let (ks, letter) = shifted_keysym(*ks, state);
+            (virtual_keyboard::keysym_text(ks), letter)
+        }
+        KeyAction::EmitText(text) => {
+            let (text, letter) = shifted_text(text, state);
+            (Some(text), letter)
+        }
+        KeyAction::Page(Page::Emoji) => {
+            emoji_search::exit(ctx);
+            return true;
+        }
+        KeyAction::PointingStick => return true,
+        _ => return false,
+    };
+    if let Some(text) = text {
+        emoji_search::type_text(ctx, &text);
+    }
+    if letter {
+        shift::typed_letter(ctx);
+    }
+    true
 }
 
 /// Type long-press choice `choice` of a key; `key_letter` is the key's own
@@ -210,6 +246,16 @@ pub(crate) fn repeats(action: &KeyAction) -> bool {
 /// presses nothing. Returns whether the key was pressed.
 pub(crate) fn hold(ctx: &mut Context<'_, Keyboard>, ks: Keysym) -> bool {
     pointing_stick::reset(ctx);
+    // While an emoji search is typed, BackSpace edits its query and Return
+    // types the best result; other keys do nothing. None of them repeat.
+    if emoji_search::active(ctx) {
+        match ks {
+            Keysym::BackSpace => emoji_search::backspace(ctx),
+            Keysym::Return | Keysym::KP_Enter => emoji_search::pick(ctx, 0),
+            _ => {}
+        }
+        return false;
+    }
     if ks == Keysym::BackSpace && undo_suggestion(ctx) {
         return false;
     }
@@ -221,6 +267,10 @@ pub(crate) fn hold(ctx: &mut Context<'_, Keyboard>, ks: Keysym) -> bool {
 /// down until [`release`], as [`hold`] does, with Shift held too in select
 /// mode. The mode is kept.
 pub(crate) fn hold_direction(ctx: &mut Context<'_, Keyboard>, ks: Keysym) {
+    // Its key does nothing while an emoji search is typed; this is a guard.
+    if emoji_search::active(ctx) {
+        return;
+    }
     let shift = if ctx.resource::<PointingStickMode>().select() {
         ctx.resource::<VirtualKeyboardState>().shift_mask
     } else {
@@ -234,6 +284,15 @@ pub(crate) fn hold_direction(ctx: &mut Context<'_, Keyboard>, ks: Keysym) {
 /// latched modifiers (left for the next key). The caret may have moved
 /// (see [`TypingContext::caret_key`]).
 pub(crate) fn tap_direction(ctx: &mut Context<'_, Keyboard>, d: Direction, count: u32) {
+    // While an emoji search is typed, a glide moves the query's caret.
+    if emoji_search::active(ctx) {
+        match d.keysym() {
+            Keysym::Left => emoji_search::step(ctx, true, count),
+            Keysym::Right => emoji_search::step(ctx, false, count),
+            _ => {}
+        }
+        return;
+    }
     let shift = if ctx.resource::<PointingStickMode>().select() {
         ctx.resource::<VirtualKeyboardState>().shift_mask
     } else {
@@ -286,6 +345,20 @@ pub(crate) fn accept_suggestion(ctx: &mut Context<'_, Keyboard>, index: usize) {
     // as a key's press does.
     tracing::info!(word = %suggestion.label, kind = ?suggestion.kind, "accepted suggestion");
     shift::typed_letter(ctx);
+}
+
+/// Type `emoji` (an emoji search result) through the input method as it
+/// is: no autocorrection, no virtual-keyboard fallback (the search only
+/// shows with the input method active). Like any key, it ends the pointing
+/// stick's select mode.
+pub(crate) fn commit_emoji(ctx: &mut Context<'_, Keyboard>, emoji: &str) {
+    pointing_stick::reset(ctx);
+    if !im_commit_text(ctx, emoji) {
+        tracing::warn!("emoji picked with no active input method; ignored");
+        return;
+    }
+    tracing::info!(input = %emoji, "emoji search");
+    note_text(ctx, emoji);
 }
 
 /// Type printable `text` through the input method (no modifier latched)

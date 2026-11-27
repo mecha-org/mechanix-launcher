@@ -7,6 +7,7 @@
 mod compile;
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::io::Read;
 
 use compile::{Compiled, EMOJI_LEN, KEYWORD, NAME_LEN, SHORTCODE, SHORTCODE_WORD};
@@ -155,14 +156,72 @@ impl EmojiList {
     /// with it (shorter first), then emoji with a shortcode word or keyword
     /// starting with it; ties in the list's order.
     pub(crate) fn search(&self, query: &str, max: usize) -> Vec<&str> {
-        let q = query.to_lowercase();
-        let first = self.lower_bound(&q);
-        // Per emoji its best (match, matched name's length); the names
-        // starting with `q` are one run of the sorted index.
+        let mut best = self.search_ranked(&query.to_lowercase());
+        best.sort_unstable();
+        best.into_iter()
+            .take(max)
+            .map(|(.., i)| self.emoji_at(i))
+            .collect()
+    }
+
+    /// The emoji matching every word of `query` (split on whitespace, any
+    /// casing), best first, at most `max`: ranked by their worst word's
+    /// match (then its name's length), ties in the list's order. One word
+    /// searches as [`search`](Self::search) does; none finds nothing.
+    pub(crate) fn search_words(&self, query: &str, max: usize) -> Vec<&str> {
+        let lower = query.to_lowercase();
+        let mut words = lower.split_whitespace();
+        let Some(first) = words.next() else {
+            return Vec::new();
+        };
+        // Per emoji: (worst rank, best rank), each over the words so far.
+        type Rank = (Match, usize, usize);
+        let mut found: Vec<(Rank, Rank)> = self
+            .search_ranked(first)
+            .into_iter()
+            .map(|r| (r, r))
+            .collect();
+        for word in words {
+            let ranks: HashMap<usize, Rank> = self
+                .search_ranked(word)
+                .into_iter()
+                .map(|r| (r.2, r))
+                .collect();
+            found.retain_mut(|(worst, best)| {
+                let Some(r) = ranks.get(&worst.2) else {
+                    return false;
+                };
+                *worst = (*worst).max(*r);
+                *best = (*best).min(*r);
+                true
+            });
+        }
+        found.sort_unstable();
+        found
+            .into_iter()
+            .take(max)
+            .map(|(w, _)| self.emoji_at(w.2))
+            .collect()
+    }
+
+    /// The first `n` emoji in the list's order (gemoji's starts with the
+    /// smileys), for when nothing has been searched yet.
+    pub(crate) fn popular(&self, n: usize) -> Vec<&str> {
+        let count = self.emoji.len() / EMOJI_LEN;
+        (0..count.min(n)).map(|i| self.emoji_at(i)).collect()
+    }
+
+    /// Per emoji with a name starting with `q` (lowercase), its best
+    /// (match, matched name's length, emoji index), unsorted.
+    fn search_ranked(&self, q: &str) -> Vec<(Match, usize, usize)> {
+        let first = self.lower_bound(q);
+        // The names starting with `q` are one run of the sorted index.
         let mut best: Vec<(Match, usize, usize)> = Vec::new();
+        // Each emoji's place in `best`: a short query matches thousands.
+        let mut at: HashMap<usize, usize> = HashMap::new();
         for i in first..self.name_count() {
             let (name, kind, emoji) = self.name_at(i);
-            if !name.starts_with(&q) {
+            if !name.starts_with(q) {
                 break;
             }
             let m = match kind {
@@ -172,17 +231,15 @@ impl EmojiList {
                 _ => continue,
             };
             let rank = (m, name.len(), emoji);
-            match best.iter_mut().find(|b| b.2 == emoji) {
-                Some(b) if rank < *b => *b = rank,
-                Some(_) => {}
-                None => best.push(rank),
+            match at.get(&emoji) {
+                Some(&j) => best[j] = best[j].min(rank),
+                None => {
+                    at.insert(emoji, best.len());
+                    best.push(rank);
+                }
             }
         }
-        best.sort_unstable();
-        best.into_iter()
-            .take(max)
-            .map(|(.., i)| self.emoji_at(i))
-            .collect()
+        best
     }
 
     /// The first name not before `q`.
@@ -261,6 +318,24 @@ mod tests {
     }
 
     #[test]
+    fn every_word_must_match() {
+        let list = sample();
+        // 😃 and 😄 are both "happy" and "joy"; only 😄 is "pleased" too.
+        assert_eq!(list.search_words("happy joy", 5), ["😃", "😄"]);
+        assert_eq!(list.search_words("  JOY   pleas ", 5), ["😄"]);
+        assert_eq!(list.search_words("smil", 5), list.search("smil", 5));
+        assert!(list.search_words("happy approve", 5).is_empty());
+        assert!(list.search_words("   ", 5).is_empty());
+    }
+
+    #[test]
+    fn popular_is_the_list_order() {
+        let list = sample();
+        assert_eq!(list.popular(2), ["😀", "😃"]);
+        assert_eq!(list.popular(99).len(), 5);
+    }
+
+    #[test]
     fn not_json_or_not_gemoji_is_none() {
         assert!(EmojiList::parse("not json").is_none());
         assert!(EmojiList::parse(r#"{"emoji": "😀"}"#).is_none());
@@ -296,5 +371,7 @@ mod tests {
         assert_eq!(list.search("smile", 1), ["😄"]);
         assert_eq!(list.search("+1", 1), ["👍"]);
         assert_eq!(list.search("pizz", 3), ["🍕"]);
+        assert!(list.search_words("red heart", 3).contains(&"❤️"));
+        assert!(list.search("s", 2000).len() > 100);
     }
 }

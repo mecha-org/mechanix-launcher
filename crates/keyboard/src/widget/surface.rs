@@ -10,12 +10,13 @@
 use mecha_wayland::prelude::*;
 
 use crate::layout::tokens::Fonts;
-use crate::layout::{KeyboardStyle, Keymap, View};
+use crate::layout::{KeyboardStyle, Keymap, Page, View};
 use crate::lent::Keys;
 use crate::scale::KeyboardGeometry;
 use crate::view::BASE_VIEW;
 use crate::visibility::{ApplyKeyboardVisibility, KeyboardVisibilityExt};
 use crate::widget::key::Key;
+use crate::widget::emoji_search_bar::EmojiSearchBar;
 use crate::widget::keyboard::{Keyboard, KeyboardBuilder, cell_padding};
 use crate::widget::more_keys::MoreKeys;
 use crate::widget::pointing_stick::PointingStickOverlay;
@@ -138,6 +139,31 @@ pub(crate) fn bar_height(style: &KeyboardStyle, enabled: bool) -> f32 {
     }
 }
 
+/// The heights the surface must fit, past the pop-up's room and one bar:
+/// each view's, and, with `emoji_search`, the letters view (the tallest of
+/// `views` with a letters page, which an emoji search may show) with a
+/// second bar's height for the search results. `heights` are the views'.
+pub(crate) fn fit_heights(
+    pages: impl IntoIterator<Item = Page>,
+    heights: &[f32],
+    bar: f32,
+    emoji_search: bool,
+) -> Vec<f32> {
+    let mut fit = heights.to_vec();
+    if emoji_search && bar > 0.0 {
+        let letters = pages
+            .into_iter()
+            .zip(heights)
+            .filter(|(p, _)| *p == Page::Letters)
+            .map(|(_, h)| *h)
+            .fold(0.0, f32::max);
+        if letters > 0.0 {
+            fit.push(letters + bar);
+        }
+    }
+    fit
+}
+
 /// Height of one key row (weight `1.0`) at the style's base height.
 fn key_row(style: &KeyboardStyle) -> f32 {
     (style.height - 2.0 * style.padding - 3.0 * style.row_gap) / 4.0
@@ -216,6 +242,8 @@ pub(crate) struct KeyboardUIBuilder {
     pub(crate) bottom_gap: f32,
     /// Whether the keyboard has a suggestion bar.
     pub(crate) suggestions: bool,
+    /// Whether emoji can be searched (completion has an emoji list).
+    pub(crate) emoji_search: bool,
 }
 
 impl Build for KeyboardUIBuilder {
@@ -236,7 +264,14 @@ impl Widget for KeyboardUI {
             .map(|v| view_height_of(&style, &row_weights(v)))
             .collect();
         let bar = bar_height(&style, b.suggestions);
-        let m = metrics(&style, geometry.popup_gap(), &heights, bar, b.bottom_gap);
+        let emoji_search = b.emoji_search && b.keymap.views.iter().any(|v| v.page == Page::Emoji);
+        let fit = fit_heights(
+            b.keymap.views.iter().map(|v| v.page),
+            &heights,
+            bar,
+            emoji_search,
+        );
+        let m = metrics(&style, geometry.popup_gap(), &fit, bar, b.bottom_gap);
         let (popup_room, height) = (m.popup_room, m.height);
         let initial = b
             .keymap
@@ -288,6 +323,7 @@ impl Widget for KeyboardUI {
                 fonts: b.fonts,
                 keymap: b.keymap,
                 bar_height: bar,
+                emoji_search,
             },
         );
         let keys = Keys {
@@ -361,7 +397,7 @@ pub(crate) fn relayout(app: &mut App) {
     let Some(kb) = app.widgets::<Keyboard>().map(|(id, _)| id).next() else {
         return;
     };
-    let (views, current, popup, choices_row, pointing_stick, old_radius) = {
+    let (views, current, popup, choices_row, pointing_stick, old_radius, emoji_search) = {
         let me = app.widget_mut::<Keyboard>(kb).unwrap();
         me.bar_height = bar_height(&style, me.bar_height > 0.0);
         me.headroom = headroom;
@@ -373,7 +409,7 @@ pub(crate) fn relayout(app: &mut App) {
         let views: Vec<_> = me
             .views
             .iter()
-            .map(|v| (v.node.id(), v.height, v.cells.clone()))
+            .map(|v| (v.node.id(), v.height, v.cells.clone(), v.page))
             .collect();
         (
             views,
@@ -382,20 +418,36 @@ pub(crate) fn relayout(app: &mut App) {
             me.choices_row,
             me.pointing_stick,
             old_radius,
+            me.emoji_search,
         )
     };
 
-    let (bar, bar_h, bar_shown, padding) = {
+    let (bar, results, search, bar_h, bars_h, top, padding) = {
         let me = app.widget::<Keyboard>(kb).unwrap();
-        (me.bar, me.bar_height, me.bar_shown, me.padding(&style))
+        (
+            me.bar,
+            me.results_bar,
+            me.search_bar,
+            me.bar_height,
+            me.bars_height(),
+            me.top,
+            me.padding(&style),
+        )
     };
     restyle(app, kb, |s| s.gap(px(style.row_gap)).padding(padding));
-    // The bar keeps whether it shows; only its size follows the scale.
+    // The bars keep whether they show; only their size follows the scale.
     restyle(app, bar, |s| SuggestionBar::style(bar_h).display(s.display));
+    restyle(app, results, |s| SuggestionBar::style(bar_h).display(s.display));
+    restyle(app, search, |s| {
+        EmojiSearchBar::style(bar_h, top.search_bar_top(bar_h)).display(s.display)
+    });
     if let Some(b) = app.widget_mut::<SuggestionBar>(bar) {
         b.padding = style.padding * 2.0;
     }
-    for (node, height, cells) in &views {
+    if let Some(b) = app.widget_mut::<SuggestionBar>(results) {
+        b.padding = style.padding;
+    }
+    for (node, height, cells, _) in &views {
         restyle(app, *node, |s| {
             s.height(px(height - 2.0 * style.padding))
                 .gap(px(style.row_gap))
@@ -435,14 +487,14 @@ pub(crate) fn relayout(app: &mut App) {
 
     // The surface.
     let heights: Vec<f32> = views.iter().map(|v| v.1).collect();
+    let fit = fit_heights(views.iter().map(|v| v.3), &heights, bar_h, emoji_search);
     let old = *app.resource::<KeyboardSurface>();
-    let m = metrics(&style, popup_gap, &heights, bar_h, old.bottom_gap);
-    let shown_bar = if bar_shown { bar_h } else { 0.0 };
+    let m = metrics(&style, popup_gap, &fit, bar_h, old.bottom_gap);
     let surface = KeyboardSurface {
         height: m.height,
         ..old
     }
-    .showing(heights.get(current).copied().unwrap_or(style.height) + shown_bar);
+    .showing(heights.get(current).copied().unwrap_or(style.height) + bars_h);
     *app.resource_mut::<KeyboardSurface>() = surface;
     restyle(app, surface.window, |s| {
         s.height(px(m.height)).padding(Insets::new(
@@ -664,6 +716,31 @@ mod tests {
         assert_eq!(reserved(s.showing(252.0 + bar)), 312);
         // The terminal view never shows the bar and still fits.
         assert_eq!(reserved(s.showing(301.5)), 321);
+    }
+
+    #[test]
+    fn the_surface_fits_an_emoji_search_over_the_letters() {
+        use Page::*;
+        let pages = [Letters, Emoji, Letters];
+        for scale in [2.0, 3.2] {
+            let g = at_scale(scale);
+            let style = g.style();
+            let bar = bar_height(&style, true);
+            let letters = view_height_of(&style, &LETTERS);
+            let terminal = view_height_of(&style, &TERMINAL);
+            let heights = [letters, letters, terminal];
+            let fit = fit_heights(pages, &heights, bar, true);
+            let m = metrics(&style, g.popup_gap(), &fit, bar, 20.0);
+            // The letters, the results and the search bar, under the
+            // pop-up's room.
+            assert!(
+                m.height >= m.popup_room + letters + 2.0 * bar + 20.0,
+                "scale {scale}: {m:?}"
+            );
+            // Without emoji search, or a bar, nothing is added.
+            assert_eq!(fit_heights(pages, &heights, bar, false), heights);
+            assert_eq!(fit_heights(pages, &heights, 0.0, true), heights);
+        }
     }
 
     #[test]

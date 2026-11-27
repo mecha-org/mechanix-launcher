@@ -52,6 +52,9 @@ pub(crate) struct SuggestionBarBuilder {
     pub(crate) height: f32,
     /// Side padding of each cell, logical px.
     pub(crate) padding: f32,
+    /// Whether a thin line separates two shown labels (off for the emoji
+    /// search results).
+    pub(crate) dividers: bool,
 }
 
 impl Build for SuggestionBarBuilder {
@@ -77,6 +80,8 @@ pub(crate) struct SuggestionBar {
     filled: Vec<bool>,
     /// The lines between cells, `dividers[i]` after `cells[i]`.
     dividers: Vec<Handle<Div>>,
+    /// Whether the dividers ever show.
+    show_dividers: bool,
     pressed: Option<usize>,
 }
 
@@ -135,6 +140,7 @@ impl Widget for SuggestionBar {
             images: Vec::new(),
             filled: Vec::new(),
             dividers: Vec::new(),
+            show_dividers: b.dividers,
             pressed: None,
         }
     }
@@ -279,13 +285,14 @@ fn restyle_cells(ctx: &mut Context<'_, SuggestionBar>) {
     let fill = ctx.color(PRESSED_ROLE);
     let line = ctx.color(LINE_ROLE);
     let ink = ctx.color(INK_ROLE);
-    let (cells, texts, filled, dividers, pressed) = {
+    let (cells, texts, filled, dividers, show_dividers, pressed) = {
         let bar = ctx.me();
         (
             bar.cells.clone(),
             bar.texts.clone(),
             bar.filled.clone(),
             bar.dividers.clone(),
+            bar.show_dividers,
             bar.pressed,
         )
     };
@@ -301,8 +308,9 @@ fn restyle_cells(ctx: &mut Context<'_, SuggestionBar>) {
         ctx.at(cell).unwrap().set_paint(paint);
     }
     for (i, divider) in dividers.into_iter().enumerate() {
-        let between_words =
-            filled.get(i).copied().unwrap_or(false) && filled.get(i + 1).copied().unwrap_or(false);
+        let between_words = show_dividers
+            && filled.get(i).copied().unwrap_or(false)
+            && filled.get(i + 1).copied().unwrap_or(false);
         let paint = if between_words {
             Paint::Quad(Quad::new(line))
         } else {

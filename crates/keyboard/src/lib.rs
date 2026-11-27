@@ -12,6 +12,7 @@
 
 mod complete;
 mod dictionaries;
+mod emoji_search;
 mod feedbackd;
 mod field;
 mod input;

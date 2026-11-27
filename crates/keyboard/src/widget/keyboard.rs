@@ -6,6 +6,7 @@
 use mecha_wayland::prelude::*;
 
 use crate::complete::{self, CARET_SETTLE, CaretMoved, Completion, SuggestionsChanged};
+use crate::emoji_search::{self, EmojiSearch};
 use crate::layout::style::KeyState;
 use crate::layout::tokens::{Font, Fonts};
 use crate::layout::{Cell, Family, KeyAction, KeyboardStyle, Keymap, Modifier, Page, Row, View};
@@ -19,6 +20,7 @@ use crate::touch::{self, KeyEntry, TouchState, TouchTracker, letter_views};
 use crate::view::{BASE_VIEW, SwitchView, switch_view, view_for};
 use crate::visibility::{ApplyKeyboardVisibility, KeyboardVisibilityExt};
 use crate::widget::key::{Key, KeyBuilder};
+use crate::widget::emoji_search_bar::{EmojiSearchBar, EmojiSearchBarBuilder};
 use crate::widget::more_keys::{MoreKeys, MoreKeysBuilder};
 use crate::widget::pointing_stick::{PointingStickOverlay, PointingStickOverlayBuilder};
 use crate::widget::popup::{KeyPopup, KeyPopupBuilder};
@@ -86,10 +88,56 @@ pub(crate) struct Keyboard {
     pub(crate) popup_gap: f32,
     /// The suggestion bar over the top of the keys.
     pub(crate) bar: Handle<SuggestionBar>,
-    /// The bar's height at the current scale; 0 when completion is off.
+    /// The emoji search's results, over the search bar while searching.
+    pub(crate) results_bar: Handle<SuggestionBar>,
+    /// The emoji search bar, in the suggestion bar's place over an emoji
+    /// page and under the results while searching.
+    pub(crate) search_bar: Handle<EmojiSearchBar>,
+    /// The height of one bar at the current scale; 0 when completion is
+    /// off (and so there are no bars).
     pub(crate) bar_height: f32,
-    /// Whether the bar shows (and so takes its height above the view).
-    pub(crate) bar_shown: bool,
+    /// Whether completion wants the suggestion bar for the focused field.
+    pub(crate) suggestions_shown: bool,
+    /// Whether emoji can be searched (completion has an emoji list).
+    pub(crate) emoji_search: bool,
+    /// The emoji search being typed, if any.
+    pub(crate) search: Option<EmojiSearch>,
+    /// The bars shown over the view now.
+    pub(crate) top: TopBar,
+}
+
+/// What shows over the view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TopBar {
+    /// Nothing.
+    None,
+    /// The suggestion bar.
+    Suggestions,
+    /// The emoji search bar, over an emoji page.
+    Picker,
+    /// The search results over the emoji search bar, over the letters.
+    Searching,
+}
+
+impl TopBar {
+    /// How many bars' heights it takes.
+    pub(crate) fn rows(self) -> f32 {
+        match self {
+            TopBar::None => 0.0,
+            TopBar::Suggestions | TopBar::Picker => 1.0,
+            TopBar::Searching => 2.0,
+        }
+    }
+
+    /// Where the emoji search bar sits, below the container's top: under
+    /// the results while searching.
+    pub(crate) fn search_bar_top(self, bar_height: f32) -> f32 {
+        if self == TopBar::Searching {
+            bar_height
+        } else {
+            0.0
+        }
+    }
 }
 
 impl Keyboard {
@@ -99,18 +147,39 @@ impl Keyboard {
         self.views.iter().position(|v| v.name == name)
     }
 
-    /// The height the keyboard takes now: the shown view, and the bar if it
-    /// shows.
+    /// The height the keyboard takes now: the shown view, and the bars
+    /// that show.
     pub(crate) fn shown_height(&self) -> f32 {
-        let bar = if self.bar_shown { self.bar_height } else { 0.0 };
-        self.views[self.current_view].height + bar
+        self.views[self.current_view].height + self.bars_height()
     }
 
-    /// The container's padding: [`container_padding`], with the bar's height
-    /// added on top while it shows.
+    /// The height of the bars shown over the view.
+    pub(crate) fn bars_height(&self) -> f32 {
+        self.top.rows() * self.bar_height
+    }
+
+    /// The container's padding: [`container_padding`], with the shown
+    /// bars' height added on top.
     pub(crate) fn padding(&self, style: &KeyboardStyle) -> Insets<Val> {
-        let bar = if self.bar_shown { self.bar_height } else { 0.0 };
-        container_padding(style, bar)
+        container_padding(style, self.bars_height())
+    }
+
+    /// What should show over the view now: the search while one is typed,
+    /// the emoji search bar over an emoji page, else the suggestion bar if
+    /// completion wants it. The emoji search bar needs the suggestions too:
+    /// they mean the input method is active, which typing an emoji takes.
+    pub(crate) fn wanted_top(&self) -> TopBar {
+        if self.bar_height <= 0.0 {
+            TopBar::None
+        } else if self.search.is_some() {
+            TopBar::Searching
+        } else if !self.suggestions_shown {
+            TopBar::None
+        } else if self.emoji_search && self.views[self.current_view].page == Page::Emoji {
+            TopBar::Picker
+        } else {
+            TopBar::Suggestions
+        }
     }
 }
 
@@ -168,6 +237,8 @@ pub(crate) struct KeyboardBuilder {
     pub(crate) keymap: Keymap,
     /// The suggestion bar's height; 0 when completion is off.
     pub(crate) bar_height: f32,
+    /// Whether emoji can be searched (completion has an emoji list).
+    pub(crate) emoji_search: bool,
 }
 
 impl Build for KeyboardBuilder {
@@ -210,6 +281,26 @@ impl Widget for Keyboard {
         let bar = s.spawn(
             me,
             SuggestionBarBuilder {
+                font: b.fonts.id(style.font),
+                font_size: style.font_size,
+                height: b.bar_height,
+                padding: style.padding * 2.0,
+                dividers: true,
+            },
+        );
+        let results_bar = s.spawn(
+            me,
+            SuggestionBarBuilder {
+                font: b.fonts.id(style.font),
+                font_size: style.font_size,
+                height: b.bar_height,
+                padding: style.padding,
+                dividers: false,
+            },
+        );
+        let search_bar = s.spawn(
+            me,
+            EmojiSearchBarBuilder {
                 font: b.fonts.id(style.font),
                 font_size: style.font_size,
                 height: b.bar_height,
@@ -347,12 +438,15 @@ impl Widget for Keyboard {
             ctx.resource_mut::<Shift>().reset();
             shift::refresh(ctx);
             pointing_stick::reset(ctx);
+            emoji_search::cancel(ctx);
             ctx.me().family = event.field.family;
             let me = ctx.me();
             if let Some(idx) = view_for(&me.views, event.field.family, Page::Letters) {
                 let name = me.views[idx].name.clone();
                 switch_view(ctx, &name);
             }
+            // The same view: the search's bars still go.
+            apply_top_bar(ctx);
         });
 
         // The suggestions changed: fill the bar, and show or hide it.
@@ -390,6 +484,10 @@ impl Widget for Keyboard {
             ctx.resource_mut::<Shift>().reset();
             shift::refresh(ctx);
             pointing_stick::reset(ctx);
+            if emoji_search::active(ctx) {
+                emoji_search::cancel(ctx);
+                apply_top_bar(ctx);
+            }
         });
 
         Keyboard {
@@ -412,34 +510,64 @@ impl Widget for Keyboard {
             headroom: popup_headroom(&style, popup_gap),
             popup_gap,
             bar,
+            results_bar,
+            search_bar,
             bar_height: b.bar_height,
-            bar_shown: false,
+            suggestions_shown: false,
+            emoji_search: b.emoji_search,
+            search: None,
+            top: TopBar::None,
         }
     }
 }
 
-/// Fill the suggestion bar, showing or hiding it (which changes the
-/// keyboard's height) as `e` says.
+/// Fill the suggestion bar (kept filled while another bar shows in its
+/// place), showing or hiding it (which changes the keyboard's height) as
+/// `e` says. Any touch is dropped first if the bars change under it.
 fn show_suggestions(ctx: &mut Context<'_, Keyboard>, e: &SuggestionsChanged) {
-    if e.shown != ctx.me().bar_shown && ctx.me().bar_height > 0.0 {
-        set_bar_shown(ctx, e.shown);
+    if e.shown != ctx.me().suggestions_shown {
+        ctx.me().suggestions_shown = e.shown;
+        if ctx.me().wanted_top() != ctx.me().top {
+            touch::abort(ctx);
+            apply_top_bar(ctx);
+        }
     }
     let bar = ctx.me().bar.id();
     ctx.emit(BarFeedback::Show(e.labels.clone()), [bar]);
 }
 
-/// Show or hide the suggestion bar: the container's top padding makes or
-/// gives back its room, and the surface's zone and input region follow the
-/// new height. A contact on the bar is dropped first.
-fn set_bar_shown(ctx: &mut Context<'_, Keyboard>, shown: bool) {
-    touch::abort(ctx);
-    ctx.me().bar_shown = shown;
-    let bar = ctx.me().bar;
-    ctx.at(bar).unwrap().set_display(if shown {
-        Display::Flex
-    } else {
-        Display::Hidden
-    });
+/// Show the bars [`Keyboard::wanted_top`] asks for over the current view:
+/// the container's top padding makes or gives back their room, and the
+/// surface's zone and input region follow the keyboard's height. Called on
+/// every view switch too, the height having changed either way. A contact
+/// on a bar that goes away is dropped.
+pub(crate) fn apply_top_bar(ctx: &mut Context<'_, Keyboard>) {
+    let top = ctx.me().wanted_top();
+    if top != ctx.me().top {
+        touch::end_bar(ctx);
+        ctx.me().top = top;
+    }
+    let (bar, results, search, bar_h) = {
+        let me = ctx.me();
+        (me.bar, me.results_bar, me.search_bar, me.bar_height)
+    };
+    let display = |shown: bool| {
+        if shown {
+            Display::Flex
+        } else {
+            Display::Hidden
+        }
+    };
+    ctx.at(bar)
+        .unwrap()
+        .set_display(display(top == TopBar::Suggestions));
+    ctx.at(results)
+        .unwrap()
+        .set_display(display(top == TopBar::Searching));
+    let search_shown = matches!(top, TopBar::Picker | TopBar::Searching);
+    ctx.at(search).unwrap().set_style(
+        EmojiSearchBar::style(bar_h, top.search_bar_top(bar_h)).display(display(search_shown)),
+    );
     let style = ctx.resource::<KeyboardGeometry>().style();
     let insets = ctx.me().padding(&style);
     if let Some(style) = ctx.component::<LayoutStyle>().cloned() {

@@ -78,6 +78,7 @@ pub fn spawn_ui(app: &mut App, bottom_gap: f32) {
         &mut dictionaries,
     );
     let suggestions = completion.enabled();
+    let emoji_search = completion.has_emoji_search();
     app.insert_resource(completion);
     app.insert_resource(dictionaries);
     app.insert_resource(ExclusiveZone::default());
@@ -117,6 +118,7 @@ pub fn spawn_ui(app: &mut App, bottom_gap: f32) {
                 keymap,
                 bottom_gap,
                 suggestions,
+                emoji_search,
             },
         )
         .id();

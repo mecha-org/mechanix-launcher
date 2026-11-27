@@ -309,6 +309,28 @@ impl Completion {
             .flatten()
     }
 
+    /// Whether the emoji search bar can work: completion is on (so the
+    /// keyboard has a bar) with an emoji list. True while a list from a
+    /// path is still loading; it finds nothing until then.
+    pub(crate) fn has_emoji_search(&self) -> bool {
+        self.enabled() && self.emoji.is_some()
+    }
+
+    /// The emoji search bar's results for `query`, best first, at most
+    /// `max` (see [`EmojiList::search_words`]); with nothing typed yet,
+    /// the list's first emoji. Empty without a (loaded) emoji list.
+    pub(crate) fn emoji_search(&self, query: &str, max: usize) -> Vec<String> {
+        let Some(list) = self.emoji.as_ref().and_then(Loading::get) else {
+            return Vec::new();
+        };
+        let found = if query.trim().is_empty() {
+            list.popular(max)
+        } else {
+            list.search_words(query, max)
+        };
+        found.into_iter().map(str::to_owned).collect()
+    }
+
     /// Hand a finished word to the source.
     pub(crate) fn learn(&mut self, word: &str) {
         if let Some(c) = &mut self.completer {

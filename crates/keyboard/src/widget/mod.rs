@@ -3,6 +3,7 @@
 
 pub(crate) mod key;
 pub(crate) mod keyboard;
+pub(crate) mod emoji_search_bar;
 pub(crate) mod more_keys;
 pub(crate) mod pointing_stick;
 pub(crate) mod popup;

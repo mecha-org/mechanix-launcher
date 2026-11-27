@@ -36,6 +36,9 @@ use crate::visibility::KeyboardVisibilityExt;
 use crate::widget::keyboard::Keyboard;
 use crate::widget::more_keys::ChoicesFeedback;
 use crate::widget::pointing_stick::PointingStickFeedback;
+use crate::emoji_search;
+use crate::widget::emoji_search_bar::{EmojiSearchBar, SearchBarFeedback, SearchPart};
+use crate::widget::keyboard::TopBar;
 use crate::widget::suggestion_bar::{BarFeedback, SuggestionBar};
 
 /// Bookkeeping the input layer keeps besides the tracker.
@@ -49,9 +52,44 @@ pub(crate) struct TouchState {
     popup: bool,
     /// Deferral and per-contact prior.
     flow: Flow,
-    /// The contact that went down on the suggestion bar, and the
-    /// suggestion it is over. It never reaches the keys.
-    bar: Option<(ContactId, Option<usize>)>,
+    /// The contact that went down on a bar over the keys, and what it is
+    /// over. It never reaches the keys.
+    bar: Option<(ContactId, BarTarget)>,
+}
+
+/// Which bar a contact is on, and what on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BarTarget {
+    /// The suggestion bar, over this suggestion if any.
+    Suggestion(Option<usize>),
+    /// The emoji search results, over this result if any.
+    Result(Option<usize>),
+    /// The emoji search bar, over this part if any.
+    Search(Option<SearchPart>),
+}
+
+impl BarTarget {
+    /// The same bar, over `other`'s part if `other` is on it too, else
+    /// over nothing: a contact stays on the bar it went down on.
+    fn moved_to(self, other: Option<BarTarget>) -> BarTarget {
+        use BarTarget::*;
+        match (self, other) {
+            (Suggestion(_), Some(Suggestion(i))) => Suggestion(i),
+            (Result(_), Some(Result(i))) => Result(i),
+            (Search(_), Some(Search(p))) => Search(p),
+            (Suggestion(_), _) => Suggestion(None),
+            (Result(_), _) => Result(None),
+            (Search(_), _) => Search(None),
+        }
+    }
+
+    /// Whether it is over something a release acts on.
+    fn on_item(self) -> bool {
+        match self {
+            BarTarget::Suggestion(i) | BarTarget::Result(i) => i.is_some(),
+            BarTarget::Search(p) => p.is_some(),
+        }
+    }
 }
 
 /// The keyboard as the [`flow`] sees it.
@@ -87,6 +125,11 @@ impl Board for Kb<'_, '_> {
     }
     fn is_pointing_stick(&mut self, index: usize) -> bool {
         let me = self.0.me();
+        // While an emoji search is typed it is a plain key that does
+        // nothing: no direction pad.
+        if me.search.is_some() {
+            return false;
+        }
         matches!(
             me.keys[me.current_view].get(index).map(|k| &k.action),
             Some(KeyAction::PointingStick)
@@ -127,8 +170,8 @@ impl Board for Kb<'_, '_> {
 /// gets no handler, so taps there stay dead.
 pub(crate) fn attach(s: &mut Spawner<'_, Keyboard>, me: Handle<Keyboard>) {
     s.on::<Press>(me, |ctx, e| {
-        if let Some(cell) = bar_hit(ctx, e.position) {
-            bar_press(ctx, e.contact, cell);
+        if let Some(target) = bar_hit(ctx, e.position) {
+            bar_press(ctx, e.contact, target);
             return;
         }
         ctx.me().touch.last_time.insert(e.contact, e.time);
@@ -141,9 +184,9 @@ pub(crate) fn attach(s: &mut Spawner<'_, Keyboard>, me: Handle<Keyboard>) {
     });
 
     s.on::<PressMoved>(me, |ctx, e| {
-        if is_bar_contact(ctx, e.contact) {
-            let cell = bar_hit(ctx, e.position).flatten();
-            bar_press(ctx, e.contact, cell);
+        if let Some(target) = bar_contact(ctx, e.contact) {
+            let over = bar_hit(ctx, e.position);
+            bar_press(ctx, e.contact, target.moved_to(over));
             return;
         }
         ctx.me().touch.last_time.insert(e.contact, e.time);
@@ -151,9 +194,14 @@ pub(crate) fn attach(s: &mut Spawner<'_, Keyboard>, me: Handle<Keyboard>) {
     });
 
     s.on::<Release>(me, |ctx, e| {
-        if is_bar_contact(ctx, e.contact) {
-            if let Some(i) = bar_end(ctx) {
-                accept_suggestion(ctx, i);
+        if bar_contact(ctx, e.contact).is_some() {
+            match bar_end(ctx) {
+                Some(BarTarget::Suggestion(Some(i))) => accept_suggestion(ctx, i),
+                Some(BarTarget::Result(Some(i))) => emoji_search::pick(ctx, i),
+                Some(BarTarget::Search(Some(SearchPart::Field))) => emoji_search::enter(ctx),
+                Some(BarTarget::Search(Some(SearchPart::Back))) => emoji_search::exit(ctx),
+                Some(BarTarget::Search(Some(SearchPart::Clear))) => emoji_search::clear(ctx),
+                _ => {}
             }
             return;
         }
@@ -164,7 +212,7 @@ pub(crate) fn attach(s: &mut Spawner<'_, Keyboard>, me: Handle<Keyboard>) {
     });
 
     s.on::<PressCancelled>(me, |ctx, e| {
-        if is_bar_contact(ctx, e.contact) {
+        if bar_contact(ctx, e.contact).is_some() {
             bar_end(ctx);
             return;
         }
@@ -187,15 +235,36 @@ pub(crate) fn abort(ctx: &mut Context<'_, Keyboard>) {
     flow::abort(&mut Kb(ctx), time);
 }
 
-/// Where `p` (window coordinates) falls on the suggestion bar: `None` off
-/// it (or while it is hidden), else the suggestion under `p`, if any.
-fn bar_hit(ctx: &mut Context<'_, Keyboard>, p: Point) -> Option<Option<usize>> {
-    if !ctx.me().bar_shown {
-        return None;
+/// What bar over the keys `p` (window coordinates) falls on, and what on
+/// it: `None` off every bar that shows.
+fn bar_hit(ctx: &mut Context<'_, Keyboard>, p: Point) -> Option<BarTarget> {
+    let (top, bar, results, search) = {
+        let me = ctx.me();
+        (me.top, me.bar, me.results_bar, me.search_bar)
+    };
+    match top {
+        TopBar::None => None,
+        TopBar::Suggestions => cell_hit(ctx, bar, p).map(BarTarget::Suggestion),
+        TopBar::Picker => search_hit(ctx, search, p).map(BarTarget::Search),
+        TopBar::Searching => cell_hit(ctx, results, p)
+            .map(BarTarget::Result)
+            .or_else(|| search_hit(ctx, search, p).map(BarTarget::Search)),
     }
-    let bar = ctx.me().bar;
-    let rect = ctx.at(bar)?.component::<ComputedLayout>()?.rect;
-    if !rect.contains(p) {
+}
+
+/// The laid-out rectangle of `node`.
+fn rect_of<V: Widget>(ctx: &mut Context<'_, Keyboard>, node: Handle<V>) -> Option<Rect> {
+    ctx.at(node)?.component::<ComputedLayout>().map(|l| l.rect)
+}
+
+/// Where `p` falls on the cells of `bar`: `None` off it, else the filled
+/// cell under `p`, if any.
+fn cell_hit(
+    ctx: &mut Context<'_, Keyboard>,
+    bar: Handle<SuggestionBar>,
+    p: Point,
+) -> Option<Option<usize>> {
+    if !rect_of(ctx, bar)?.contains(p) {
         return None;
     }
     let (cells, filled) = {
@@ -204,42 +273,78 @@ fn bar_hit(ctx: &mut Context<'_, Keyboard>, p: Point) -> Option<Option<usize>> {
     };
     let rects: Vec<Rect> = cells
         .into_iter()
-        .map(|c| {
-            ctx.at(c)
-                .and_then(|c| c.component::<ComputedLayout>().map(|l| l.rect))
-                .unwrap_or_default()
-        })
+        .map(|c| rect_of(ctx, c).unwrap_or_default())
         .collect();
     Some(SuggestionBar::cell_at(&rects, &filled, p))
 }
 
-/// Whether `contact` went down on the suggestion bar.
-fn is_bar_contact(ctx: &mut Context<'_, Keyboard>, contact: ContactId) -> bool {
-    ctx.me().touch.bar.is_some_and(|(c, _)| c == contact)
+/// Where `p` falls on the emoji search bar: `None` off it, else the part
+/// under `p`, if any.
+fn search_hit(
+    ctx: &mut Context<'_, Keyboard>,
+    bar: Handle<EmojiSearchBar>,
+    p: Point,
+) -> Option<Option<SearchPart>> {
+    if !rect_of(ctx, bar)?.contains(p) {
+        return None;
+    }
+    let (back, clear, field) = {
+        let w = ctx.widget::<EmojiSearchBar>(bar)?;
+        (w.back(), w.clear(), w.field())
+    };
+    let back = back.and_then(|b| rect_of(ctx, b));
+    let clear = clear.and_then(|c| rect_of(ctx, c));
+    let field = rect_of(ctx, field).unwrap_or_default();
+    Some(EmojiSearchBar::part_at(back, clear, field, p))
 }
 
-/// `contact` is on the bar, over suggestion `cell`: light it, with a tick
-/// of feedback when it lands on a new one.
-fn bar_press(ctx: &mut Context<'_, Keyboard>, contact: ContactId, cell: Option<usize>) {
-    let before = ctx.me().touch.bar.replace((contact, cell));
-    let changed = before.map(|(_, c)| c) != Some(cell);
-    if !changed {
+/// What the bar `contact` went down on is over, if it went down on one.
+fn bar_contact(ctx: &mut Context<'_, Keyboard>, contact: ContactId) -> Option<BarTarget> {
+    ctx.me()
+        .touch
+        .bar
+        .filter(|(c, _)| *c == contact)
+        .map(|(_, t)| t)
+}
+
+/// `contact` is on a bar, over `target`: light it, with a tick of feedback
+/// when it lands on a new item.
+fn bar_press(ctx: &mut Context<'_, Keyboard>, contact: ContactId, target: BarTarget) {
+    let before = ctx.me().touch.bar.replace((contact, target));
+    if before.map(|(_, t)| t) == Some(target) {
         return;
     }
-    if cell.is_some() {
+    if target.on_item() {
         feedbackd::key_pressed(ctx);
     }
-    let bar = ctx.me().bar.id();
-    ctx.emit(BarFeedback::Press(cell), [bar]);
+    light(ctx, target);
 }
 
-/// The bar contact, if any, ended: unlight the bar and return the
-/// suggestion it ended over.
-fn bar_end(ctx: &mut Context<'_, Keyboard>) -> Option<usize> {
-    let (_, cell) = ctx.me().touch.bar.take()?;
-    let bar = ctx.me().bar.id();
-    ctx.emit(BarFeedback::Press(None), [bar]);
-    cell
+/// Light what `target` is over on its bar (nothing if it is over nothing).
+fn light(ctx: &mut Context<'_, Keyboard>, target: BarTarget) {
+    let (bar, results, search) = {
+        let me = ctx.me();
+        (me.bar.id(), me.results_bar.id(), me.search_bar.id())
+    };
+    match target {
+        BarTarget::Suggestion(i) => ctx.emit(BarFeedback::Press(i), [bar]),
+        BarTarget::Result(i) => ctx.emit(BarFeedback::Press(i), [results]),
+        BarTarget::Search(p) => ctx.emit(SearchBarFeedback::Press(p), [search]),
+    }
+}
+
+/// The bar contact, if any, ended: unlight its bar and return what it
+/// ended over.
+fn bar_end(ctx: &mut Context<'_, Keyboard>) -> Option<BarTarget> {
+    let (_, target) = ctx.me().touch.bar.take()?;
+    light(ctx, target.moved_to(None));
+    Some(target)
+}
+
+/// The bars over the keys changed: drop any contact on them, acting on
+/// nothing.
+pub(crate) fn end_bar(ctx: &mut Context<'_, Keyboard>) {
+    bar_end(ctx);
 }
 
 /// The long-press timer fired: open the held key's choices row.

@@ -74,8 +74,9 @@ pub(crate) fn switch_view(ctx: &mut Context<'_, Keyboard>, target: &str) {
     if !ctx.me().letter_views[idx] {
         end_word(ctx);
     }
-    // The surface keeps its size; its zone and input region follow the view.
-    crate::widget::surface::view_shown(ctx);
+    // The surface keeps its size; the bars over the view (the emoji search
+    // bar over an emoji page), its zone and input region follow the view.
+    crate::widget::keyboard::apply_top_bar(ctx);
     tracing::info!(view = %target, "switched view");
 }
 
