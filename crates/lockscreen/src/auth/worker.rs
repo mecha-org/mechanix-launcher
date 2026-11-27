@@ -14,7 +14,7 @@
 //! need `pam_unix`'s setuid helper, for `/etc/shadow`, from here.) Every
 //! prompt waits for an answer from the launcher; info and error text is
 //! passed on. The failure delay a module asks for is reported, then slept
-//! here.
+//! here, unless the method was unavailable.
 #![allow(unsafe_code)]
 
 use std::ffi::{CStr, CString, c_char, c_int, c_uint, c_void};
@@ -232,11 +232,16 @@ unsafe fn free_replies(replies: *mut PamResponse, filled: usize) {
     unsafe { libc::free(replies.cast()) };
 }
 
+/// libpam's failure delay, called with `pam_authenticate`'s result. It
+/// slows down wrong answers: a method that is unavailable (no PIN set)
+/// got none, so it ends at once.
+///
 /// # Safety
 ///
 /// Called by libpam with the conversation's `appdata_ptr`.
 unsafe extern "C" fn fail_delay(retval: c_int, usec: c_uint, appdata: *mut c_void) {
-    if retval == PAM_SUCCESS || appdata.is_null() || usec == 0 {
+    let delayed = !matches!(outcome(retval), Outcome::Success | Outcome::Unavailable);
+    if !delayed || appdata.is_null() || usec == 0 {
         return;
     }
     // SAFETY: as in `converse`.
@@ -345,4 +350,34 @@ pub fn main(service: &str) -> ! {
     };
     conv.send(&FromWorker::Done(outcome));
     std::process::exit(0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What `fail_delay` says for `retval`, if anything.
+    fn delay_for(retval: c_int) -> Option<FromWorker> {
+        let (ours, theirs) = UnixDatagram::pair().unwrap();
+        let conv = Conversation { sock: theirs };
+        let appdata = std::ptr::from_ref(&conv).cast_mut().cast();
+        // SAFETY: `appdata` is a live `Conversation`, as libpam would pass.
+        unsafe { fail_delay(retval, 1000, appdata) };
+        ours.set_nonblocking(true).unwrap();
+        let mut buf = [0u8; wire::MAX_PACKET];
+        let n = ours.recv(&mut buf).ok()?;
+        FromWorker::decode(&buf[..n])
+    }
+
+    #[test]
+    fn a_wrong_answer_waits() {
+        let delay = Some(FromWorker::Delay(Duration::from_millis(1)));
+        assert_eq!(delay_for(PAM_AUTH_ERR), delay);
+    }
+
+    #[test]
+    fn an_unavailable_method_does_not_wait() {
+        assert_eq!(delay_for(PAM_AUTHINFO_UNAVAIL), None);
+        assert_eq!(delay_for(PAM_SUCCESS), None);
+    }
 }
