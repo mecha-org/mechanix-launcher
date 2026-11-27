@@ -44,7 +44,7 @@ fn unconnected_fixture_initializes_the_pulse_audio_resource() {
     assert!(audio.mainloop_api.defer_free.is_some());
     assert!(audio.mainloop_api.defer_set_destroy.is_some());
     assert!(audio.mainloop_api.quit.is_some());
-    assert!(audio.defer_wake.is_none());
+    assert!(!audio.has_work());
 }
 
 #[derive(Default)]
@@ -870,15 +870,6 @@ fn before_wait(app: &mut App) {
     app.flush();
 }
 
-fn dispatch_deferred_wake(app: &mut App, token: Token) {
-    // These tests queue only the immediate wake, with no socket operations.
-    let event = app.resource_mut::<Ring>().wait()[0];
-    assert_eq!(event.token, token);
-    assert_eq!(event.result, -libc::ETIME);
-    app.signal(event);
-    app.flush();
-}
-
 #[test]
 fn before_wait_runs_deferred_callbacks_that_can_disable_themselves() {
     let data = DeferredData::default();
@@ -888,7 +879,7 @@ fn before_wait_runs_deferred_callbacks_that_can_disable_themselves() {
 
     before_wait(&mut app);
     assert_eq!(data.calls.get(), 1);
-    assert!(app.resource::<PulseAudio>().defer_wake.is_none());
+    assert!(!app.resource::<PulseAudio>().has_work());
     before_wait(&mut app);
     assert_eq!(data.calls.get(), 1);
 
@@ -898,38 +889,29 @@ fn before_wait_runs_deferred_callbacks_that_can_disable_themselves() {
         .unwrap()(event, 1);
     before_wait(&mut app);
     assert_eq!(data.calls.get(), 2);
-    assert!(app.resource::<PulseAudio>().defer_wake.is_none());
+    assert!(!app.resource::<PulseAudio>().has_work());
 }
 
 #[test]
-fn enabled_deferred_work_runs_one_pass_and_queues_only_one_immediate_wake() {
+fn enabled_deferred_work_runs_one_pass_and_stays_pending() {
     let data = DeferredData::default();
     let mut app = polling_app();
     let event = add_deferred(&app, Some(record_deferred), &data);
 
     before_wait(&mut app);
     assert_eq!(data.calls.get(), 1, "do not loop on an enabled callback");
-    let wake = app.resource::<PulseAudio>().defer_wake.unwrap();
+    assert!(app.resource::<PulseAudio>().has_work());
     before_wait(&mut app);
     assert_eq!(data.calls.get(), 2);
-    assert_eq!(app.resource::<PulseAudio>().defer_wake, Some(wake));
-
-    dispatch_deferred_wake(&mut app, wake);
-    assert!(app.resource::<PulseAudio>().defer_wake.is_none());
-    assert_eq!(data.calls.get(), 2, "the wake itself does not invoke work");
-    before_wait(&mut app);
-    let next = app.resource::<PulseAudio>().defer_wake.unwrap();
-    assert_ne!(next, wake);
-    assert_eq!(data.calls.get(), 3);
+    assert!(app.resource::<PulseAudio>().has_work());
 
     app.resource::<PulseAudio>()
         .mainloop_api
         .defer_enable
         .unwrap()(event, 0);
-    dispatch_deferred_wake(&mut app, next);
+    assert!(!app.resource::<PulseAudio>().has_work());
     before_wait(&mut app);
-    assert_eq!(data.calls.get(), 3);
-    assert!(app.resource::<PulseAudio>().defer_wake.is_none());
+    assert_eq!(data.calls.get(), 2);
 }
 
 extern "C" fn replace_deferred(
@@ -958,14 +940,13 @@ fn deferred_callbacks_can_replace_themselves_with_work_for_the_next_turn() {
     before_wait(&mut app);
     assert_eq!(data.calls.get(), 1, "new work waits for the next pass");
     assert!(!data.replacement.get().is_null());
-    let wake = app.resource::<PulseAudio>().defer_wake.unwrap();
+    assert!(app.resource::<PulseAudio>().has_work());
 
     before_wait(&mut app);
     assert_eq!(data.calls.get(), 2);
-    dispatch_deferred_wake(&mut app, wake);
+    assert!(!app.resource::<PulseAudio>().has_work());
     before_wait(&mut app);
     assert_eq!(data.calls.get(), 2);
-    assert!(app.resource::<PulseAudio>().defer_wake.is_none());
 }
 
 extern "C" fn free_other_deferred(
@@ -997,7 +978,7 @@ fn deferred_entries_removed_by_an_earlier_callback_are_not_invoked() {
 
     assert_eq!(first.calls.get(), 1);
     assert_eq!(second.calls.get(), 0);
-    assert!(app.resource::<PulseAudio>().defer_wake.is_none());
+    assert!(!app.resource::<PulseAudio>().has_work());
 }
 
 struct DeferredIo {
@@ -1043,7 +1024,7 @@ fn io_watches_created_by_deferred_work_are_armed_before_waiting() {
 
     assert!(!data.watch.get().is_null());
     let audio = app.resource::<PulseAudio>();
-    assert!(audio.defer_wake.is_none());
+    assert!(!audio.has_work());
     assert_eq!(audio.pending_polls.len(), 1);
     let token = *audio.pending_polls.keys().next().unwrap();
     writer.write_all(b"x").unwrap();

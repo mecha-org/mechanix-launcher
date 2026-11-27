@@ -542,6 +542,23 @@ mod tests {
         app.tick();
     }
 
+    /// The whole launcher goes idle: rounds of tick and `BeforeWait`, as
+    /// the runner's turns run them, leave no work pending, so the runner
+    /// blocks rather than going round forever.
+    #[test]
+    fn the_launcher_goes_idle() {
+        let mut app = launcher();
+        let rounds = (0..10)
+            .take_while(|_| {
+                app.tick();
+                app.signal(BeforeWait);
+                app.flush();
+                app.has_pending_work()
+            })
+            .count();
+        assert!(rounds < 10, "work is still pending after ten rounds");
+    }
+
     #[test]
     fn the_launcher_fits_its_budget_at_1x_and_2x() {
         let budget = BUDGET;

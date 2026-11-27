@@ -41,7 +41,8 @@ impl Module for PulseAudioModule {
         app.init_resource::<PulseAudio>()
             .system(context::on_tick)
             .system(on_before_wait)
-            .system(on_io);
+            .system(on_io)
+            .pending_check(|app| app.resource::<PulseAudio>().has_work());
         // This starts connecting without blocking; the context module owns
         // the setup/error path and later publishes state changes on Tick.
         app.resource_mut::<PulseAudio>().start_connection();
@@ -69,7 +70,6 @@ pub struct PulseAudio {
     // Cancellation requests have their own completions, independent of polls.
     pending_cancels: HashSet<Token>,
     pending_timers: HashMap<Token, PendingTimer>,
-    defer_wake: Option<Token>,
 }
 
 impl Resource for PulseAudio {}
@@ -91,8 +91,15 @@ impl PulseAudio {
             pending_polls: HashMap::new(),
             pending_cancels: HashSet::new(),
             pending_timers: HashMap::new(),
-            defer_wake: None,
         }
+    }
+
+    /// Whether deferred work or a state change is waiting, so the runner
+    /// goes round again instead of sleeping on unrelated socket activity.
+    fn has_work(&self) -> bool {
+        // SAFETY: no FFI runs while checking the registry.
+        let state = unsafe { &*self.mainloop_state.get() };
+        state.has_deferred_work() || self.has_connection_updates()
     }
 
     /// Retain a service's callback data until the context disconnects.
@@ -202,17 +209,6 @@ fn on_before_wait(app: &mut App, _: &BeforeWait) {
             .connection_updates
             .push(ConnectionState::Failed(error.to_string()));
     }
-
-    // If libpulse queued a state transition here and has no more I/O, Ring
-    // still needs a wake so the next Tick can publish it (or exit on Stop).
-    // SAFETY: all deferred callbacks have returned, and no FFI runs while
-    // checking the registry or queueing Ring operations.
-    let state = unsafe { &*audio.mainloop_state.get() };
-    if (state.has_deferred_work() || audio.has_connection_updates()) && audio.defer_wake.is_none() {
-        // Runnable work must not sleep waiting for unrelated socket activity.
-        // This is a one-shot wake, not a periodic polling timer.
-        audio.defer_wake = Some(ring.timeout(Duration::ZERO));
-    }
 }
 
 fn run_deferred(app: &mut App) {
@@ -242,13 +238,6 @@ fn run_deferred(app: &mut App) {
 }
 
 fn on_io(app: &mut App, event: &IoEvent) {
-    if app.resource::<PulseAudio>().defer_wake == Some(event.token) {
-        if app.resource_mut::<Ring>().finish(event.token).is_some() {
-            app.resource_mut::<PulseAudio>().defer_wake = None;
-        }
-        return; // A zero-duration timeout normally completes with -ETIME.
-    }
-
     if app
         .resource_mut::<PulseAudio>()
         .pending_cancels

@@ -381,7 +381,7 @@ fn timers_created_by_deferred_work_are_armed_before_waiting() {
     before_wait(&mut app);
 
     assert!(!data.created.get().is_null());
-    assert!(app.resource::<PulseAudio>().defer_wake.is_none());
+    assert!(!app.resource::<PulseAudio>().has_work());
     let token = pending_timer(&app, &data);
     dispatch_timer(&mut app, token);
     assert_eq!(data.calls.get(), 1);

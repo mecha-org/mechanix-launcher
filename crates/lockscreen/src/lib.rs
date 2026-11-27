@@ -13,7 +13,9 @@
 //! says so, and the start of the launcher when
 //! [`LockSettings::lock_at_start`] says so; none of them when
 //! [`LockSettings::enabled`] is off. logind's `Unlock` unlocks. The
-//! session's `LockedHint` follows the compositor's answer.
+//! session's `LockedHint` follows the compositor's answer, except a
+//! refusal: the session is locked already (by a lock whose client died),
+//! and the hint stays.
 //!
 //! # Unlocking
 //!
@@ -24,7 +26,9 @@
 //! errors) is shown as it says it. A method whose stack reports it
 //! unavailable, or fails without asking anything, is skipped until the
 //! next lock; with no method left, nothing unlocks but logind. No methods
-//! configured at all is a swipe up to unlock.
+//! configured at all is a swipe up to unlock, and so is a typed method
+//! that succeeds without asking anything (an account with no password,
+//! under `nullok`): the lock never opens by itself.
 //!
 //! The PIN and the password are typed, into one input, so one of them runs
 //! at a time and the user switches. A method that isn't typed (one that
@@ -32,9 +36,10 @@
 //! runs alongside from the lock on, in its own worker, with its own
 //! stack; whichever succeeds first unlocks.
 //!
-//! The password's stack includes `system-auth`, so what the system asks of
-//! every login it asks here too. The PIN's doesn't: a factor added to
-//! `system-auth` doesn't guard it (see `resources/pam.d/mechanix-pin`).
+//! The password's stack includes `password-auth`, so what the system asks
+//! of every password login it asks here too. The PIN's doesn't: a factor
+//! added to `password-auth` doesn't guard it (see
+//! `resources/pam.d/mechanix-pin`).
 //!
 //! # The power key
 //!

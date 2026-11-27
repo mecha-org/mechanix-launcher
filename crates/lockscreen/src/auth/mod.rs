@@ -33,7 +33,7 @@ pub const WORKER_ARG: &str = "--auth-worker";
 pub enum Method {
     /// A numeric PIN, typically `pam_pwdfile`.
     Pin,
-    /// The account password, typically through `system-auth`.
+    /// The account password, typically through `password-auth`.
     Password,
 }
 
