@@ -249,17 +249,17 @@ views:
 switcher:
     keys: [to_symbols, to_more_symbols, to_letters, to_phone_symbols, to_phone, period_pad]
     targets:
-        - { label: Base, family: text }
-        - { label: Term., family: terminal }
-        - { label: Num., family: number }
+        - { label: Alpha, family: text }
+        - { label: Term, family: terminal }
+        - { label: Num, family: number }
 
 # Corner mark on keys whose hold opens a longer list: every `switcher` key,
 # and any other key with at least `min-choices` choices (0 = switcher keys
 # only). Letter keys, whose accents are expected, and keys already showing a
 # hint are not marked. An empty label turns the mark off.
 more-hint:
-    label: "..."
-    min-choices: 2
+    label: "•••"
+    min-choices: 0
 
 buttons:
     # Tap: toggle caret / select mode. Hold: a direction pad around the key;

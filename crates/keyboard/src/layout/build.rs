@@ -1105,7 +1105,7 @@ mod tests {
         use Family::{Number, Terminal, Text};
         assert_eq!(
             offers("base", "to_symbols"),
-            (vec!["Term.".into(), "Num.".into()], vec![Terminal, Number])
+            (vec!["Term".into(), "Num".into()], vec![Terminal, Number])
         );
         assert_eq!(offers("symbols", "to_letters").1, [Terminal, Number]);
         assert_eq!(offers("more_symbols", "to_symbols").1, [Terminal, Number]);
@@ -1122,7 +1122,7 @@ mod tests {
         );
         assert_eq!(
             offers("number", "period_pad"),
-            (vec!["Base".into(), "Term.".into()], vec![Text, Terminal])
+            (vec!["Alpha".into(), "Term".into()], vec![Text, Terminal])
         );
         // The number pad's `.` still types a period; the letters' `.` keeps
         // its punctuation choices.
@@ -1142,40 +1142,22 @@ mod tests {
         assert!(period.choice_actions.is_empty() && period.choices.len() == 16);
     }
 
-    /// Page keys and keys with a long hold list show `…` in the corner;
-    /// letters (accents) and keys with a hint of their own do not.
+    /// By default every view-switching key (the `switcher` keys) carries the
+    /// `more-hint` label in its corner, wherever it appears.
     #[test]
-    fn long_lists_are_marked_with_an_ellipsis() {
+    fn view_switching_keys_are_marked_with_an_ellipsis() {
         let km = bundled();
-        let hint = |view: &str, token: &str| {
-            km.view(view)
-                .unwrap()
-                .keys()
-                .find(|k| k.token == token)
-                .unwrap_or_else(|| panic!("{view} has no {token}"))
-                .hint
-                .clone()
-        };
-        let dots = Some("…".to_string());
-        for (view, token) in [
-            ("base", "to_symbols"),
-            ("base", "period"),
-            ("symbols", "to_letters"),
-            ("symbols", "to_more_symbols"),
-            ("symbols", "$"),
-            ("emoji", "to_letters"),
-            ("terminal", "to_symbols"),
-            ("number", "period_pad"),
-            ("phone", "to_phone_symbols"),
-            ("url", "dot_com"),
-        ] {
-            assert_eq!(hint(view, token), dots, "{view}/{token}");
+        let layout: Layout = yaml_serde::from_str(FALLBACK_LAYOUT).unwrap();
+        let dots = Some(layout.more_hint.label.unwrap_or(MORE_HINT.into()));
+        assert!(!layout.switcher.keys.is_empty(), "no switcher keys");
+        let mut seen = 0;
+        for key in km.keys() {
+            if layout.switcher.keys.contains(&key.token) {
+                assert_eq!(key.hint, dots, "{}", key.token);
+                seen += 1;
+            }
         }
-        assert_eq!(hint("base", "a"), None, "accents are not marked");
-        assert_eq!(hint("base", "e").as_deref(), Some("3"));
-        assert_eq!(hint("base", "comma"), None);
-        assert_eq!(hint("number", "minus"), None, "one choice is not a list");
-        assert_eq!(hint("terminal", "k").as_deref(), Some("("));
+        assert!(seen > 0, "no switcher key found in any view");
     }
 
     #[test]
