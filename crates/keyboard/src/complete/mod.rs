@@ -20,10 +20,15 @@
 //! autocorrection can be taken back by a backspace right after
 //! ([`Completion::take_undo`]); a word restored that way is not
 //! autocorrected again.
+//!
+//! Typing `:` and part of an emoji's name (`:smil`) fills the bar with the
+//! emoji it names instead ([`emoji`]); a tap replaces the `:smil`, and the
+//! name is not autocorrected meanwhile.
 
 mod backends;
 pub(crate) mod config;
 mod edit;
+mod emoji;
 
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
@@ -32,11 +37,12 @@ use mecha_wayland::prelude::*;
 
 pub(crate) use edit::{Suggestion, TextEdit};
 
-use crate::dictionaries::Dictionaries;
+use crate::dictionaries::{Dictionaries, EmojiList, Loading};
 use crate::field::Field;
 use crate::predict::{Change, TypingContext};
 use crate::protocol::input_method::InputMethodState;
 use crate::widget::keyboard::Keyboard;
+use crate::widget::suggestion_bar::BarLabel;
 use config::{CompletionConfig, Policy};
 
 /// How long the caret must rest before the suggestions follow it.
@@ -69,6 +75,9 @@ pub(crate) enum Kind {
     /// "I'm"): applied like an [`Autocorrection`](Kind::Autocorrection),
     /// whatever other sources say.
     Replacement,
+    /// An emoji whose name starts with the `:name` typed
+    /// ([`emoji::shortcode_query`]); it replaces the `:` and the name.
+    Emoji,
 }
 
 impl Kind {
@@ -110,6 +119,8 @@ pub(crate) struct Completion {
     cfg: CompletionConfig,
     /// `None` while completion is off.
     completer: Option<Box<dyn Completer>>,
+    /// The emoji `:name` finds; `None` while that is off.
+    emoji: Option<Loading<EmojiList>>,
     /// What the bar shows now, one per slot left to right (`None` an empty
     /// slot); empty while there are no suggestions.
     pub(crate) current: Vec<Option<Suggestion>>,
@@ -166,9 +177,15 @@ struct Inputs {
 impl Completion {
     pub(crate) fn new(cfg: CompletionConfig, dicts: &mut Dictionaries) -> Completion {
         let completer = cfg.enabled.then(|| config::build(&cfg.backend, dicts));
+        let emoji = cfg
+            .emoji
+            .as_deref()
+            .filter(|_| cfg.enabled)
+            .map(|spec| dicts.emoji(spec));
         Completion {
             cfg,
             completer,
+            emoji,
             current: Vec::new(),
             seen: None,
             stale: false,
@@ -248,6 +265,10 @@ impl Completion {
         {
             return None;
         }
+        // The name of an emoji being looked up is no misspelling.
+        if policy.emoji && emoji::shortcode_query(ctx.before()).is_some() {
+            return None;
+        }
         let word = ctx.prefix();
         if word.is_empty() || edit::all_caps(&word) || self.kept.contains(&word.to_lowercase()) {
             return None;
@@ -295,8 +316,14 @@ impl Completion {
         }
     }
 
-    /// Ask the source about the word in `ctx`.
+    /// Ask the source about the word in `ctx`, or, while a `:name` is
+    /// being typed, the emoji it names (the words if none match).
     fn suggest(&mut self, ctx: &TypingContext, policy: Policy) -> Vec<Suggestion> {
+        if let Some(emoji) = self.emoji_suggestions(ctx, policy)
+            && !emoji.is_empty()
+        {
+            return emoji;
+        }
         let Some(completer) = &mut self.completer else {
             return Vec::new();
         };
@@ -312,6 +339,18 @@ impl Completion {
         let candidates = completer.suggest(&q);
         edit::suggestions(&q, candidates, policy.append_space)
     }
+
+    /// The emoji for the `:name` right before the cursor, if one is being
+    /// typed (and not with the caret moved into a word) and `policy` allows
+    /// emoji (none while a list from a path is still loading).
+    fn emoji_suggestions(&self, ctx: &TypingContext, policy: Policy) -> Option<Vec<Suggestion>> {
+        let list = self.emoji.as_ref().filter(|_| policy.emoji)?.get()?;
+        if !ctx.word_after().is_empty() {
+            return None;
+        }
+        let query = emoji::shortcode_query(ctx.before())?;
+        Some(emoji::suggestions(list, query, self.cfg.max))
+    }
 }
 
 /// The keyboard's word to its bar: whether it shows, and what it says.
@@ -321,7 +360,7 @@ pub(crate) struct SuggestionsChanged {
     pub(crate) shown: bool,
     /// Each slot's label, left to right (`None` an empty slot); empty
     /// leaves the bar blank.
-    pub(crate) labels: Vec<Option<String>>,
+    pub(crate) labels: Vec<Option<BarLabel>>,
 }
 impl Event for SuggestionsChanged {}
 
@@ -358,7 +397,7 @@ fn recompute(
         labels: completion
             .current
             .iter()
-            .map(|s| s.as_ref().map(|s| s.label.clone()))
+            .map(|s| s.as_ref().map(Suggestion::bar_label))
             .collect(),
     }
 }
@@ -687,6 +726,90 @@ mod tests {
         let ctx = accepted(&mut c, "the");
         assert!(c.take_undo(&ctx, Instant::now()).is_some());
         assert!(autocorrect(&mut c, &typed("teh"), " ").is_none());
+    }
+
+    fn labels(s: &[Suggestion]) -> Vec<&str> {
+        s.iter().map(|s| s.label.as_str()).collect()
+    }
+
+    #[test]
+    fn a_colon_and_a_name_suggest_emoji() {
+        let mut c = completion();
+        let policy = c.policy(text(), true).unwrap();
+        let s = c.suggest(&typed("hi :smil"), policy);
+        assert_eq!(labels(&s)[..2], ["😄", "😃"]);
+        assert!(s.iter().all(|s| s.kind == Kind::Emoji));
+        assert_eq!(s[0].edit.delete_before, 5);
+        // A name that is no word at all.
+        assert_eq!(labels(&c.suggest(&typed(":+1"), policy))[0], "👍");
+    }
+
+    #[test]
+    fn words_when_no_emoji_matches_or_no_colon() {
+        let mut c = completion();
+        let policy = c.policy(text(), true).unwrap();
+        let s = c.suggest(&typed(":zqxw"), policy);
+        assert!(s.iter().all(|s| s.kind != Kind::Emoji), "{s:?}");
+        let s = c.suggest(&typed("smil"), policy);
+        assert!(s.iter().all(|s| s.kind != Kind::Emoji), "{s:?}");
+        // A time is not a name.
+        let s = c.suggest(&typed("at 10:30"), policy);
+        assert!(s.is_empty(), "{s:?}");
+    }
+
+    #[test]
+    fn no_emoji_in_addresses_or_when_off() {
+        let url = Field {
+            family: Family::Url,
+            sensitive: false,
+        };
+        let mut c = completion();
+        let policy = c.policy(url, true).unwrap();
+        let s = c.suggest(&typed("host:smil"), policy);
+        assert!(s.iter().all(|s| s.kind != Kind::Emoji), "{s:?}");
+        let s = c.suggest(&typed(":smil"), policy);
+        assert!(s.iter().all(|s| s.kind != Kind::Emoji), "{s:?}");
+
+        let mut off = completion_with(CompletionConfig {
+            emoji: None,
+            ..CompletionConfig::hardcoded()
+        });
+        let policy = off.policy(text(), true).unwrap();
+        let s = off.suggest(&typed(":smil"), policy);
+        assert!(s.iter().all(|s| s.kind != Kind::Emoji), "{s:?}");
+    }
+
+    #[test]
+    fn an_emoji_name_is_not_autocorrected() {
+        let mut c = completion();
+        assert!(autocorrect(&mut c, &typed(":smil"), " ").is_none());
+        assert!(autocorrect(&mut c, &typed(":teh"), ":").is_none());
+        // Without the colon it is a word like any other.
+        assert!(autocorrect(&mut c, &typed("teh"), " ").is_some());
+    }
+
+    #[test]
+    fn undoing_an_emoji_brings_back_the_name() {
+        let mut c = completion();
+        let mut ctx = typed("hi :smil");
+        let s = c.suggest(&ctx, c.policy(text(), true).unwrap());
+        let edit = &s[0].edit;
+        // As `input::replace_word` records the accepted suggestion.
+        let deleted = ctx.text_before(edit.delete_before);
+        assert_eq!(deleted, ":smil");
+        ctx.replaced_before(&deleted, &edit.insert);
+        c.remember_undo(deleted, "", edit.insert.clone(), ctx.local_rev());
+        assert_eq!(ctx.before(), "hi 😄");
+
+        let undo = c.take_undo(&ctx, Instant::now()).unwrap();
+        assert_eq!(
+            undo.edit(),
+            TextEdit {
+                delete_before: "😄".len() as u32,
+                delete_after: 0,
+                insert: ":smil".into()
+            }
+        );
     }
 
     #[test]

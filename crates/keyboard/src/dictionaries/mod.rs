@@ -6,7 +6,10 @@
 //! - [`Wordlist`]: words as written, with frequencies, flags and
 //!   replacements (AOSP LatinIME's format), for word completion and
 //!   autocorrection ([`crate::complete`]).
+//! - [`EmojiList`]: emoji with their shortcodes and keywords (GitHub
+//!   gemoji's format), for emoji suggestions ([`crate::complete`]).
 
+mod emoji;
 mod wordlist;
 
 use std::collections::HashMap;
@@ -14,6 +17,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use mecha_wayland::prelude::*;
 
+pub(crate) use emoji::EmojiList;
 pub(crate) use wordlist::{Word, Wordlist};
 
 /// A word list: lowercase `[a-z']` words with their frequency counts, sorted
@@ -114,6 +118,7 @@ pub(crate) fn is_normalised(s: &str) -> bool {
 pub(crate) struct Dictionaries {
     loaded: HashMap<String, Arc<Dictionary>>,
     wordlists: HashMap<String, Loading<Wordlist>>,
+    emoji: HashMap<String, Loading<EmojiList>>,
 }
 impl Resource for Dictionaries {}
 
@@ -139,6 +144,22 @@ impl Dictionaries {
                 None => {
                     let spec = spec.to_string();
                     Loading::spawn(move || Wordlist::load(&spec))
+                }
+            })
+            .clone()
+    }
+
+    /// The emoji list for `spec` (a bundled name or a path), loaded as
+    /// [`wordlist`](Self::wordlist) loads word lists: a bundled one ready at
+    /// once, one from a path compiled in the background on first use.
+    pub(crate) fn emoji(&mut self, spec: &str) -> Loading<EmojiList> {
+        self.emoji
+            .entry(spec.to_string())
+            .or_insert_with(|| match EmojiList::bundled(spec) {
+                Some(list) => Loading::ready(list),
+                None => {
+                    let spec = spec.to_string();
+                    Loading::spawn(move || EmojiList::load(&spec))
                 }
             })
             .clone()

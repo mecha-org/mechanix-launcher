@@ -30,10 +30,28 @@ pub struct EmojiSprite {
     pub height: f32,
 }
 
-/// The emoji sprites, keyed by the emoji string a layout uses.
-#[derive(Debug, Default)]
+/// The emoji sprites, keyed by the emoji string: those the layout uses,
+/// loaded up front, and any others [`ensure`](Emoji::ensure)d since (the
+/// suggestion bar's).
+#[derive(Default)]
 pub struct Emoji {
     sprites: HashMap<String, EmojiSprite>,
+    /// Logical px of each sprite's longer side.
+    size: u32,
+    /// The font, kept (with the SVG documents it has indexed) to load
+    /// more; `None` until something needs it.
+    font: Option<EmojiFont>,
+    /// Emoji the font can't draw, so they are not tried again.
+    missing: HashSet<String>,
+}
+
+impl std::fmt::Debug for Emoji {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Emoji")
+            .field("sprites", &self.sprites)
+            .field("size", &self.size)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Resource for Emoji {}
@@ -46,32 +64,55 @@ impl Emoji {
         emoji: impl IntoIterator<Item = &'a str>,
         size: u32,
     ) -> Self {
-        let mut font = EmojiFont::new();
-        let mut sprites = HashMap::new();
+        let mut this = Self {
+            size,
+            ..Self::default()
+        };
         for e in emoji {
-            if sprites.contains_key(e) {
-                continue;
-            }
-            let Some(svg) = font.svg(e) else {
+            if this.ensure(atlas, e).is_none() {
                 warn!("no colour glyph for emoji {e:?}; its key draws empty");
-                continue;
-            };
-            match atlas.insert_svg_image(Cow::Owned(svg.into_bytes()), size) {
-                Ok(sprite) => {
-                    let s = atlas.sprite(sprite).size;
-                    sprites.insert(
-                        e.to_owned(),
-                        EmojiSprite {
-                            sprite,
-                            width: s.width,
-                            height: s.height,
-                        },
-                    );
-                }
-                Err(err) => warn!("emoji {e:?} does not load: {err:?}"),
             }
         }
-        Self { sprites }
+        this
+    }
+
+    /// The sprite for `emoji`, inserting it into the atlas first if it is
+    /// not there yet. `None` if the font can't draw it. The first emoji
+    /// from one of the font's large shared SVG documents takes a while (the
+    /// document is indexed once); the rest are quick.
+    pub fn ensure(&mut self, atlas: &mut Atlas, emoji: &str) -> Option<EmojiSprite> {
+        if let Some(s) = self.sprites.get(emoji) {
+            return Some(*s);
+        }
+        if self.missing.contains(emoji) {
+            return None;
+        }
+        let svg = self.font.get_or_insert_with(EmojiFont::new).svg(emoji);
+        let loaded =
+            match svg.map(|svg| atlas.insert_svg_image(Cow::Owned(svg.into_bytes()), self.size)) {
+                Some(Ok(sprite)) => {
+                    let s = atlas.sprite(sprite).size;
+                    Some(EmojiSprite {
+                        sprite,
+                        width: s.width,
+                        height: s.height,
+                    })
+                }
+                Some(Err(err)) => {
+                    warn!("emoji {emoji:?} does not load: {err:?}");
+                    None
+                }
+                None => None,
+            };
+        match loaded {
+            Some(s) => {
+                self.sprites.insert(emoji.to_owned(), s);
+            }
+            None => {
+                self.missing.insert(emoji.to_owned());
+            }
+        }
+        loaded
     }
 
     /// The sprite for `emoji`, or `None` if it wasn't loaded.
@@ -364,6 +405,29 @@ mod tests {
         assert!(emoji.len() >= 20, "the emoji page has its emoji");
         let mut font = EmojiFont::new();
         let missing: Vec<_> = emoji.iter().filter(|e| font.svg(e).is_none()).collect();
+        assert!(missing.is_empty(), "no colour glyph for {missing:?}");
+    }
+
+    #[test]
+    fn ensure_loads_emoji_not_in_the_layout_once() {
+        let mut atlas = Atlas::new();
+        let mut emoji = Emoji::load(&mut atlas, ["😂"], 28);
+        assert!(emoji.get("🍕").is_none());
+        let pizza = emoji.ensure(&mut atlas, "🍕").unwrap();
+        assert_eq!(pizza.width.max(pizza.height), 28.0);
+        assert_eq!(emoji.get("🍕").unwrap().sprite, pizza.sprite);
+        assert_eq!(emoji.ensure(&mut atlas, "🍕").unwrap().sprite, pizza.sprite);
+        assert!(emoji.ensure(&mut atlas, "a").is_none());
+        assert!(emoji.missing.contains("a"));
+    }
+
+    /// Every emoji the suggestion bar can offer (the bundled gemoji list)
+    /// has a colour glyph in the bundled font.
+    #[test]
+    fn every_suggestable_emoji_draws() {
+        let list = crate::dictionaries::EmojiList::bundled("gemoji").unwrap();
+        let mut font = EmojiFont::new();
+        let missing: Vec<_> = list.all().filter(|e| font.svg(e).is_none()).collect();
         assert!(missing.is_empty(), "no colour glyph for {missing:?}");
     }
 

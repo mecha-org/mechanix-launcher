@@ -3,6 +3,7 @@
 //! the byte arithmetic and casing live in one place.
 
 use super::{Candidate, Kind, WordQuery};
+use crate::widget::suggestion_bar::BarLabel;
 
 /// What accepting a suggestion does to the field, sent as one input-method
 /// commit: delete `delete_before` bytes before the cursor and
@@ -24,6 +25,16 @@ pub(crate) struct Suggestion {
     pub(crate) kind: Kind,
     /// What a tap on it does.
     pub(crate) edit: TextEdit,
+}
+
+impl Suggestion {
+    /// How the bar shows it.
+    pub(crate) fn bar_label(&self) -> BarLabel {
+        match self.kind {
+            Kind::Emoji => BarLabel::Emoji(self.label.clone()),
+            _ => BarLabel::Word(self.label.clone()),
+        }
+    }
 }
 
 /// The suggestions for `q` from a source's ranked `candidates`: cased like

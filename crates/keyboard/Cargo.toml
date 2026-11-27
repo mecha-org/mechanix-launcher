@@ -17,6 +17,8 @@ rustix = { version = "1.1.4", features = ["fs"] }
 ttf-parser = "0.25"
 # Inflates word lists loaded from a `.combined.gz` path.
 flate2 = "1.1"
+# Parses emoji lists loaded from a gemoji `.json` path.
+serde_json = "1.0"
 
 # Hunspell bindings for the `hunspell` feature, linking the system's
 # libhunspell via pkg-config (not the crate's bundled copy). Building needs
@@ -27,9 +29,11 @@ hunspell-rs = { version = "0.4", default-features = false, optional = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 
 [build-dependencies]
-# build.rs inflates the bundled AOSP word lists (kept as upstream's .gz) to
-# compile them.
+# build.rs inflates the bundled AOSP word lists and gemoji emoji list (kept
+# as upstream's files, gzipped) to compile them; the emoji list is JSON.
 flate2 = "1.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 [features]
 default = ["hunspell"]

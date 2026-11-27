@@ -39,6 +39,12 @@ pub(crate) const APPEND_SPACE: bool = false;
 /// when a space or punctuation ends it (in text fields; never in addresses).
 pub(crate) const AUTOCORRECT: bool = true;
 
+/// The emoji list typing `:` and part of an emoji's name (`:smil`)
+/// searches (in text fields; never in addresses): a bundled name, or a path
+/// to a gemoji `emoji.json` (gzipped if it ends in `.gz`). `None` = no
+/// emoji suggestions.
+pub(crate) const EMOJI: Option<&str> = Some("gemoji");
+
 /// Punctuation that ends a word and so autocorrects it, as whitespace does.
 /// Not `'` (inside words), nor `-`, `/`, `@`, `_` and the like, which join
 /// parts of one token.
@@ -66,6 +72,8 @@ pub(crate) struct CompletionConfig {
     /// Whether misspelled words are corrected as they end; see
     /// [`AUTOCORRECT`].
     pub(crate) autocorrect: bool,
+    /// The emoji list `:name` searches, `None` for none; see [`EMOJI`].
+    pub(crate) emoji: Option<String>,
 }
 
 impl CompletionConfig {
@@ -83,6 +91,7 @@ impl CompletionConfig {
             max: 3,
             append_space: APPEND_SPACE,
             autocorrect: AUTOCORRECT,
+            emoji: EMOJI.map(String::from),
         }
     }
 }
@@ -94,6 +103,8 @@ pub(crate) struct Policy {
     pub(crate) append_space: bool,
     /// Whether a misspelled word is corrected by itself as it ends.
     pub(crate) autocorrect: bool,
+    /// Whether `:name` suggests emoji.
+    pub(crate) emoji: bool,
 }
 
 /// The policy for `field` under `cfg`: a space after accepted words and
@@ -108,12 +119,15 @@ pub(crate) fn policy(field: Field, cfg: &CompletionConfig) -> Option<Policy> {
         Family::Text => Some(Policy {
             append_space: cfg.append_space,
             autocorrect: cfg.autocorrect,
+            emoji: cfg.emoji.is_some(),
         }),
         // An address goes on after a completed part (`.`, `@`, `/`), and
-        // its parts are names, not dictionary words.
+        // its parts are names, not dictionary words; a `:` in one is a
+        // port or scheme, not an emoji.
         Family::Email | Family::Url => Some(Policy {
             append_space: false,
             autocorrect: false,
+            emoji: false,
         }),
         _ => None,
     }
@@ -181,6 +195,7 @@ mod tests {
                     Some(Policy {
                         append_space: space,
                         autocorrect,
+                        emoji: true,
                     })
                 );
             }
@@ -195,6 +210,7 @@ mod tests {
                 Some(Policy {
                     append_space: false,
                     autocorrect: false,
+                    emoji: false,
                 })
             );
         }

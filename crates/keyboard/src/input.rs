@@ -336,8 +336,11 @@ fn replace_word(ctx: &mut Context<'_, Keyboard>, edit: &TextEdit, typed_after: &
     }
     let (words, word, rev) = {
         let mut typing = ctx.resource_mut::<TypingContext>();
-        let word = format!("{}{}", typing.prefix(), typing.word_after());
-        let words = typing.replaced_word(&edit.insert);
+        // What the edit deleted before the cursor: the word's prefix, or
+        // more (an emoji's `:name`).
+        let deleted = typing.text_before(edit.delete_before);
+        let word = format!("{deleted}{}", typing.word_after());
+        let words = typing.replaced_before(&deleted, &edit.insert);
         (words, word, typing.local_rev())
     };
     ctx.resource_mut::<Completion>()

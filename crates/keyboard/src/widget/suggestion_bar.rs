@@ -8,6 +8,8 @@
 
 use mecha_wayland::prelude::*;
 
+use crate::layout::emoji::Emoji;
+
 /// The bar is this many key rows tall.
 pub(crate) const BAR_ROW_SCALE: f32 = 0.8;
 /// Suggestions draw at this share of the key font size.
@@ -23,12 +25,21 @@ const LINE_ROLE: ColorRole = ColorRole::Outline;
 const INK_ROLE: ColorRole = ColorRole::OnSurface;
 const PRESSED_ROLE: ColorRole = ColorRole::SurfaceContainerHigh;
 
+/// What one slot of the bar shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum BarLabel {
+    /// A word, in the bar's font.
+    Word(String),
+    /// An emoji, drawn in colour from the bundled emoji font.
+    Emoji(String),
+}
+
 /// The input layer's (and the keyboard's) word to the bar.
 #[derive(Clone, Debug)]
 pub(crate) enum BarFeedback {
     /// Show these slots, left to right (`None` an empty slot), none
     /// pressed.
-    Show(Vec<Option<String>>),
+    Show(Vec<Option<BarLabel>>),
     /// Light cell `i` as pressed, or none.
     Press(Option<usize>),
 }
@@ -59,6 +70,9 @@ pub(crate) struct SuggestionBar {
     cells: Vec<Handle<Div>>,
     /// Each cell's label.
     texts: Vec<Handle<Text>>,
+    /// Each cell's emoji, spawned the first time the cell shows one and
+    /// hidden while it shows a word.
+    images: Vec<Option<Handle<Image>>>,
     /// Whether each cell shows a word (an empty one cannot be pressed).
     filled: Vec<bool>,
     /// The lines between cells, `dividers[i]` after `cells[i]`.
@@ -118,6 +132,7 @@ impl Widget for SuggestionBar {
             padding: b.padding,
             cells: Vec::new(),
             texts: Vec::new(),
+            images: Vec::new(),
             filled: Vec::new(),
             dividers: Vec::new(),
             pressed: None,
@@ -132,20 +147,15 @@ fn underline(color: Color) -> Quad {
         .border_color(color)
 }
 
-/// Show `labels`, one per cell (`None` leaves it empty): relabel the cells
-/// there are (unchanged labels are left alone), spawn any more needed, and
-/// remove any extra. A pressed cell stays lit: the finger is still on it.
-fn show(ctx: &mut Context<'_, SuggestionBar>, labels: &[Option<String>]) {
-    let texts = ctx.me().texts.clone();
-    for (text, label) in texts.iter().zip(labels) {
-        ctx.at(*text)
-            .unwrap()
-            .set_text(label.as_deref().unwrap_or(""));
-    }
+/// Show `labels`, one per cell (`None` leaves it empty): spawn any more
+/// cells needed, remove any extra, and label each (an unchanged label is
+/// left alone). A pressed cell stays lit: the finger is still on it.
+fn show(ctx: &mut Context<'_, SuggestionBar>, labels: &[Option<BarLabel>]) {
     while ctx.me().cells.len() > labels.len() {
         let bar = ctx.me();
         let cell = bar.cells.pop().unwrap();
         bar.texts.pop();
+        bar.images.pop();
         // The line before the cell goes with it; the first cell has none.
         let divider = bar.dividers.pop();
         ctx.remove(cell);
@@ -153,16 +163,62 @@ fn show(ctx: &mut Context<'_, SuggestionBar>, labels: &[Option<String>]) {
             ctx.remove(divider);
         }
     }
-    let have = ctx.me().cells.len();
-    for label in labels.iter().skip(have) {
-        spawn_cell(ctx, label.as_deref().unwrap_or(""));
+    while ctx.me().cells.len() < labels.len() {
+        spawn_cell(ctx);
+    }
+    for (i, label) in labels.iter().enumerate() {
+        set_label(ctx, i, label.as_ref());
     }
     ctx.me().filled = labels.iter().map(Option::is_some).collect();
     restyle_cells(ctx);
 }
 
-/// Append a cell labelled `label`, after a divider unless it is the first.
-fn spawn_cell(ctx: &mut Context<'_, SuggestionBar>, label: &str) {
+/// Label cell `i` with `label`: a word in its text, an emoji in its image
+/// (spawned the first time), the other hidden or blank. An emoji the font
+/// can't draw shows as text.
+fn set_label(ctx: &mut Context<'_, SuggestionBar>, i: usize, label: Option<&BarLabel>) {
+    let (cell, text, shown) = {
+        let bar = ctx.me();
+        (bar.cells[i], bar.texts[i], bar.images[i])
+    };
+    let sprite = match label {
+        Some(BarLabel::Emoji(e)) => {
+            let (mut emoji, mut atlas) = ctx.fetch::<(ResMut<Emoji>, ResMut<Atlas>)>();
+            emoji.ensure(&mut atlas, e)
+        }
+        _ => None,
+    };
+    let word = match (label, sprite) {
+        (Some(BarLabel::Word(w) | BarLabel::Emoji(w)), None) => w.as_str(),
+        _ => "",
+    };
+    ctx.at(text).unwrap().set_text(word);
+    match (sprite, shown) {
+        (Some(e), Some(handle)) => {
+            let mut at = ctx.at(handle).unwrap();
+            at.set_sprite(e.sprite);
+            at.set_style(emoji_style(e.width, e.height));
+        }
+        (Some(e), None) => {
+            let image = ctx.spawn(cell, image(e.sprite).style(emoji_style(e.width, e.height)));
+            ctx.me().images[i] = Some(image);
+        }
+        (None, Some(handle)) => {
+            ctx.at(handle).unwrap().set_display(Display::Hidden);
+        }
+        (None, None) => {}
+    }
+}
+
+/// The layout style of an emoji `width` by `height` logical px.
+fn emoji_style(width: f32, height: f32) -> LayoutStyle {
+    LayoutStyle::default()
+        .size(px(width), px(height))
+        .shrink(0.0)
+}
+
+/// Append an empty cell, after a divider unless it is the first.
+fn spawn_cell(ctx: &mut Context<'_, SuggestionBar>) {
     let me = ctx.handle();
     let (font, font_size, padding, first) = {
         let bar = ctx.me();
@@ -199,7 +255,7 @@ fn spawn_cell(ctx: &mut Context<'_, SuggestionBar>, label: &str) {
     let ink = ctx.color(INK_ROLE);
     let text = ctx.spawn(
         cell,
-        text(font, label)
+        text(font, "")
             .color(ink)
             .size(font_size)
             .overflow(TextOverflow::Ellipsis)
@@ -208,6 +264,7 @@ fn spawn_cell(ctx: &mut Context<'_, SuggestionBar>, label: &str) {
     let bar = ctx.me();
     bar.cells.push(cell);
     bar.texts.push(text);
+    bar.images.push(None);
 }
 
 /// Light cell `i` as pressed (and unlight the one before).

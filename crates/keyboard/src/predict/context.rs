@@ -188,8 +188,20 @@ impl TypingContext {
         word
     }
 
+    /// The `len` bytes right before the cursor, which an edit deleting that
+    /// many replaces: from the known text before the cursor, or, when that
+    /// is too short or `len` splits a character there, the word's prefix.
+    pub(crate) fn text_before(&self, len: u32) -> String {
+        let len = len as usize;
+        match self.before.len().checked_sub(len) {
+            Some(start) if self.before.is_char_boundary(start) => self.before[start..].to_string(),
+            _ => self.prefix(),
+        }
+    }
+
     /// A suggestion replaced the whole word around the cursor with
     /// `insert`: record that, returning the words it finished.
+    #[cfg(test)]
     pub(crate) fn replaced_word(&mut self, insert: &str) -> Vec<String> {
         // The part of the word before the cursor was deleted.
         let prefix = self.prefix();
@@ -363,6 +375,20 @@ mod tests {
         c.set_surrounding("abcd", 2);
         c.committed(" ");
         assert_eq!((c.prefix().as_str(), c.word_after()), ("", ""));
+    }
+
+    #[test]
+    fn text_before_is_what_an_edit_deletes() {
+        let mut c = TypingContext::default();
+        c.committed("hi :smil");
+        assert_eq!(c.prefix(), "smil");
+        assert_eq!(c.text_before(5), ":smil");
+        assert_eq!(c.text_before(4), "smil");
+        // Nothing known that far back: the word, as before.
+        assert_eq!(c.text_before(50), "smil");
+        c.replaced_before(":smil", "😄");
+        assert_eq!(c.before(), "hi 😄");
+        assert_eq!(c.prefix(), "");
     }
 
     #[test]
