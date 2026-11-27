@@ -22,7 +22,7 @@ use crate::layout::{KeyAction, KeyFace, Keymap};
 use crate::protocol::virtual_keyboard::keysym_text;
 use crate::widget::key::Key;
 
-pub(crate) use glue::{TouchState, abort, attach, end_bar, long_pressed};
+pub(crate) use glue::{TouchState, abort, attach, bar_long_pressed, end_bar, long_pressed};
 pub(crate) use tracker::TouchTracker;
 
 /// The input layer's word to the UI: a key gained or lost the pressed state.
@@ -51,6 +51,10 @@ pub(crate) struct KeyEntry {
     /// Whether the key is hidden (the emoji key while emoji can't be
     /// typed): no touch lands on it.
     pub hidden: bool,
+    /// For an emoji key that takes a skin tone, its untoned emoji: its
+    /// choices are then that and its five toned forms, and picking one sets
+    /// the skin tone of every such emoji.
+    pub skin_tone_base: Option<String>,
 }
 
 impl KeyEntry {
@@ -64,7 +68,17 @@ impl KeyEntry {
             choices,
             choice_actions: Vec::new(),
             hidden: false,
+            skin_tone_base: None,
         }
+    }
+
+    /// The same entry for an emoji key that takes a skin tone: `base`
+    /// untoned, `tones` its five toned forms, which with it are its choices.
+    pub(crate) fn with_skin_tones(mut self, base: &str, tones: [String; 5]) -> Self {
+        self.choices = std::iter::once(base.to_owned()).chain(tones).collect();
+        self.choice_actions = Vec::new();
+        self.skin_tone_base = Some(base.to_owned());
+        self
     }
 
     /// The same entry, its choices running `actions` instead of typing.

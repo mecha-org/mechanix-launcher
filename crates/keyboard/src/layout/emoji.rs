@@ -21,6 +21,20 @@ static NOTO_COLOR_EMOJI: &[u8] = include_bytes!("../../resources/fonts/NotoColor
 
 /// Variation selector 16: asks for emoji presentation; draws nothing itself.
 const VS16: char = '\u{FE0F}';
+/// Zero-width joiner: glues emoji into one sequence (`👨‍💻`).
+const ZWJ: char = '\u{200D}';
+/// 🤝: a modifier base by itself, but left untoned inside a multi-person
+/// sequence (`🧑‍🤝‍🧑`), whose people take the tone.
+const HANDSHAKE: char = '\u{1F91D}';
+
+/// The five Fitzpatrick skin-tone modifiers, light to dark.
+pub(crate) const SKIN_TONES: [char; 5] = [
+    '\u{1F3FB}',
+    '\u{1F3FC}',
+    '\u{1F3FD}',
+    '\u{1F3FE}',
+    '\u{1F3FF}',
+];
 
 /// One loaded emoji: its sprite and the logical size it draws at.
 #[derive(Debug, Clone, Copy)]
@@ -43,6 +57,13 @@ pub struct Emoji {
     font: Option<EmojiFont>,
     /// Emoji the font can't draw, so they are not tried again.
     missing: HashSet<String>,
+    /// The skin tone picked last (an index into [`SKIN_TONES`]), applied
+    /// to every emoji that takes one; `None` for the default yellow. Kept in
+    /// memory only.
+    skin_tone: Option<usize>,
+    /// Per emoji asked about: its five toned forms, or `None` if it takes
+    /// no skin tone.
+    tones: HashMap<String, Option<[String; 5]>>,
 }
 
 impl std::fmt::Debug for Emoji {
@@ -119,6 +140,40 @@ impl Emoji {
     pub fn get(&self, emoji: &str) -> Option<EmojiSprite> {
         self.sprites.get(emoji).copied()
     }
+
+    /// The skin tone picked last, as an index into [`SKIN_TONES`]; `None`
+    /// for the default.
+    pub(crate) fn skin_tone(&self) -> Option<usize> {
+        self.skin_tone
+    }
+
+    /// Pick skin tone `tone` (an index into [`SKIN_TONES`], `None` for the
+    /// default) for every emoji that takes one.
+    pub(crate) fn set_skin_tone(&mut self, tone: Option<usize>) {
+        self.skin_tone = tone.filter(|&t| t < SKIN_TONES.len());
+    }
+
+    /// The five toned forms of `emoji`, light to dark, if it takes a skin
+    /// tone and the font draws every form. Worked out once per emoji.
+    pub(crate) fn tones(&mut self, emoji: &str) -> Option<[String; 5]> {
+        if let Some(t) = self.tones.get(emoji) {
+            return t.clone();
+        }
+        let font = self.font.get_or_insert_with(EmojiFont::new);
+        let forms: Option<Vec<String>> = SKIN_TONES.iter().map(|&t| font.toned(emoji, t)).collect();
+        let forms = forms.and_then(|f| <[String; 5]>::try_from(f).ok());
+        self.tones.insert(emoji.to_owned(), forms.clone());
+        forms
+    }
+
+    /// `emoji` in the skin tone picked last, if one is and `emoji` takes
+    /// it; else `emoji` as it is.
+    pub(crate) fn toned(&mut self, emoji: &str) -> String {
+        match (self.skin_tone, self.tones(emoji)) {
+            (Some(t), Some(forms)) => forms[t].clone(),
+            _ => emoji.to_owned(),
+        }
+    }
 }
 
 /// One SVG document's top-level elements: `<defs>` children by id, and
@@ -168,6 +223,37 @@ impl EmojiFont {
                 [glyph] => Some(glyph),
                 _ => self.ligature(&glyphs),
             })
+    }
+
+    /// `emoji` with skin tone `tone` after each of its modifier bases (any
+    /// VS16 after one dropped), if it has one, has no tone yet, and the
+    /// font draws the result. A base is a codepoint the font ligates with
+    /// a tone; in a ZWJ sequence 🤝 is not one (its people take the tone).
+    fn toned(&self, emoji: &str, tone: char) -> Option<String> {
+        if emoji.chars().any(|c| SKIN_TONES.contains(&c)) {
+            return None;
+        }
+        let joined = emoji.contains(ZWJ);
+        let mut out = String::with_capacity(emoji.len() + 8);
+        let mut any = false;
+        let mut chars = emoji.chars().peekable();
+        while let Some(c) = chars.next() {
+            out.push(c);
+            if !(joined && c == HANDSHAKE) && self.takes_tone(c, tone) {
+                out.push(tone);
+                any = true;
+                chars.next_if_eq(&VS16);
+            }
+        }
+        (any && self.glyph(&out).is_some()).then_some(out)
+    }
+
+    /// Whether the font ligates `c` followed by skin tone `tone`.
+    fn takes_tone(&self, c: char, tone: char) -> bool {
+        match (self.face.glyph_index(c), self.face.glyph_index(tone)) {
+            (Some(a), Some(b)) => self.ligature(&[a, b]).is_some(),
+            _ => false,
+        }
     }
 
     /// The glyph a GSUB ligature substitutes for exactly `glyphs`.
@@ -429,6 +515,52 @@ mod tests {
         let mut font = EmojiFont::new();
         let missing: Vec<_> = list.all().filter(|e| font.svg(e).is_none()).collect();
         assert!(missing.is_empty(), "no colour glyph for {missing:?}");
+    }
+
+    #[test]
+    fn skin_tones_apply_to_modifier_bases_only() {
+        let mut emoji = Emoji::default();
+        let thumbs = emoji.tones("👍").expect("👍 takes a tone");
+        assert_eq!(thumbs[2], "👍🏽");
+        assert_eq!(thumbs[4], "👍🏿");
+        assert_eq!(emoji.tones("☝️").unwrap()[0], "☝🏻", "VS16 dropped");
+        assert_eq!(emoji.tones("🏃‍♀️").unwrap()[2], "🏃🏽‍♀️", "ZWJ sequence");
+        assert!(emoji.tones("😀").is_none(), "faces take none");
+        assert!(emoji.tones("❤️").is_none());
+        assert!(emoji.tones("👍🏽").is_none(), "already toned");
+        assert!(emoji.tones("a").is_none());
+    }
+
+    #[test]
+    fn toned_follows_the_picked_skin_tone() {
+        let mut emoji = Emoji::default();
+        assert_eq!(emoji.toned("👍"), "👍");
+        emoji.set_skin_tone(Some(3));
+        assert_eq!(emoji.toned("👍"), "👍🏾");
+        assert_eq!(emoji.toned("😀"), "😀");
+        emoji.set_skin_tone(Some(9));
+        assert_eq!(emoji.skin_tone(), None, "out of range is the default");
+        assert_eq!(emoji.toned("👍"), "👍");
+    }
+
+    /// Every toneable emoji in the bundled layout and gemoji list draws in
+    /// all five tones (what `tones` checks), and the people page has some.
+    #[test]
+    fn bundled_toneable_emoji_draw_in_every_tone() {
+        let mut emoji = Emoji::default();
+        let keymap = crate::layout::load_keymap();
+        let toneable = keymap
+            .views
+            .iter()
+            .flat_map(|v| v.keys())
+            .filter(
+                |k| matches!(&k.face, crate::layout::KeyFace::Emoji(e) if emoji.tones(e).is_some()),
+            )
+            .count();
+        assert!(toneable >= 20, "{toneable} toneable layout emoji");
+        let list = crate::dictionaries::EmojiList::bundled("gemoji").unwrap();
+        let toneable = list.all().filter(|e| emoji.tones(e).is_some()).count();
+        assert!(toneable >= 250, "{toneable} toneable gemoji");
     }
 
     #[test]

@@ -71,7 +71,7 @@ pub(crate) enum Label {
     Text(Handle<Text>),
     Icon(Handle<Icon>),
     /// A colour emoji: keeps its own colours whatever the key state.
-    Image,
+    Image(Handle<Image>),
 }
 
 /// Recolour a key's label, whichever kind it is.
@@ -79,7 +79,7 @@ pub(crate) fn set_label_color<W: Widget>(ctx: &mut Context<'_, W>, label: Label,
     match label {
         Label::Text(h) => ctx.at(h).unwrap().set_color(fg),
         Label::Icon(h) => ctx.at(h).unwrap().set_color(fg),
-        Label::Image => {}
+        Label::Image(_) => {}
     }
 }
 
@@ -154,8 +154,7 @@ impl Widget for Key {
             KeyFace::Emoji(e) => match s.resource::<Emoji>().get(e) {
                 Some(e) => {
                     let style = LayoutStyle::default().size(px(e.width), px(e.height));
-                    s.spawn(me, image(e.sprite).style(style));
-                    Label::Image
+                    Label::Image(s.spawn(me, image(e.sprite).style(style)))
                 }
                 None => Label::Text(s.spawn(me, text(b.font, "").color(fg).size(b.font_size))),
             },

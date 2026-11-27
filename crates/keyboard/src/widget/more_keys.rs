@@ -6,6 +6,7 @@
 
 use mecha_wayland::prelude::*;
 
+use crate::layout::emoji::Emoji;
 use crate::layout::style::{KeyLook, KeyState};
 use crate::widget::key::{KeyKind, key_roles};
 
@@ -13,11 +14,14 @@ use crate::widget::key::{KeyKind, key_roles};
 #[derive(Clone, Debug)]
 pub(crate) enum ChoicesFeedback {
     /// Show the row at `rect` (relative to the keyboard container), one cell
-    /// per label, `highlighted` lit.
+    /// per label, `highlighted` lit. With `emoji`, each label is an emoji
+    /// drawn in colour (its sprite already loaded), or as text if it has
+    /// none.
     Open {
         rect: Rect,
         cells: Vec<String>,
         highlighted: Option<usize>,
+        emoji: bool,
     },
     /// Light cell `0` instead, or none.
     Highlight(Option<usize>),
@@ -50,7 +54,9 @@ impl Build for MoreKeysBuilder {
 /// The choices row. Hidden until a key is long-pressed; its cells are spawned
 /// per opening.
 pub(crate) struct MoreKeys {
-    cells: Vec<(Handle<Div>, Handle<Text>)>,
+    /// Each cell, and its label if it is text (a colour emoji keeps its
+    /// own colours).
+    cells: Vec<(Handle<Div>, Option<Handle<Text>>)>,
     highlighted: Option<usize>,
     /// Corner radius at the current scale (a rescale updates it).
     pub(crate) radius: f32,
@@ -70,9 +76,10 @@ impl Widget for MoreKeys {
                 rect,
                 cells,
                 highlighted,
+                emoji,
             } => {
                 let look = (font, font_size, ctx.me().radius, colors);
-                open(ctx, *rect, cells, *highlighted, look);
+                open(ctx, *rect, cells, *highlighted, *emoji, look);
             }
             ChoicesFeedback::Highlight(h) => {
                 let radius = ctx.me().radius;
@@ -94,6 +101,7 @@ fn open(
     rect: Rect,
     labels: &[String],
     highlighted: Option<usize>,
+    emoji: bool,
     (font, font_size, radius, colors): (FontId, u16, f32, Colors),
 ) {
     close(ctx);
@@ -125,8 +133,16 @@ fn open(
                         .size(px(cell_w), px(rect.size.height)),
                 ),
             );
+            let sprite = emoji.then(|| ctx.resource::<Emoji>().get(label)).flatten();
+            if let Some(e) = sprite {
+                let style = LayoutStyle::default()
+                    .size(px(e.width), px(e.height))
+                    .shrink(0.0);
+                ctx.spawn(cell, image(e.sprite).style(style));
+                return (cell, None);
+            }
             let text = ctx.spawn(cell, text(font, label.as_str()).color(ink).size(font_size));
-            (cell, text)
+            (cell, Some(text))
         })
         .collect();
     ctx.me().cells = cells;
@@ -141,12 +157,16 @@ fn highlight(ctx: &mut Context<'_, MoreKeys>, h: Option<usize>, radius: f32, col
     let cells = ctx.me().cells.clone();
     if let Some((cell, text)) = old.and_then(|i| cells.get(i)) {
         ctx.at(*cell).unwrap().set_paint(Paint::None);
-        ctx.at(*text).unwrap().set_color(off_ink);
+        if let Some(text) = text {
+            ctx.at(*text).unwrap().set_color(off_ink);
+        }
     }
     if let Some((cell, text)) = h.and_then(|i| cells.get(i)) {
         let quad = Quad::new(on_fill).radius(radius);
         ctx.at(*cell).unwrap().set_paint(Paint::Quad(quad));
-        ctx.at(*text).unwrap().set_color(on_ink);
+        if let Some(text) = text {
+            ctx.at(*text).unwrap().set_color(on_ink);
+        }
     }
 }
 

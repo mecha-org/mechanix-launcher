@@ -42,6 +42,8 @@ pub(crate) enum BarFeedback {
     Show(Vec<Option<BarLabel>>),
     /// Light cell `i` as pressed, or none.
     Press(Option<usize>),
+    /// The skin tone changed: redraw the emoji shown in it.
+    Retone,
 }
 impl Event for BarFeedback {}
 
@@ -78,6 +80,8 @@ pub(crate) struct SuggestionBar {
     images: Vec<Option<Handle<Image>>>,
     /// Whether each cell shows a word (an empty one cannot be pressed).
     filled: Vec<bool>,
+    /// What each cell shows, as last given (an emoji untoned).
+    labels: Vec<Option<BarLabel>>,
     /// The lines between cells, `dividers[i]` after `cells[i]`.
     dividers: Vec<Handle<Div>>,
     /// Whether the dividers ever show.
@@ -130,6 +134,10 @@ impl Widget for SuggestionBar {
         s.on::<BarFeedback>(me, |ctx, e| match e {
             BarFeedback::Show(labels) => show(ctx, labels),
             BarFeedback::Press(i) => press(ctx, *i),
+            BarFeedback::Retone => {
+                let labels = ctx.me().labels.clone();
+                show(ctx, &labels);
+            }
         });
         SuggestionBar {
             font: b.font,
@@ -139,6 +147,7 @@ impl Widget for SuggestionBar {
             texts: Vec::new(),
             images: Vec::new(),
             filled: Vec::new(),
+            labels: Vec::new(),
             dividers: Vec::new(),
             show_dividers: b.dividers,
             pressed: None,
@@ -176,12 +185,13 @@ fn show(ctx: &mut Context<'_, SuggestionBar>, labels: &[Option<BarLabel>]) {
         set_label(ctx, i, label.as_ref());
     }
     ctx.me().filled = labels.iter().map(Option::is_some).collect();
+    ctx.me().labels = labels.to_vec();
     restyle_cells(ctx);
 }
 
-/// Label cell `i` with `label`: a word in its text, an emoji in its image
-/// (spawned the first time), the other hidden or blank. An emoji the font
-/// can't draw shows as text.
+/// Label cell `i` with `label`: a word in its text, an emoji (in the skin
+/// tone picked, if it takes one) in its image (spawned the first time), the
+/// other hidden or blank. An emoji the font can't draw shows as text.
 fn set_label(ctx: &mut Context<'_, SuggestionBar>, i: usize, label: Option<&BarLabel>) {
     let (cell, text, shown) = {
         let bar = ctx.me();
@@ -190,7 +200,8 @@ fn set_label(ctx: &mut Context<'_, SuggestionBar>, i: usize, label: Option<&BarL
     let sprite = match label {
         Some(BarLabel::Emoji(e)) => {
             let (mut emoji, mut atlas) = ctx.fetch::<(ResMut<Emoji>, ResMut<Atlas>)>();
-            emoji.ensure(&mut atlas, e)
+            let toned = emoji.toned(e);
+            emoji.ensure(&mut atlas, &toned)
         }
         _ => None,
     };

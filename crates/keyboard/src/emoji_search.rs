@@ -15,6 +15,7 @@ use mecha_wayland::prelude::*;
 use crate::complete::Completion;
 use crate::input;
 use crate::layout::Page;
+use crate::layout::emoji::Emoji;
 use crate::modifiers::shift::{self, Shift};
 use crate::view::{switch_view, view_for};
 use crate::widget::emoji_search_bar::SearchBarFeedback;
@@ -183,6 +184,8 @@ pub(crate) fn pick(ctx: &mut Context<'_, Keyboard>, i: usize) {
         .as_ref()
         .and_then(|s| s.results.get(i).cloned());
     if let Some(emoji) = emoji {
+        // As the results show it: in the skin tone picked.
+        let emoji = ctx.resource_mut::<Emoji>().toned(&emoji);
         input::commit_emoji(ctx, &emoji);
     }
 }

@@ -12,9 +12,10 @@
 use mecha_wayland::prelude::*;
 use xkbcommon::xkb::Keysym;
 
-use crate::complete::{Completion, TextEdit};
+use crate::complete::{Completion, Kind, TextEdit};
 use crate::emoji_search;
 use crate::field::Field;
+use crate::layout::emoji::Emoji;
 use crate::layout::{KeyAction, Modifier, Page};
 use crate::modifiers::latch::{LatchedState, consume_latch, toggle_latch};
 use crate::modifiers::pointing_stick::{self, PointingStickMode};
@@ -331,12 +332,33 @@ pub(crate) fn release(ctx: &mut Context<'_, Keyboard>) {
 /// inactive meanwhile, nothing is typed. Like any key, it ends the pointing
 /// stick's select mode and spends a one-shot shift.
 pub(crate) fn accept_suggestion(ctx: &mut Context<'_, Keyboard>, index: usize) {
+    accept(ctx, index, None);
+}
+
+/// [`accept_suggestion`] for emoji suggestion `index`, typing `emoji` (a
+/// skin tone form of it picked from its row) instead of its own.
+pub(crate) fn accept_emoji_suggestion(ctx: &mut Context<'_, Keyboard>, index: usize, emoji: &str) {
+    accept(ctx, index, Some(emoji));
+}
+
+/// Accept suggestion `index`; an emoji one types `emoji` if given, else
+/// itself in the skin tone picked.
+fn accept(ctx: &mut Context<'_, Keyboard>, index: usize, emoji: Option<&str>) {
     pointing_stick::reset(ctx);
     // While the caret settles the bar shows the last word's suggestions,
     // whose edits no longer fit: a tap then does nothing.
-    let Some(suggestion) = ctx.resource::<Completion>().get(index).cloned() else {
+    let Some(mut suggestion) = ctx.resource::<Completion>().get(index).cloned() else {
         return;
     };
+    // An emoji goes in as the bar shows it: in the skin tone picked.
+    if suggestion.kind == Kind::Emoji {
+        let typed = match emoji {
+            Some(e) => e.to_owned(),
+            None => ctx.resource_mut::<Emoji>().toned(&suggestion.edit.insert),
+        };
+        suggestion.edit.insert = typed.clone();
+        suggestion.label = typed;
+    }
     if !replace_word(ctx, &suggestion.edit, "") {
         tracing::warn!("suggestion tapped with no active input method; ignored");
         return;

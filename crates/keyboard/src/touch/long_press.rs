@@ -41,14 +41,28 @@ impl ChoicesRow {
     /// Cells shrink only when the row is wider than `bounds`. The first
     /// choice is highlighted.
     pub(crate) fn open(key: Rect, bounds: Rect, gap: f32, choices: Vec<String>) -> ChoicesRow {
+        Self::open_at(key, bounds, gap, choices, 0)
+    }
+
+    /// [`open`](Self::open), but with choice `anchor` over the key and
+    /// highlighted. A row anchored past its first choice keeps its order
+    /// (never mirrors): the choices left of the anchor run left of the key.
+    pub(crate) fn open_at(
+        key: Rect,
+        bounds: Rect,
+        gap: f32,
+        choices: Vec<String>,
+        anchor: usize,
+    ) -> ChoicesRow {
+        let anchor = anchor.min(choices.len().saturating_sub(1));
         let n = choices.len().max(1) as f32;
         let cell_w = key.size.width.min(bounds.size.width / n);
         let (w, h) = (cell_w * n, key.size.height);
-        let mirrored = key.origin.x + w > bounds.right();
+        let mirrored = anchor == 0 && key.origin.x + w > bounds.right();
         let x = if mirrored {
             key.origin.x + cell_w - w
         } else {
-            key.origin.x
+            key.origin.x - cell_w * anchor as f32
         };
         let y = key.origin.y - gap - h;
         let x = x.min(bounds.right() - w).max(bounds.origin.x);
@@ -59,7 +73,7 @@ impl ChoicesRow {
             key,
             bottom: bounds.bottom(),
             cell_w,
-            highlighted: Some(0),
+            highlighted: Some(anchor),
             mirrored,
         }
     }
@@ -156,6 +170,25 @@ mod tests {
         let p = Rect::new(450.0, 200.0, 50.0, 50.0);
         let mut row = ChoicesRow::open(p, BOUNDS, GAP, choices("0 a b"));
         row.track(Point::new(420.0, 170.0));
+        assert_eq!(row.highlighted, Some(1));
+    }
+
+    #[test]
+    fn anchored_row_puts_its_anchor_over_the_key() {
+        let key = Rect::new(200.0, 200.0, 50.0, 50.0);
+        let row = ChoicesRow::open_at(key, BOUNDS, GAP, choices("a b c d e f"), 3);
+        assert_eq!(row.highlighted, Some(3));
+        assert_eq!(row.rect, Rect::new(50.0, 146.0, 300.0, 50.0));
+        assert!(!row.mirrored);
+        // Near the right edge: pushed inside, in order, not mirrored.
+        let p = Rect::new(450.0, 200.0, 50.0, 50.0);
+        let mut row = ChoicesRow::open_at(p, BOUNDS, GAP, choices("a b c d e f"), 1);
+        assert!(!row.mirrored);
+        assert_eq!(row.rect.right(), 500.0);
+        row.track(Point::new(490.0, 170.0));
+        assert_eq!(row.highlighted, Some(5));
+        // An anchor past the end is the last choice.
+        let row = ChoicesRow::open_at(key, BOUNDS, GAP, choices("a b"), 7);
         assert_eq!(row.highlighted, Some(1));
     }
 
