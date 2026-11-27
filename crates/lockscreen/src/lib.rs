@@ -24,7 +24,9 @@
 //! errors) is shown as it says it. A method whose stack reports it
 //! unavailable, or fails without asking anything, is skipped until the
 //! next lock; with no method left, nothing unlocks but logind. No methods
-//! configured at all is a swipe up to unlock.
+//! configured at all is a swipe up to unlock, and so is a typed method
+//! that succeeds without asking anything (an account with no password,
+//! under `nullok`): the lock never opens by itself.
 //!
 //! The PIN and the password are typed, into one input, so one of them runs
 //! at a time and the user switches. A method that isn't typed (one that

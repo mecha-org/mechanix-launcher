@@ -120,10 +120,19 @@ pub(crate) struct Lockscreen {
     /// The input shows; otherwise the glance screen: the time, and a tap to
     /// expand.
     expanded: bool,
+    /// A typed method succeeded without asking anything (an account with
+    /// no password): the lock opens with a swipe up.
+    nothing_asked: bool,
 }
 impl Resource for Lockscreen {}
 
 impl Lockscreen {
+    /// The lock opens with a swipe up: no method is configured, or one
+    /// needs nothing typed.
+    fn swipe_unlocks(&self) -> bool {
+        self.settings.methods.is_empty() || self.nothing_asked
+    }
+
     /// The methods still worth trying, typed or not.
     fn available(&self, typed: bool) -> impl Iterator<Item = Method> + '_ {
         self.settings
@@ -285,6 +294,7 @@ fn lock(app: &mut App) {
         ls.asked.clear();
         ls.preferred = None;
         ls.expanded = false;
+        ls.nothing_asked = false;
     }
     show_view(app);
     app.signal(LockChanged(true));
@@ -413,7 +423,7 @@ pub(crate) fn refresh(app: &mut App) {
         // A method shows once it has asked something: one that fails
         // without asking (no PIN set) never shows at all.
         let shown = a.method.filter(|m| ls.asked.contains(m));
-        let entry_kind = match (shown, ls.settings.methods.is_empty()) {
+        let entry_kind = match (shown, ls.swipe_unlocks()) {
             (_, true) => Entry::Unlock,
             (Some(_), _) if a.on_numpad() => Entry::Pin,
             (Some(_), _) => Entry::Password,
@@ -443,6 +453,7 @@ pub(crate) fn refresh(app: &mut App) {
             keyboard: keyboard::is_keyboard_visible(app),
             switch: a
                 .method
+                .filter(|_| !ls.swipe_unlocks())
                 .and_then(|current| ls.candidates().into_iter().find(|m| *m != current)),
         }
     };
@@ -643,7 +654,14 @@ fn on_other(app: &mut App, e: &AuthEvent) {
 
 fn finished(app: &mut App, method: Method, outcome: Outcome) {
     if outcome == Outcome::Success {
-        unlock(app);
+        // Nothing was asked: there is no secret to wait for, but the
+        // user still swipes, rather than the lock opening by itself.
+        if app.resource::<Lockscreen>().attempt.prompts == 0 {
+            app.resource_mut::<Lockscreen>().nothing_asked = true;
+            refresh(app);
+        } else {
+            unlock(app);
+        }
         return;
     }
     {
@@ -704,7 +722,7 @@ fn on_input(app: &mut App, e: &UserInput) {
                 send(app, answer);
             }
         }
-        UserInput::Submit if app.resource::<Lockscreen>().settings.methods.is_empty() => {
+        UserInput::Submit if app.resource::<Lockscreen>().swipe_unlocks() => {
             unlock(app);
         }
         UserInput::Submit => {
